@@ -1,0 +1,259 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap');
+
+body {
+  background: linear-gradient(120deg, #223049 0%, #344060 100%);
+  font-family: 'Inter', Arial, sans-serif;
+  color: #f1f5fb;
+  margin: 0;
+  padding: 0;
+}
+
+h1, h2, h3, h4, h5, h6, .fullscreen-table-title {
+  font-family: 'Inter', Arial, sans-serif;
+  font-weight: 800;
+  letter-spacing: 0.03em;
+  margin: 0;
+  padding: 0;
+ color: #e3206f;
+}
+
+.fullscreen-table-title {
+  font-size: 2.1rem;
+  font-weight: 800;
+  color: #e4edfa;
+  padding: 26px 28px 12px 28px;
+  background: #2d3d56;
+  filter: drop-shadow(0 30px 14px #1b253c38);
+  margin-bottom: 0;
+  text-align: left;
+  border-bottom: 1.5px solid #384c69;
+}
+
+.fullscreen-table-wrap {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  background: #223049;
+  overflow: hidden;
+}
+
+.paper-card, .MuiPaper-root {
+  background: #2b3951;
+  border-radius: 15px;
+  box-shadow: 0 8px 32px #18233b37;
+  padding: 23px 18px 17px 18px;
+  margin: 16px 0 21px 0;
+  border: 1px solid #38507c;
+  filter: drop-shadow(0 12px 8px #1d253f15);
+}
+
+/* ----------- TABLEAU PLEIN ECRAN ----------- */
+.table-pro-full,
+.table-pro {
+  flex: 1 1 0%;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  margin: 0 18px 20px 18px;
+  border-radius: 17px;
+  background: #082e80;
+  box-shadow: 0 8px 48px #1d293c70;
+  border: 1.5px solid #405a85;
+  height: 100%;
+}
+
+.table-pro-full table,
+.table-pro table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  table-layout: fixed;
+  font-size: 1rem;
+}
+
+.table-pro-full thead th,
+.table-pro thead th {
+  position: sticky;
+  top: 0;
+  background: #1a2332;
+  z-index: 2;
+  font-size: 1.09rem;
+  font-weight: 700;
+  padding: 14px 7px;
+  color: #99b2d4;
+  border-bottom: 2px solid #32486a;
+  letter-spacing: 0.015em;
+  text-shadow: 0 2px 10px #121b2d28;
+}
+
+.table-pro-full tbody,
+.table-pro tbody {
+  display: block;
+  height: calc(100vh - 255px);
+  overflow-y: auto;
+  background: #223049;
+}
+
+.table-pro-full thead,
+.table-pro-full tbody tr,
+.table-pro thead,
+.table-pro tbody tr {
+  display: table;
+  width: 100%;
+  table-layout: fixed;
+}
+
+.table-pro-full td,
+.table-pro td {
+  padding: 13px 7px;
+  font-size: 1.04rem;
+  border-bottom: 1px solid #334262;
+  text-align: center;
+  background: #223049;
+  color: #e8ecf4;
+  font-weight: 500;
+  font-family: 'Inter', Arial, sans-serif;
+  transition: background 0.18s;
+}
+
+.table-pro-full tbody tr:hover td,
+.table-pro tbody tr:hover td {
+  background: #2e415c;
+  color: #fff;
+}
+
+/* ----------- BOUTONS ----------- */
+.btn,
+.table-pro-full button,
+.table-pro button,
+button,
+.btn-neumorph {
+  min-width: 80px;
+  padding: 9px 18px;
+  margin: 3px 5px 3px 0;
+  border-radius: 11px;
+  border: none;
+  background: linear-gradient(90deg, #3272e0 50%, #61c7ef 100%);
+  color: #fff;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: 0 3px 13px #314e8830;
+  font-size: 1.06rem;
+  letter-spacing: 0.01em;
+  transition: all 0.18s, filter 0.13s;
+  filter: drop-shadow(0 2px 7px #1b243a99);
+  font-family: 'Inter', Arial, sans-serif;
+}
+.btn:hover,
+.table-pro-full button:hover,
+.table-pro button:hover,
+button:hover,
+.btn-neumorph:hover {
+  background: linear-gradient(90deg, #61c7ef 10%, #3272e0 90%);
+  color: #fff;
+  font-weight: 800;
+  filter: drop-shadow(0 2px 14px #3272e090);
+}
+.btn-neumorph {
+  background: linear-gradient(90deg, #283d71 0%, #399ef7 100%);
+  box-shadow: 0 3px 15px #314e8848;
+}
+.btn-neumorph.danger, .table-pro-full button.danger {
+  background: linear-gradient(90deg, #ee4e61 60%, #fddada 100%);
+  color: #fff;
+}
+.btn-neumorph.danger:hover, .table-pro-full button.danger:hover {
+  background: linear-gradient(90deg, #ee4e61 85%, #c94a4a 100%);
+  color: #fff;
+}
+.btn-neumorph.print, .table-pro-full button.print {
+  background: linear-gradient(90deg, #2bd2a6 60%, #6ee9df 100%);
+  color: #fff;
+}
+.btn-neumorph.print:hover, .table-pro-full button.print:hover {
+  background: linear-gradient(90deg, #6ee9df 0%, #2bd2a6 100%);
+  color: #fff;
+}
+
+/* ----------- FORMULAIRES ----------- */
+form {
+  display: flex;
+  gap: 15px;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-start;
+  margin-bottom: 17px;
+}
+input, select, textarea,
+.MuiInputBase-root,
+.MuiInputLabel-root,
+.MuiSelect-select {
+  border-radius: 9px !important;
+  font-family: 'Inter', Arial, sans-serif;
+  font-size: 1.09rem !important;
+  background: #27385d !important;
+  padding: 11px 15px !important;
+  border: 1.2px solid #34518b !important;
+  color: #e5eeff !important;
+  margin-bottom: 8px !important;
+  box-shadow: 0 2px 8px #23376b1b;
+  outline: none !important;
+  transition: border-color 0.12s;
+}
+input:focus, select:focus, textarea:focus {
+  border-color: #56b8e9 !important;
+  background: #283c60 !important;
+  color: #fff !important;
+}
+
+/* ----------- SCROLLBAR ----------- */
+::-webkit-scrollbar {
+  width: 8px;
+  background: #1a2535;
+}
+::-webkit-scrollbar-thumb {
+  background: #466294;
+  border-radius: 9px;
+}
+
+/* ----------- RESPONSIVE ----------- */
+@media (max-width: 1100px) {
+  .fullscreen-table-title, .table-pro-full, .table-pro { margin-left: 2px; margin-right: 2px; }
+  .fullscreen-table-title { font-size: 1.3rem; padding: 10px 7px 8px 10px; }
+  .table-pro-full tbody, .table-pro tbody { height: 44vh; }
+}
+@media (max-width: 700px) {
+  .fullscreen-table-title, .table-pro-full, .table-pro { margin-left: 0; margin-right: 0; }
+  .fullscreen-table-title { font-size: 1.12rem; padding: 6px 2px 5px 5px; }
+  .paper-card, .MuiPaper-root { padding: 7px 2px 8px 2px; }
+  form { gap: 7px; }
+}
+
+/* ----------- CHIPS / STATUS ----------- */
+.status-chip, .MuiChip-root {
+  padding: 5px 15px;
+  border-radius: 13px;
+  font-weight: 700;
+  font-size: 1.01rem;
+  background: linear-gradient(90deg,#273c54 60%,#2c4567 100%);
+  color: #a6e4ee;
+  margin: 2px 0;
+  border: 1px solid #2bd2a6;
+  display: inline-block;
+}
+.status-chip.danger {
+  background: linear-gradient(90deg,#ee4e61 40%,#fcdada 100%);
+  color: #fff;
+  border: 1px solid #ee4e61;
+}
+.status-chip.success {
+  background: linear-gradient(90deg,#2bd2a6 40%,#6ee9df 100%);
+  color: #233c29;
+  border: 1px solid #2bd2a6;
+}
+.status-chip.info {
+  background: linear-gradient(90deg,#61c7ef 40%,#3272e0 100%);
+  color: #fff;
+  border: 1px solid #61c7ef;
+}
