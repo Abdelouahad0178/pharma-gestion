@@ -14,7 +14,7 @@ h1, h2, h3, h4, h5, h6, .fullscreen-table-title {
   letter-spacing: 0.03em;
   margin: 0;
   padding: 0;
- color: #e3206f;
+  color: #e3206f;
 }
 
 .fullscreen-table-title {
@@ -29,12 +29,14 @@ h1, h2, h3, h4, h5, h6, .fullscreen-table-title {
   border-bottom: 1.5px solid #384c69;
 }
 
+/* ------- Container principal ------- */
 .fullscreen-table-wrap {
   display: flex;
   flex-direction: column;
   min-height: 100vh;
   background: #223049;
   overflow: hidden;
+  width: 100%;
 }
 
 .paper-card, .MuiPaper-root {
@@ -45,26 +47,28 @@ h1, h2, h3, h4, h5, h6, .fullscreen-table-title {
   margin: 16px 0 21px 0;
   border: 1px solid #38507c;
   filter: drop-shadow(0 12px 8px #1d253f15);
+  width: 100%;
+  box-sizing: border-box;
 }
 
-/* ----------- TABLEAU PLEIN ECRAN ----------- */
-.table-pro-full,
-.table-pro {
+/* ------- TABLEAU -------- */
+.table-pro-full, .table-pro {
   flex: 1 1 0%;
   display: flex;
   flex-direction: column;
   min-height: 0;
-  overflow: hidden;
+  overflow: auto;
   margin: 0 18px 20px 18px;
   border-radius: 17px;
   background: #082e80;
   box-shadow: 0 8px 48px #1d293c70;
   border: 1.5px solid #405a85;
+  width: 100%;
   height: 100%;
+  box-sizing: border-box;
 }
 
-.table-pro-full table,
-.table-pro table {
+.table-pro-full table, .table-pro table {
   width: 100%;
   border-collapse: separate;
   border-spacing: 0;
@@ -85,6 +89,7 @@ h1, h2, h3, h4, h5, h6, .fullscreen-table-title {
   border-bottom: 2px solid #32486a;
   letter-spacing: 0.015em;
   text-shadow: 0 2px 10px #121b2d28;
+  word-break: break-word;
 }
 
 .table-pro-full tbody,
@@ -93,6 +98,7 @@ h1, h2, h3, h4, h5, h6, .fullscreen-table-title {
   height: calc(100vh - 255px);
   overflow-y: auto;
   background: #223049;
+  width: 100%;
 }
 
 .table-pro-full thead,
@@ -106,15 +112,17 @@ h1, h2, h3, h4, h5, h6, .fullscreen-table-title {
 
 .table-pro-full td,
 .table-pro td {
-  padding: 13px 7px;
-  font-size: 1.04rem;
-  border-bottom: 1px solid #334262;
-  text-align: center;
-  background: #223049;
-  color: #e8ecf4;
-  font-weight: 500;
-  font-family: 'Inter', Arial, sans-serif;
-  transition: background 0.18s;
+  
+    padding: -3px 7px;
+    font-size: 1.01rem;
+    border-bottom: 1px solid #dadee8;
+    text-align: center;
+    background: #0c1f41;
+    color: #eff1f7;
+    font-weight: 600;
+    font-family: 'Inter', Arial, sans-serif;
+    transition: background 0.18s;
+    word-break: break-word;
 }
 
 .table-pro-full tbody tr:hover td,
@@ -123,13 +131,13 @@ h1, h2, h3, h4, h5, h6, .fullscreen-table-title {
   color: #fff;
 }
 
-/* ----------- BOUTONS ----------- */
+/* ------- BOUTONS ------- */
 .btn,
 .table-pro-full button,
 .table-pro button,
 button,
 .btn-neumorph {
-  min-width: 80px;
+  min-width: 126px;
   padding: 9px 18px;
   margin: 3px 5px 3px 0;
   border-radius: 11px;
@@ -176,7 +184,7 @@ button:hover,
   color: #fff;
 }
 
-/* ----------- FORMULAIRES ----------- */
+/* ------- FORMULAIRES ------- */
 form {
   display: flex;
   gap: 15px;
@@ -200,6 +208,9 @@ input, select, textarea,
   box-shadow: 0 2px 8px #23376b1b;
   outline: none !important;
   transition: border-color 0.12s;
+  width: 170px;
+  max-width: 100%;
+  box-sizing: border-box;
 }
 input:focus, select:focus, textarea:focus {
   border-color: #56b8e9 !important;
@@ -207,7 +218,7 @@ input:focus, select:focus, textarea:focus {
   color: #fff !important;
 }
 
-/* ----------- SCROLLBAR ----------- */
+/* ------- SCROLLBAR ------- */
 ::-webkit-scrollbar {
   width: 8px;
   background: #1a2535;
@@ -217,20 +228,7 @@ input:focus, select:focus, textarea:focus {
   border-radius: 9px;
 }
 
-/* ----------- RESPONSIVE ----------- */
-@media (max-width: 1100px) {
-  .fullscreen-table-title, .table-pro-full, .table-pro { margin-left: 2px; margin-right: 2px; }
-  .fullscreen-table-title { font-size: 1.3rem; padding: 10px 7px 8px 10px; }
-  .table-pro-full tbody, .table-pro tbody { height: 44vh; }
-}
-@media (max-width: 700px) {
-  .fullscreen-table-title, .table-pro-full, .table-pro { margin-left: 0; margin-right: 0; }
-  .fullscreen-table-title { font-size: 1.12rem; padding: 6px 2px 5px 5px; }
-  .paper-card, .MuiPaper-root { padding: 7px 2px 8px 2px; }
-  form { gap: 7px; }
-}
-
-/* ----------- CHIPS / STATUS ----------- */
+/* ------- CHIPS / STATUS ------- */
 .status-chip, .MuiChip-root {
   padding: 5px 15px;
   border-radius: 13px;
@@ -257,3 +255,97 @@ input:focus, select:focus, textarea:focus {
   color: #fff;
   border: 1px solid #61c7ef;
 }
+
+/* ----------------- RESPONSIVE ----------------- */
+@media (max-width: 1200px) {
+  .fullscreen-table-title, .table-pro-full, .table-pro {
+    margin-left: 5px;
+    margin-right: 5px;
+  }
+  .fullscreen-table-title {
+    font-size: 1.5rem;
+    padding: 12px 11px 10px 12px;
+  }
+}
+
+@media (max-width: 950px) {
+  .fullscreen-table-title, .table-pro-full, .table-pro {
+    margin-left: 2px;
+    margin-right: 2px;
+  }
+  .fullscreen-table-title {
+    font-size: 1.19rem;
+    padding: 10px 5px 8px 8px;
+  }
+  .paper-card, .MuiPaper-root {
+    padding: 10px 4px 8px 5px;
+  }
+  form { gap: 7px; }
+}
+
+@media (max-width: 700px) {
+  .fullscreen-table-title, .table-pro-full, .table-pro {
+    margin-left: 0;
+    margin-right: 0;
+  }
+  .fullscreen-table-title {
+    font-size: 1.01rem;
+    padding: 5px 2px 5px 4px;
+  }
+  .paper-card, .MuiPaper-root {
+    padding: 6px 1px 6px 2px;
+  }
+  form { gap: 4px; }
+  .table-pro-full, .table-pro, .paper-card, .MuiPaper-root {
+    border-radius: 8px;
+  }
+  input, select, textarea { font-size: 0.97rem !important; padding: 7px 8px !important; }
+}
+
+/* TABLE RESPONSIVE SCROLL */
+@media (max-width: 800px) {
+  .table-pro-full table,
+  .table-pro table {
+    font-size: 0.94rem;
+    min-width: 640px;
+  }
+  .table-pro-full, .table-pro {
+    overflow-x: auto;
+  }
+}
+
+@media (max-width: 600px) {
+  .fullscreen-table-title {
+    font-size: 0.98rem;
+    padding: 4px 2px 4px 2px;
+  }
+  .table-pro-full table,
+  .table-pro table {
+    min-width: 540px;
+    font-size: 0.91rem;
+  }
+}
+
+/* -- FORM CHAMP FULL WIDTH SI PETIT ECRAN -- */
+@media (max-width: 500px) {
+  .paper-card, .MuiPaper-root, .fullscreen-table-title,
+  .table-pro-full, .table-pro, form, input, select, textarea {
+    width: 100vw !important;
+    min-width: 0 !important;
+    max-width: 100vw !important;
+    box-sizing: border-box;
+  }
+  input, select, textarea {
+    width: 98vw !important;
+    max-width: 98vw !important;
+    font-size: 0.93rem !important;
+    padding: 7px 4px !important;
+  }
+}
+
+/* --- Réduction padding/marge en mobile --- */
+@media (max-width: 400px) {
+  .fullscreen-table-title { font-size: 0.89rem; padding: 3px 1px 3px 1px; }
+  .paper-card, .MuiPaper-root { padding: 2px 0 2px 0; }
+}
+

@@ -13,6 +13,7 @@ import {
 } from "firebase/firestore";
 
 export default function Ventes() {
+  // Formulaires
   const [client, setClient] = useState("");
   const [dateVente, setDateVente] = useState("");
   const [statutPaiement, setStatutPaiement] = useState("payé");
@@ -26,13 +27,18 @@ export default function Ventes() {
   const [articles, setArticles] = useState([]);
   const [ventes, setVentes] = useState([]);
   const [medicaments, setMedicaments] = useState([]);
+  const [parametres, setParametres] = useState({ entete: "", pied: "" });
 
   const [editId, setEditId] = useState(null);
   const [isEditing, setIsEditing] = useState(false);
 
-  const [parametres, setParametres] = useState({ entete: "", pied: "" });
+  // Filtres historiques
+  const [filterClient, setFilterClient] = useState("");
+  const [filterDateMin, setFilterDateMin] = useState("");
+  const [filterDateMax, setFilterDateMax] = useState("");
+  const [showFiltres, setShowFiltres] = useState(false);
 
-  // Charger paramètres (entête et pied personnalisés)
+  // Charger paramètres impression
   const fetchParametres = async () => {
     const snap = await getDocs(collection(db, "parametres"));
     if (!snap.empty) {
@@ -50,7 +56,7 @@ export default function Ventes() {
     } else setPrixUnitaire("");
   };
 
-  // Ajouter un article à la vente
+  // Ajouter un article temporaire à la vente en cours
   const handleAddArticle = (e) => {
     e.preventDefault();
     const nomProduitFinal = produit === "_new_" ? produitNouveau : produit;
@@ -98,7 +104,7 @@ export default function Ventes() {
       await updateStockOnSell({ client, articles });
     }
 
-    // Paiement automatique si statut payé
+    // Paiement automatique si "payé"
     if (statutPaiement === "payé" && venteRef) {
       const total = articles.reduce((sum, a) => sum + (a.prixUnitaire * a.quantite - a.remise), 0);
       await addDoc(collection(db, "paiements"), {
@@ -173,7 +179,7 @@ export default function Ventes() {
     printWindow.print();
   };
 
-  // Modifier & Supprimer
+  // Modifier / Supprimer
   const handleEditVente = (vente) => {
     setEditId(vente.id);
     setIsEditing(true);
@@ -191,7 +197,7 @@ export default function Ventes() {
     }
   };
 
-  // Gestion du stock (décrément/annule)
+  // Gestion du stock
   const updateStockOnSell = async (vente) => {
     const stockRef = collection(db, "stock");
     for (const art of vente.articles || []) {
@@ -243,40 +249,51 @@ export default function Ventes() {
   const totalVenteCourante = (articles || []).reduce(
     (t, a) => t + ((a.prixUnitaire || 0) * (a.quantite || 0) - (a.remise || 0)), 0);
 
+  // -- Filtrage historique ventes
+  const uniqueClients = Array.from(new Set(ventes.map(v => v.client).filter(Boolean)));
+  const ventesFiltrees = ventes.filter((v) => {
+    let keep = true;
+    if (filterClient && v.client !== filterClient) keep = false;
+    if (filterDateMin) {
+      const vd = v.date?.toDate?.() || null;
+      if (!vd || vd < new Date(filterDateMin)) keep = false;
+    }
+    if (filterDateMax) {
+      const vd = v.date?.toDate?.() || null;
+      if (!vd || vd > new Date(filterDateMax + "T23:59:59")) keep = false;
+    }
+    return keep;
+  });
+
+  // ---- RENDER ----
   return (
     <div className="fullscreen-table-wrap">
       <div className="fullscreen-table-title">Gestion des Ventes</div>
 
       {/* Form ajout article */}
-      <div className="paper-card" style={{ marginBottom: 0 }}>
-        <form onSubmit={handleAddArticle}>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: "10px", alignItems: "center" }}>
-            <select
-              className="input"
-              style={{ minWidth: 180 }}
-              value={produit}
-              onChange={(e) => handleProduitChange(e.target.value)}
-              required
-            >
-              <option value="">Choisir Médicament</option>
-              {medicaments.map(m => <option key={m.nom} value={m.nom}>{m.nom}</option>)}
-              <option value="_new_">+ Nouveau médicament</option>
-            </select>
-            {produit === "_new_" &&
-              <input className="input" type="text" placeholder="Nouveau médicament"
-                value={produitNouveau}
-                onChange={(e) => setProduitNouveau(e.target.value)} required />
-            }
-            <input className="input" type="number" placeholder="Quantité"
-              value={quantite} onChange={(e) => setQuantite(e.target.value)} required min={1} />
-            <input className="input" type="number" placeholder="Prix Vente"
-              value={prixUnitaire} onChange={(e) => setPrixUnitaire(e.target.value)} required min={0} />
-            <input className="input" type="number" placeholder="Remise"
-              value={remiseArticle} onChange={(e) => setRemiseArticle(e.target.value)} min={0} />
-            <button className="btn" type="submit">Ajouter</button>
+      <form onSubmit={handleAddArticle} className="paper-card" style={{display:'flex',flexWrap:'wrap',gap:18,justifyContent:'flex-start'}}>
+        <div style={{minWidth:180}}>
+          <label>Médicament</label>
+          <select className="w-full" value={produit} onChange={(e) => handleProduitChange(e.target.value)} required>
+            <option value="">Choisir...</option>
+            {medicaments.map(m => <option key={m.nom} value={m.nom}>{m.nom}</option>)}
+            <option value="_new_">+ Nouveau médicament</option>
+          </select>
+        </div>
+        {produit === "_new_" && (
+          <div style={{minWidth:180}}>
+            <label>Nouveau médicament</label>
+            <input className="w-full" value={produitNouveau} onChange={(e) => setProduitNouveau(e.target.value)} required />
           </div>
-        </form>
-      </div>
+        )}
+        <div><label>Quantité</label>
+          <input type="number" className="w-full" value={quantite} onChange={(e) => setQuantite(e.target.value)} required min={1} /></div>
+        <div><label>Prix Vente</label>
+          <input type="number" className="w-full" value={prixUnitaire} onChange={(e) => setPrixUnitaire(e.target.value)} required min={0} /></div>
+        <div><label>Remise</label>
+          <input type="number" className="w-full" value={remiseArticle} onChange={(e) => setRemiseArticle(e.target.value)} min={0} /></div>
+        <button type="submit" className="btn">Ajouter</button>
+      </form>
 
       {/* Tableau articles (vente en cours) */}
       {articles.length > 0 && (
@@ -315,34 +332,76 @@ export default function Ventes() {
       )}
 
       {/* Formulaire infos vente */}
-      <div className="paper-card" style={{ marginTop: 0 }}>
-        <form onSubmit={handleAddVente}>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: "10px", alignItems: "center" }}>
-            <input className="input" type="text" placeholder="Client"
-              value={client} onChange={(e) => setClient(e.target.value)} required />
-            <input className="input" type="date" placeholder="Date Vente"
-              value={dateVente} onChange={(e) => setDateVente(e.target.value)} required />
-            <select
-              className="input"
-              style={{ minWidth: 160 }}
-              value={statutPaiement}
-              onChange={(e) => setStatutPaiement(e.target.value)}
-            >
-              <option value="payé">Payé</option>
-              <option value="partiel">Partiel</option>
-              <option value="impayé">Impayé</option>
-            </select>
-            <button className="btn" type="submit">{isEditing ? "Modifier Vente" : "Enregistrer Vente"}</button>
-            {isEditing && <button className="btn danger" type="button" onClick={resetForm}>Annuler</button>}
-          </div>
-        </form>
+      <form onSubmit={handleAddVente} className="paper-card" style={{display:'flex',flexWrap:'wrap',gap:18,justifyContent:'flex-start'}}>
+        <div>
+          <label>Client</label>
+          <input className="w-full" type="text" value={client} onChange={(e) => setClient(e.target.value)} required />
+        </div>
+        <div>
+          <label>Date Vente</label>
+          <input className="w-full" type="date" value={dateVente} onChange={(e) => setDateVente(e.target.value)} required />
+        </div>
+        <div>
+          <label>Statut</label>
+          <select className="w-full" value={statutPaiement} onChange={(e) => setStatutPaiement(e.target.value)}>
+            <option value="payé">Payé</option>
+            <option value="partiel">Partiel</option>
+            <option value="impayé">Impayé</option>
+          </select>
+        </div>
+        <button type="submit" className="btn">{isEditing ? "Modifier Vente" : "Enregistrer Vente"}</button>
+        {isEditing && <button type="button" className="btn info" onClick={resetForm}>Annuler</button>}
+      </form>
+
+      {/* Toggle filtres */}
+      <div style={{display:"flex",alignItems:"center",gap:11,marginTop:15,marginBottom:0}}>
+        <button
+          className="btn"
+          type="button"
+          style={{
+            fontSize:"1.32em",
+            padding:"2px 13px",
+            minWidth:35,
+            background:showFiltres
+              ? "linear-gradient(90deg,#ee4e61 60%,#fddada 100%)"
+              : "linear-gradient(90deg,#3272e0 50%,#61c7ef 100%)"
+          }}
+          onClick={()=>setShowFiltres(v=>!v)}
+          aria-label="Afficher/Masquer les filtres"
+          title="Afficher/Masquer les filtres"
+        >
+          {showFiltres ? "➖" : "➕"}
+        </button>
+        <span style={{fontWeight:700,fontSize:17,letterSpacing:0.02}}>Filtres historiques</span>
       </div>
 
-      {/* Historique des ventes */}
-      <div className="fullscreen-table-title" style={{ marginTop: 20, marginBottom: 0, fontSize: "1.3rem" }}>Historique des Ventes</div>
-      <div className="table-pro-full" style={{
-        flex: 1, minHeight: "33vh", marginTop: 0, overflowY: "auto"
-      }}>
+      {showFiltres && (
+        <div className="paper-card" style={{display:"flex",gap:18,alignItems:'center',marginTop:7,marginBottom:7,flexWrap:"wrap"}}>
+          <div>
+            <label>Client&nbsp;</label>
+            <select value={filterClient} onChange={e => setFilterClient(e.target.value)} style={{minWidth:110}}>
+              <option value="">Tous</option>
+              {uniqueClients.map(c => <option key={c} value={c}>{c}</option>)}
+            </select>
+          </div>
+          <div>
+            <label>Du&nbsp;</label>
+            <input type="date" value={filterDateMin} onChange={e => setFilterDateMin(e.target.value)} />
+          </div>
+          <div>
+            <label>Au&nbsp;</label>
+            <input type="date" value={filterDateMax} onChange={e => setFilterDateMax(e.target.value)} />
+          </div>
+          {(filterClient || filterDateMin || filterDateMax) && (
+            <button className="btn danger" type="button" onClick={() => {
+              setFilterClient(""); setFilterDateMin(""); setFilterDateMax("");
+            }}>Effacer filtres</button>
+          )}
+        </div>
+      )}
+
+      <div className="fullscreen-table-title" style={{marginTop:15, fontSize:'1.45rem'}}>Historique des Ventes</div>
+      <div className="table-pro-full" style={{flex: '1 1 0%', minHeight:'40vh'}}>
         <table>
           <thead>
             <tr>
@@ -354,7 +413,7 @@ export default function Ventes() {
             </tr>
           </thead>
           <tbody>
-            {ventes.map((v) => (
+            {ventesFiltrees.map((v) => (
               <tr key={v.id}>
                 <td>{v.client}</td>
                 <td>{v.date?.toDate().toLocaleDateString()}</td>
@@ -364,9 +423,9 @@ export default function Ventes() {
                     .reduce((sum, a) => sum + (a.prixUnitaire * a.quantite - a.remise), 0)} DH
                 </td>
                 <td>
-                  <button className="btn" type="button" onClick={() => handleEditVente(v)}>Modifier</button>
-                  <button className="btn danger" type="button" onClick={() => handleDeleteVente(v)}>Supprimer</button>
-                  <button className="btn print" type="button" onClick={() => handlePrintVente(v)}>Imprimer</button>
+                  <button className="btn info" onClick={() => handleEditVente(v)}>Modifier</button>
+                  <button className="btn danger" onClick={() => handleDeleteVente(v)}>Supprimer</button>
+                  <button className="btn print" onClick={() => handlePrintVente(v)}>Imprimer</button>
                 </td>
               </tr>
             ))}

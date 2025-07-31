@@ -5,26 +5,24 @@ import {
   getDocs,
   addDoc,
   updateDoc,
+  deleteDoc,
   doc,
   Timestamp,
 } from "firebase/firestore";
-import {
-  Box, Typography, Paper, TextField, Button, Table,
-  TableBody, TableCell, TableContainer, TableHead, TableRow,
-  Checkbox, MenuItem, Select, FormControl, InputLabel
-} from "@mui/material";
 
-// Numérotation automatique
+// Génération automatique du numéro
 function generateNumero(docs, type) {
   const prefix = type === "FACT" ? "FACT" : "DEV";
-  const nums = docs.filter(d => d.type === type)
-    .map(d => parseInt((d.numero || '').replace(prefix, '')))
-    .filter(n => !isNaN(n));
+  const nums = docs
+    .filter((d) => d.type === type)
+    .map((d) => parseInt((d.numero || "").replace(prefix, "")))
+    .filter((n) => !isNaN(n));
   const nextNum = nums.length > 0 ? Math.max(...nums) + 1 : 1;
-  return `${prefix}${String(nextNum).padStart(4, '0')}`;
+  return `${prefix}${String(nextNum).padStart(4, "0")}`;
 }
 
 export default function DevisFactures() {
+  // État général
   const [documents, setDocuments] = useState([]);
   const [type, setType] = useState("FACT");
   const [client, setClient] = useState("");
@@ -38,72 +36,135 @@ export default function DevisFactures() {
   const [selectedBons, setSelectedBons] = useState([]);
   const [parametres, setParametres] = useState({ entete: "", pied: "" });
 
+  // CRUD édition
+  const [isEditing, setIsEditing] = useState(false);
+  const [editId, setEditId] = useState(null);
+
+  // Filtres
+  const [filtreType, setFiltreType] = useState("");
+  const [filtreClient, setFiltreClient] = useState("");
+  const [filtreDateMin, setFiltreDateMin] = useState("");
+  const [filtreDateMax, setFiltreDateMax] = useState("");
+  const [showFiltres, setShowFiltres] = useState(false);
+
   // Récupération Firestore (devis, factures, ventes, paramètres)
+  const fetchAll = async () => {
+    const snap = await getDocs(collection(db, "devisFactures"));
+    let arr = [];
+    snap.forEach((docu) => arr.push({ id: docu.id, ...docu.data() }));
+    setDocuments(arr);
+    // Bons de vente pour factures groupées
+    const ventesSnap = await getDocs(collection(db, "ventes"));
+    setVentes(ventesSnap.docs.map((d) => ({ id: d.id, ...d.data() })));
+    // Paramètres (entête, pied)
+    const paramsSnap = await getDocs(collection(db, "parametres"));
+    if (!paramsSnap.empty) {
+      const data = paramsSnap.docs[0].data();
+      setParametres({ entete: data.entete || "", pied: data.pied || "" });
+    }
+  };
+
   useEffect(() => {
-    (async () => {
-      const snap = await getDocs(collection(db, "devisFactures"));
-      let arr = [];
-      snap.forEach(doc => arr.push({ id: doc.id, ...doc.data() }));
-      setDocuments(arr);
-      // Bons de vente pour factures groupées
-      const ventesSnap = await getDocs(collection(db, "ventes"));
-      setVentes(ventesSnap.docs.map(d => ({ id: d.id, ...d.data() })));
-      // Paramètres (entête, pied)
-      const paramsSnap = await getDocs(collection(db, "parametres"));
-      if (!paramsSnap.empty) {
-        const data = paramsSnap.docs[0].data();
-        setParametres({ entete: data.entete || "", pied: data.pied || "" });
-      }
-    })();
+    fetchAll();
+    // eslint-disable-next-line
   }, []);
 
   const numeroAuto = generateNumero(documents, type);
 
-  // Identification des bons déjà facturés (par une facture non annulée)
+  // Identification des bons déjà facturés
   const bonsFactures = documents
-    .filter(d => d.type === "FACT" && d.bonsAssocies && !d.annulee)
-    .flatMap(d => d.bonsAssocies || []);
+    .filter((d) => d.type === "FACT" && d.bonsAssocies && !d.annulee)
+    .flatMap((d) => d.bonsAssocies || []);
 
-  // Ajout article à la saisie
+  // Ajout d’un article temporaire au tableau du haut
   const handleAddArticle = (e) => {
     e.preventDefault();
     if (!produit || !quantite || !prixUnitaire) return;
-    setArticles([...articles, {
-      produit,
-      quantite: Number(quantite),
-      prixUnitaire: Number(prixUnitaire),
-      remise: Number(remise) || 0,
-    }]);
-    setProduit(""); setQuantite(1); setPrixUnitaire(0); setRemise(0);
+    setArticles([
+      ...articles,
+      {
+        produit,
+        quantite: Number(quantite),
+        prixUnitaire: Number(prixUnitaire),
+        remise: Number(remise) || 0,
+      },
+    ]);
+    setProduit("");
+    setQuantite(1);
+    setPrixUnitaire(0);
+    setRemise(0);
   };
 
-  // Enregistrement devis/facture manuelle
-  const handleAddDoc = async (e) => {
-    e.preventDefault();
+  // Suppression d’un article dans le formulaire
+  const handleRemoveArticle = (idx) => setArticles(articles.filter((_, i) => i !== idx));
+
+  // Ajout/modification d’un devis/facture
+  const handleSaveDoc = async () => {
     if (!client || !date || articles.length === 0) return;
-    await addDoc(collection(db, "devisFactures"), {
-      type,
-      numero: numeroAuto,
-      client,
-      date: Timestamp.fromDate(new Date(date)),
-      articles,
-      annulee: false,
-    });
-    setClient(""); setDate(""); setArticles([]);
-    // refresh
-    const snap = await getDocs(collection(db, "devisFactures"));
-    let arr = [];
-    snap.forEach(doc => arr.push({ id: doc.id, ...doc.data() }));
-    setDocuments(arr);
+    if (isEditing && editId) {
+      await updateDoc(doc(db, "devisFactures", editId), {
+        type,
+        numero: numeroAuto,
+        client,
+        date: Timestamp.fromDate(new Date(date)),
+        articles,
+      });
+    } else {
+      await addDoc(collection(db, "devisFactures"), {
+        type,
+        numero: numeroAuto,
+        client,
+        date: Timestamp.fromDate(new Date(date)),
+        articles,
+        annulee: false,
+      });
+    }
+    resetForm();
+    fetchAll();
+  };
+
+  // Remplir formulaire pour édition
+  const handleEditDoc = (docData) => {
+    setEditId(docData.id);
+    setType(docData.type);
+    setClient(docData.client);
+    setDate(docData.date?.toDate ? docData.date.toDate().toISOString().split("T")[0] : "");
+    setArticles(docData.articles || []);
+    setIsEditing(true);
+  };
+
+  // Suppression d’un devis/facture
+  const handleDeleteDoc = async (id) => {
+    if (!window.confirm("Supprimer ce document ?")) return;
+    await deleteDoc(doc(db, "devisFactures", id));
+    fetchAll();
+    resetForm();
+  };
+
+  // Annuler l’édition ou vider le formulaire
+  const resetForm = () => {
+    setIsEditing(false);
+    setEditId(null);
+    setType("FACT");
+    setClient("");
+    setDate("");
+    setArticles([]);
+    setProduit("");
+    setQuantite(1);
+    setPrixUnitaire(0);
+    setRemise(0);
   };
 
   // Impression (avec cachet)
-  const handlePrintDoc = (doc) => {
-    const articles = Array.isArray(doc.articles) ? doc.articles : [];
-    const total = articles.reduce((s, a) => s + (a.quantite * a.prixUnitaire - (a.remise || 0)), 0);
+  const handlePrintDoc = (docData) => {
+    const articles = Array.isArray(docData.articles) ? docData.articles : [];
+    const total = articles.reduce(
+      (s, a) => s + (a.quantite * a.prixUnitaire - (a.remise || 0)),
+      0
+    );
     const printWindow = window.open("", "_blank");
     printWindow.document.write(`
-      <html><head><title>${doc.type === "FACT" ? "Facture" : "Devis"}</title>
+      <html><head><title>${docData.type === "FACT" ? "Facture" : "Devis"}</title>
       <style>
         body { font-family: Arial; margin: 30px; }
         table { width: 100%; border-collapse: collapse; margin-top: 20px; }
@@ -113,13 +174,15 @@ export default function DevisFactures() {
       </style>
       </head><body>
         <div style="text-align:center">${parametres.entete || "Pharmacie"}</div>
-        <h2>${doc.type === "FACT" ? "Facture" : "Devis"} N° ${doc.numero}</h2>
-        <p><strong>Client:</strong> ${doc.client}</p>
-        <p><strong>Date:</strong> ${doc.date?.toDate().toLocaleDateString()}</p>
+        <h2>${docData.type === "FACT" ? "Facture" : "Devis"} N° ${docData.numero}</h2>
+        <p><strong>Client:</strong> ${docData.client}</p>
+        <p><strong>Date:</strong> ${docData.date?.toDate().toLocaleDateString()}</p>
         <table>
           <thead><tr><th>Produit</th><th>Qté</th><th>Prix Unitaire</th><th>Remise</th><th>Total</th></tr></thead>
           <tbody>
-            ${articles.map(a => `
+            ${articles
+              .map(
+                (a) => `
               <tr>
                 <td>${a.produit}</td>
                 <td>${a.quantite}</td>
@@ -127,7 +190,9 @@ export default function DevisFactures() {
                 <td>${a.remise || 0} DH</td>
                 <td>${a.quantite * a.prixUnitaire - (a.remise || 0)} DH</td>
               </tr>
-            `).join("")}
+            `
+              )
+              .join("")}
           </tbody>
         </table>
         <h3>Total : ${total} DH</h3>
@@ -141,25 +206,37 @@ export default function DevisFactures() {
     printWindow.print();
   };
 
+  // Annuler une facture
+  const handleAnnuleFacture = async (docData) => {
+    if (!window.confirm("Confirmer l'annulation de la facture ?")) return;
+    await updateDoc(doc(db, "devisFactures", docData.id), { annulee: true });
+    fetchAll();
+  };
+
   // Sélection de bons pour facturation groupée
   const toggleBonSelection = (bonId) => {
-    setSelectedBons(prev =>
-      prev.includes(bonId) ? prev.filter(id => id !== bonId) : [...prev, bonId]
+    setSelectedBons((prev) =>
+      prev.includes(bonId)
+        ? prev.filter((id) => id !== bonId)
+        : [...prev, bonId]
     );
   };
 
   // Générer une facture groupée à partir de bons
   const handleGenerateFacture = async () => {
     if (selectedBons.length === 0) return alert("Sélectionnez des bons !");
-    const bons = ventes.filter(v => selectedBons.includes(v.id));
+    const bons = ventes.filter((v) => selectedBons.includes(v.id));
     if (!bons.length) return;
     const client = bons[0].client;
-    const articles = bons.flatMap(b => b.articles || []);
-    const total = articles.reduce((sum, a) => sum + ((a.prixUnitaire || 0) * (a.quantite || 0) - (a.remise || 0)), 0);
+    const articles = bons.flatMap((b) => b.articles || []);
+    const total = articles.reduce(
+      (sum, a) => sum + ((a.prixUnitaire || 0) * (a.quantite || 0) - (a.remise || 0)),
+      0
+    );
     // Numéro
     const snap = await getDocs(collection(db, "devisFactures"));
     let arr = [];
-    snap.forEach(doc => arr.push({ id: doc.id, ...doc.data() }));
+    snap.forEach((docu) => arr.push({ id: docu.id, ...docu.data() }));
     const numero = generateNumero(arr, "FACT");
     const newFacture = {
       type: "FACT",
@@ -173,156 +250,310 @@ export default function DevisFactures() {
     };
     await addDoc(collection(db, "devisFactures"), newFacture);
     setSelectedBons([]);
-    // refresh & impression
-    getDocs(collection(db, "devisFactures")).then(snap2 => {
-      let arr2 = [];
-      snap2.forEach(doc => arr2.push({ id: doc.id, ...doc.data() }));
-      setDocuments(arr2);
-      handlePrintDoc(newFacture);
-    });
+    fetchAll();
+    handlePrintDoc(newFacture);
   };
 
-  // Annuler une facture
-  const handleAnnuleFacture = async (docData) => {
-    if (!window.confirm("Confirmer l'annulation de la facture ?")) return;
-    await updateDoc(doc(db, "devisFactures", docData.id), { annulee: true });
-    // Refresh documents
-    const snap = await getDocs(collection(db, "devisFactures"));
-    let arr = [];
-    snap.forEach(doc => arr.push({ id: doc.id, ...doc.data() }));
-    setDocuments(arr);
-  };
+  // Filtres sur l’historique
+  const filteredDocuments = documents.filter((doc) => {
+    let pass = true;
+    if (filtreType && doc.type !== filtreType) pass = false;
+    if (filtreClient && !doc.client?.toLowerCase().includes(filtreClient.toLowerCase())) pass = false;
+    if (filtreDateMin) {
+      const d = doc.date?.toDate ? doc.date.toDate() : new Date(doc.date);
+      if (d < new Date(filtreDateMin)) pass = false;
+    }
+    if (filtreDateMax) {
+      const d = doc.date?.toDate ? doc.date.toDate() : new Date(doc.date);
+      if (d > new Date(filtreDateMax)) pass = false;
+    }
+    return pass;
+  });
 
+  // Rendu
   return (
-    <Box sx={{ maxWidth: 1200, margin: "30px auto" }}>
-      <Typography variant="h4" gutterBottom>Gestion Devis, Bons et Factures</Typography>
+    <div className="fullscreen-table-wrap">
+      <div className="fullscreen-table-title">Gestion Devis, Bons et Factures</div>
 
-      {/* Création devis/facture manuelle */}
-      <Paper sx={{ p: 2, mb: 3 }}>
-        <form onSubmit={handleAddArticle} style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-          <FormControl sx={{ minWidth: 140 }}>
-            <InputLabel>Type</InputLabel>
-            <Select value={type} onChange={e => setType(e.target.value)}>
-              <MenuItem value="FACT">Facture</MenuItem>
-              <MenuItem value="DEV">Devis</MenuItem>
-            </Select>
-          </FormControl>
-          <TextField label="Client" value={client} onChange={e => setClient(e.target.value)} required />
-          <TextField label="Date" type="date" value={date} onChange={e => setDate(e.target.value)} InputLabelProps={{ shrink: true }} required />
+      {/* CRUD Formulaire principal */}
+      <div className="paper-card" style={{ marginBottom: 0 }}>
+        <form
+          onSubmit={handleAddArticle}
+          style={{
+            display: "flex",
+            flexWrap: "wrap",
+            gap: "13px",
+            alignItems: "center",
+            marginBottom: 10,
+          }}
+        >
+          <select className="input" style={{ minWidth: 120 }} value={type} onChange={e => setType(e.target.value)}>
+            <option value="FACT">Facture</option>
+            <option value="DEV">Devis</option>
+          </select>
+          <input
+            className="input"
+            type="text"
+            placeholder="Client"
+            value={client}
+            onChange={e => setClient(e.target.value)}
+            required
+          />
+          <input
+            className="input"
+            type="date"
+            value={date}
+            onChange={e => setDate(e.target.value)}
+            required
+          />
         </form>
-        <form onSubmit={handleAddArticle} style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 15 }}>
-          <TextField label="Produit" value={produit} onChange={e => setProduit(e.target.value)} required />
-          <TextField label="Quantité" type="number" value={quantite} onChange={e => setQuantite(e.target.value)} required />
-          <TextField label="Prix Unitaire" type="number" value={prixUnitaire} onChange={e => setPrixUnitaire(e.target.value)} required />
-          <TextField label="Remise" type="number" value={remise} onChange={e => setRemise(e.target.value)} />
-          <Button type="submit" variant="contained">Ajouter Article</Button>
+        <form
+          onSubmit={handleAddArticle}
+          style={{
+            display: "flex",
+            flexWrap: "wrap",
+            gap: "12px",
+            alignItems: "center",
+          }}
+        >
+          <input
+            className="input"
+            type="text"
+            placeholder="Produit"
+            value={produit}
+            onChange={e => setProduit(e.target.value)}
+            required
+          />
+          <input
+            className="input"
+            type="number"
+            placeholder="Quantité"
+            value={quantite}
+            onChange={e => setQuantite(e.target.value)}
+            min={1}
+            required
+          />
+          <input
+            className="input"
+            type="number"
+            placeholder="Prix Unitaire"
+            value={prixUnitaire}
+            onChange={e => setPrixUnitaire(e.target.value)}
+            min={0}
+            required
+          />
+          <input
+            className="input"
+            type="number"
+            placeholder="Remise"
+            value={remise}
+            onChange={e => setRemise(e.target.value)}
+            min={0}
+          />
+          <button className="btn info" type="submit">
+            Ajouter Article
+          </button>
         </form>
         {(articles || []).length > 0 && (
-          <TableContainer sx={{ mt: 2 }}>
-            <Table>
-              <TableHead>
-                <TableRow>
-                  <TableCell>Produit</TableCell>
-                  <TableCell>Qté</TableCell>
-                  <TableCell>Prix Unitaire</TableCell>
-                  <TableCell>Remise</TableCell>
-                  <TableCell>Total</TableCell>
-                </TableRow>
-              </TableHead>
-              <TableBody>
+          <div className="table-pro-full" style={{ marginTop: 10, maxHeight: "27vh", marginBottom: 0 }}>
+            <table>
+              <thead>
+                <tr>
+                  <th>Produit</th>
+                  <th>Qté</th>
+                  <th>Prix Unitaire</th>
+                  <th>Remise</th>
+                  <th>Total</th>
+                  <th>Supprimer</th>
+                </tr>
+              </thead>
+              <tbody>
                 {articles.map((a, i) => (
-                  <TableRow key={i}>
-                    <TableCell>{a.produit}</TableCell>
-                    <TableCell>{a.quantite}</TableCell>
-                    <TableCell>{a.prixUnitaire} DH</TableCell>
-                    <TableCell>{a.remise || 0} DH</TableCell>
-                    <TableCell>{a.quantite * a.prixUnitaire - (a.remise || 0)} DH</TableCell>
-                  </TableRow>
+                  <tr key={i}>
+                    <td>{a.produit}</td>
+                    <td>{a.quantite}</td>
+                    <td>{a.prixUnitaire} DH</td>
+                    <td>{a.remise || 0} DH</td>
+                    <td>{a.quantite * a.prixUnitaire - (a.remise || 0)} DH</td>
+                    <td>
+                      <button
+                        className="btn danger"
+                        type="button"
+                        onClick={() => handleRemoveArticle(i)}
+                      >
+                        X
+                      </button>
+                    </td>
+                  </tr>
                 ))}
-              </TableBody>
-            </Table>
-          </TableContainer>
+              </tbody>
+            </table>
+          </div>
         )}
-        <Button
+        <div style={{ marginTop: 13 }}>
+          <button
+            className="btn info"
+            type="button"
+            onClick={handleSaveDoc}
+          >
+            {isEditing ? "Enregistrer la modification" : `Enregistrer ${type === "FACT" ? "Facture" : "Devis"}`}
+          </button>
+          {isEditing && (
+            <button className="btn danger" type="button" onClick={resetForm} style={{ marginLeft: 9 }}>
+              Annuler
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Toggle Filtres */}
+      <div style={{display:"flex",alignItems:"center",gap:11,marginTop:14,marginBottom:0}}>
+        <button
+          className="btn"
           type="button"
-          variant="contained"
-          color="success"
-          onClick={handleAddDoc}
-          sx={{ mt: 2 }}
+          style={{
+            fontSize:"1.28em",
+            padding:"2px 13px",
+            minWidth:35,
+            background:showFiltres
+              ? "linear-gradient(90deg,#ee4e61 60%,#fddada 100%)"
+              : "linear-gradient(90deg,#3272e0 50%,#61c7ef 100%)"
+          }}
+          onClick={()=>setShowFiltres(v=>!v)}
+          aria-label="Afficher/Masquer les filtres"
+          title="Afficher/Masquer les filtres"
         >
-          Enregistrer {type === "FACT" ? "Facture" : "Devis"}
-        </Button>
-      </Paper>
+          {showFiltres ? "➖" : "➕"}
+        </button>
+        <span style={{fontWeight:700,fontSize:17,letterSpacing:0.02}}>Filtres Historique</span>
+      </div>
+      {showFiltres && (
+        <div className="paper-card" style={{marginBottom: 10, marginTop: 9}}>
+          <div style={{ display: "flex", gap: 14, flexWrap: "wrap", alignItems: "center" }}>
+            <select className="input" style={{ minWidth: 100 }} value={filtreType} onChange={e => setFiltreType(e.target.value)}>
+              <option value="">Type : Tous</option>
+              <option value="FACT">Facture</option>
+              <option value="DEV">Devis</option>
+            </select>
+            <input
+              className="input"
+              type="text"
+              placeholder="Client"
+              value={filtreClient}
+              onChange={e => setFiltreClient(e.target.value)}
+            />
+            <span>Du :</span>
+            <input
+              className="input"
+              type="date"
+              value={filtreDateMin}
+              onChange={e => setFiltreDateMin(e.target.value)}
+            />
+            <span>Au :</span>
+            <input
+              className="input"
+              type="date"
+              value={filtreDateMax}
+              onChange={e => setFiltreDateMax(e.target.value)}
+            />
+          </div>
+        </div>
+      )}
 
       {/* Historique */}
-      <Typography variant="h5" sx={{ mt: 3 }}>Historique</Typography>
-      <TableContainer>
-        <Table>
-          <TableHead>
-            <TableRow>
-              <TableCell>Type</TableCell>
-              <TableCell>Numéro</TableCell>
-              <TableCell>Client</TableCell>
-              <TableCell>Date</TableCell>
-              <TableCell>Total</TableCell>
-              <TableCell>Statut</TableCell>
-              <TableCell>Action</TableCell>
-            </TableRow>
-          </TableHead>
-          <TableBody>
-            {documents.map((doc) => (
-              <TableRow key={doc.id}>
-                <TableCell>{doc.type === "FACT" ? "Facture" : "Devis"}</TableCell>
-                <TableCell>{doc.numero}</TableCell>
-                <TableCell>{doc.client}</TableCell>
-                <TableCell>{doc.date?.toDate().toLocaleDateString()}</TableCell>
-                <TableCell>{(doc.articles || []).reduce((s, a) => s + (a.quantite * a.prixUnitaire - (a.remise || 0)), 0)} DH</TableCell>
-                <TableCell>
-                  {doc.annulee ? <span style={{ color: "red" }}>Annulée</span> : ""}
-                </TableCell>
-                <TableCell>
-                  <Button onClick={() => handlePrintDoc(doc)}>Imprimer</Button>
-                  {doc.type === "FACT" && !doc.annulee && (
-                    <Button color="error" onClick={() => handleAnnuleFacture(doc)}>Annuler</Button>
+      <div className="fullscreen-table-title" style={{ fontSize: "1.3rem", margin: 0 }}>Historique Devis et Factures</div>
+      <div className="table-pro-full" style={{flex:'1 1 0%', minHeight:'34vh'}}>
+        <table>
+          <thead>
+            <tr>
+              <th>Type</th>
+              <th>Numéro</th>
+              <th>Client</th>
+              <th>Date</th>
+              <th>Total</th>
+              <th>Statut</th>
+              <th colSpan={3}>Action</th>
+            </tr>
+          </thead>
+          <tbody>
+            {filteredDocuments.map((docData) => (
+              <tr key={docData.id}>
+                <td>{docData.type === "FACT" ? "Facture" : "Devis"}</td>
+                <td>{docData.numero}</td>
+                <td>{docData.client}</td>
+                <td>{docData.date?.toDate().toLocaleDateString()}</td>
+                <td>
+                  {(docData.articles || []).reduce((s, a) => s + (a.quantite * a.prixUnitaire - (a.remise || 0)), 0)} DH
+                </td>
+                <td>
+                  {docData.annulee ? <span style={{ color: "red" }}>Annulée</span> : ""}
+                </td>
+                <td>
+                  <button className="btn print" onClick={() => handlePrintDoc(docData)}>Imprimer</button>
+                </td>
+                <td>
+                  {!docData.annulee && (
+                    <button className="btn info" onClick={() => handleEditDoc(docData)}>Modifier</button>
                   )}
-                </TableCell>
-              </TableRow>
+                </td>
+                <td>
+                  {!docData.annulee && (
+                    <button className="btn danger" onClick={() => handleDeleteDoc(docData.id)}>Supprimer</button>
+                  )}
+                  {docData.type === "FACT" && !docData.annulee && (
+                    <button className="btn" style={{background:'#ffc107', color:'#212121'}}
+                      onClick={() => handleAnnuleFacture(docData)}
+                    >
+                      Annuler
+                    </button>
+                  )}
+                </td>
+              </tr>
             ))}
-          </TableBody>
-        </Table>
-      </TableContainer>
+          </tbody>
+        </table>
+      </div>
 
       {/* Bons de vente sélection pour facture */}
-      <Typography variant="h6" sx={{ mt: 4 }}>Sélectionner des Bons de Vente pour Facture</Typography>
-      <TableContainer component={Paper} sx={{ mb: 3 }}>
-        <Table>
-          <TableHead>
-            <TableRow>
-              <TableCell></TableCell>
-              <TableCell>Client</TableCell>
-              <TableCell>Date</TableCell>
-              <TableCell>Total</TableCell>
-            </TableRow>
-          </TableHead>
-          <TableBody>
+      <div className="fullscreen-table-title" style={{ marginTop: 26, fontSize: "1.1rem" }}>
+        Sélectionner des Bons de Vente pour Facture
+      </div>
+      <div className="table-pro-full" style={{maxHeight:'26vh',marginBottom:13}}>
+        <table>
+          <thead>
+            <tr>
+              <th></th>
+              <th>Client</th>
+              <th>Date</th>
+              <th>Total</th>
+            </tr>
+          </thead>
+          <tbody>
             {ventes
-              .filter(v => !bonsFactures.includes(v.id))
+              .filter((v) => !bonsFactures.includes(v.id))
               .map((v) => (
-                <TableRow key={v.id}>
-                  <TableCell>
-                    <Checkbox checked={selectedBons.includes(v.id)} onChange={() => toggleBonSelection(v.id)} />
-                  </TableCell>
-                  <TableCell>{v.client}</TableCell>
-                  <TableCell>{v.date?.toDate().toLocaleDateString()}</TableCell>
-                  <TableCell>
-                    {(v.articles || []).reduce((sum, a) => sum + (a.prixUnitaire * a.quantite - (a.remise || 0)), 0)} DH
-                  </TableCell>
-                </TableRow>
+                <tr key={v.id}>
+                  <td>
+                    <input
+                      type="checkbox"
+                      checked={selectedBons.includes(v.id)}
+                      onChange={() => toggleBonSelection(v.id)}
+                    />
+                  </td>
+                  <td>{v.client}</td>
+                  <td>{v.date?.toDate().toLocaleDateString()}</td>
+                  <td>
+                    {(v.articles || []).reduce(
+                      (sum, a) => sum + (a.prixUnitaire * a.quantite - (a.remise || 0)),
+                      0
+                    )} DH
+                  </td>
+                </tr>
               ))}
-          </TableBody>
-        </Table>
-      </TableContainer>
-      <Button variant="contained" color="primary" onClick={handleGenerateFacture}>Générer Facture</Button>
-    </Box>
+          </tbody>
+        </table>
+      </div>
+      <button className="btn" style={{marginBottom:30}} onClick={handleGenerateFacture}>Générer Facture Groupée</button>
+    </div>
   );
 }

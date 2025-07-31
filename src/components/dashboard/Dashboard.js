@@ -1,20 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { db } from "../../firebase/config";
 import { collection, getDocs } from "firebase/firestore";
-import {
-  Box,
-  Typography,
-  Paper,
-  Grid,
-  Button,
-  Table,
-  TableHead,
-  TableRow,
-  TableCell,
-  TableBody,
-  Select,
-  MenuItem
-} from "@mui/material";
 
 export default function Dashboard() {
   const [totalVentes, setTotalVentes] = useState(0);
@@ -22,6 +8,9 @@ export default function Dashboard() {
   const [produitsStock, setProduitsStock] = useState(0);
   const [alertes, setAlertes] = useState([]);
   const [periode, setPeriode] = useState("jour");
+  const [dateMin, setDateMin] = useState("");
+  const [dateMax, setDateMax] = useState("");
+  const [showFilters, setShowFilters] = useState(false);
 
   // ➡ Charger données Firestore
   const fetchData = async () => {
@@ -29,7 +18,6 @@ export default function Dashboard() {
     const achatsSnap = await getDocs(collection(db, "achats"));
     const stockSnap = await getDocs(collection(db, "stock"));
 
-    // Tableaux sécurisés
     let ventesArr = [];
     ventesSnap.forEach((doc) => ventesArr.push(doc.data()));
 
@@ -41,11 +29,10 @@ export default function Dashboard() {
 
     setProduitsStock(stockArr.length);
 
-    // ➡ Filtrer par période
-    const filteredVentes = filterByPeriode(ventesArr, periode);
-    const filteredAchats = filterByPeriode(achatsArr, periode);
+    // ➡ Filtrer par période/date
+    const filteredVentes = filterByPeriodeOuDates(ventesArr, periode, dateMin, dateMax);
+    const filteredAchats = filterByPeriodeOuDates(achatsArr, periode, dateMin, dateMax);
 
-    // ➡ Totaux sécurisés
     setTotalVentes(
       filteredVentes.reduce((total, vente) => {
         const articles = Array.isArray(vente.articles) ? vente.articles : [];
@@ -53,7 +40,6 @@ export default function Dashboard() {
           sum + (((a.prixUnitaire || 0) * (a.quantite || 0)) - (a.remise || 0)), 0);
       }, 0)
     );
-
     setTotalAchats(
       filteredAchats.reduce((total, achat) => {
         const articles = Array.isArray(achat.articles) ? achat.articles : [];
@@ -79,98 +65,233 @@ export default function Dashboard() {
     setAlertes(alertList);
   };
 
-  // ➡ Filtrer par période
-  const filterByPeriode = (data, period) => {
+  // ➡ Filtrer par période OU par dates
+  const filterByPeriodeOuDates = (data, period, min, max) => {
     const now = new Date();
     return data.filter((item) => {
       if (!item.date) return false;
       const d = item.date.toDate ? item.date.toDate() : new Date(item.date);
-      switch (period) {
-        case "jour": return d.toDateString() === now.toDateString();
-        case "semaine": {
-          const start = new Date(now); start.setDate(now.getDate() - 7);
-          return d >= start;
-        }
-        case "mois": return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
-        case "annee": return d.getFullYear() === now.getFullYear();
-        default: return true;
+
+      if (min) {
+        if (d < new Date(min)) return false;
       }
+      if (max) {
+        const maxDate = new Date(max + "T23:59:59");
+        if (d > maxDate) return false;
+      }
+
+      if (!min && !max) {
+        switch (period) {
+          case "jour": return d.toDateString() === now.toDateString();
+          case "semaine": {
+            const start = new Date(now); start.setDate(now.getDate() - 7);
+            return d >= start;
+          }
+          case "mois": return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
+          case "annee": return d.getFullYear() === now.getFullYear();
+          default: return true;
+        }
+      }
+      return true;
     });
   };
 
   useEffect(() => {
     fetchData();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [periode]);
+    // eslint-disable-next-line
+  }, [periode, dateMin, dateMax]);
+
+  // --- STYLES DIRECTS ---
+  const dashboardStyle = {
+    maxWidth: 1250,
+    margin: "30px auto 0 auto",
+    padding: 0,
+    fontFamily: "'Inter', Arial, sans-serif",
+    color: "#e8ecf4",
+    minHeight: "92vh"
+  };
+  const cardStyle = {
+    background: "linear-gradient(120deg, #223049 0%, #3a4c67 100%)",
+    borderRadius: 16,
+    boxShadow: "0 8px 48px #202a3c80",
+    padding: "28px 26px 18px 26px",
+    border: "1.5px solid #415377",
+    color: "#e8ecf4",
+    minHeight: 145,
+    marginBottom: 15,
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "center",
+    filter: "drop-shadow(0 30px 12px #1b253c40)"
+  };
+  const statNumberStyle = {
+    fontWeight: 800,
+    fontSize: "2.1rem",
+    letterSpacing: "0.03em",
+    color: "#7ee4e6",
+    margin: "5px 0 0 0"
+  };
+  const statLabelStyle = {
+    color: "#e3eaff",
+    fontSize: "1.12rem",
+    fontWeight: 600,
+    letterSpacing: "0.04em"
+  };
+  const alertTableStyle = {
+    background: "#283c55",
+    borderRadius: 13,
+    boxShadow: "0 8px 32px #17203245",
+    border: "1px solid #334568",
+    marginTop: 18
+  };
+
+  // Responsive slide pour filtres
+  const filterContainerStyle = {
+    display: showFilters ? "flex" : "none",
+    flexWrap: "wrap",
+    gap: 18,
+    alignItems: "center",
+    margin: "22px 0 17px 0",
+    background: "#283c55",
+    borderRadius: 11,
+    padding: showFilters ? "17px 23px" : 0,
+    transition: "all 0.24s cubic-bezier(.6,.15,.43,1.1)"
+  };
 
   return (
-    <Box sx={{ maxWidth: 1200, margin: "30px auto" }}>
-      <Typography variant="h4" gutterBottom>Tableau de bord</Typography>
+    <div style={dashboardStyle}>
+      <div style={{
+        fontSize: "2.1rem",
+        fontWeight: 800,
+        color: "#e3eaff",
+        padding: "26px 26px 9px 26px",
+        background: "#293b53",
+        filter: "drop-shadow(0 30px 12px #1b253c40)",
+        marginBottom: "0",
+        textAlign: "left",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between"
+      }}>
+        <span>Tableau de bord</span>
+        <button
+          type="button"
+          className="btn-neumorph"
+          style={{
+            background: "linear-gradient(90deg,#2bd2a6 40%,#6ee9df 100%)",
+            color: "#1a2230",
+            fontSize: 22,
+            borderRadius: 12,
+            minWidth: 42,
+            height: 42,
+            boxShadow: "0 3px 13px #1b243a22",
+            marginRight: 0,
+            marginLeft: 14,
+            padding: 0,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center"
+          }}
+          onClick={() => setShowFilters(f => !f)}
+          title={showFilters ? "Masquer les filtres" : "Afficher les filtres"}
+          aria-label={showFilters ? "Masquer les filtres" : "Afficher les filtres"}
+        >
+          {/* Icône simple (+ ou -) */}
+          {showFilters ? (
+            <span style={{ fontSize: 25, fontWeight: 800, color: "#f55974" }}>–</span>
+          ) : (
+            <span style={{ fontSize: 25, fontWeight: 800, color: "#1f7a7a" }}>+</span>
+          )}
+        </button>
+      </div>
 
-      {/* Filtres */}
-      <Box sx={{ display: "flex", gap: 2, alignItems: "center", mb: 2 }}>
-        <Typography>Filtrer par :</Typography>
-        <Select value={periode} onChange={(e) => setPeriode(e.target.value)}>
-          <MenuItem value="jour">Jour</MenuItem>
-          <MenuItem value="semaine">Semaine</MenuItem>
-          <MenuItem value="mois">Mois</MenuItem>
-          <MenuItem value="annee">Année</MenuItem>
-        </Select>
-        <Button variant="outlined" onClick={fetchData}>Actualiser</Button>
-      </Box>
+      {/* Filtres toggle */}
+      <div style={filterContainerStyle}>
+        <span style={{ fontWeight: 600, fontSize: 16 }}>Filtrer par :</span>
+        <select value={periode} onChange={e => setPeriode(e.target.value)}
+          className="input" style={{ minWidth: 110 }}>
+          <option value="jour">Jour</option>
+          <option value="semaine">Semaine</option>
+          <option value="mois">Mois</option>
+          <option value="annee">Année</option>
+        </select>
+        <span style={{ fontWeight: 600, marginLeft: 14 }}>Ou dates personnalisées :</span>
+        <span>Du</span>
+        <input type="date" className="input" value={dateMin} onChange={e => setDateMin(e.target.value)} />
+        <span>au</span>
+        <input type="date" className="input" value={dateMax} onChange={e => setDateMax(e.target.value)} />
+        {(dateMin || dateMax) &&
+          <button className="btn danger" type="button"
+            onClick={() => { setDateMin(""); setDateMax(""); }}
+            style={{ marginLeft: 12 }}>
+            Effacer dates
+          </button>
+        }
+        <button className="btn" style={{ marginLeft: 22, minWidth: 120 }} onClick={fetchData}>Actualiser</button>
+      </div>
 
       {/* Statistiques */}
-      <Grid container spacing={3} sx={{ mb: 3 }}>
-        <Grid size={{ xs: 12, sm: 6, md: 3 }}>
-          <Paper sx={{ p: 2, textAlign: "center", bgcolor: "#e3f2fd" }}>
-            <Typography variant="h6">Ventes</Typography>
-            <Typography variant="h5" color="primary">{totalVentes} DH</Typography>
-          </Paper>
-        </Grid>
-        <Grid size={{ xs: 12, sm: 6, md: 3 }}>
-          <Paper sx={{ p: 2, textAlign: "center", bgcolor: "#e8f5e9" }}>
-            <Typography variant="h6">Achats</Typography>
-            <Typography variant="h5" color="success.main">{totalAchats} DH</Typography>
-          </Paper>
-        </Grid>
-        <Grid size={{ xs: 12, sm: 6, md: 3 }}>
-          <Paper sx={{ p: 2, textAlign: "center", bgcolor: "#fffde7" }}>
-            <Typography variant="h6">Produits en stock</Typography>
-            <Typography variant="h5">{produitsStock}</Typography>
-          </Paper>
-        </Grid>
-        <Grid size={{ xs: 12, sm: 6, md: 3 }}>
-          <Paper sx={{ p: 2, textAlign: "center", bgcolor: "#ffebee" }}>
-            <Typography variant="h6">Alertes</Typography>
-            <Typography variant="h5" color="error">{alertes.length}</Typography>
-          </Paper>
-        </Grid>
-      </Grid>
+      <div style={{
+        display: "grid",
+        gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))",
+        gap: "26px",
+        marginBottom: "29px"
+      }}>
+        <div style={cardStyle}>
+          <div style={statLabelStyle}>Ventes</div>
+          <div style={statNumberStyle}>{totalVentes} DH</div>
+        </div>
+        <div style={cardStyle}>
+          <div style={statLabelStyle}>Achats</div>
+          <div style={{ ...statNumberStyle, color: "#90e0a0" }}>{totalAchats} DH</div>
+        </div>
+        <div style={cardStyle}>
+          <div style={statLabelStyle}>Produits en stock</div>
+          <div style={{ ...statNumberStyle, color: "#e7e074" }}>{produitsStock}</div>
+        </div>
+        <div style={cardStyle}>
+          <div style={statLabelStyle}>Alertes</div>
+          <div style={{ ...statNumberStyle, color: "#fd6565" }}>{alertes.length}</div>
+        </div>
+      </div>
 
       {/* Alertes */}
-      <Paper sx={{ p: 2 }}>
-        <Typography variant="h6" gutterBottom>Alertes</Typography>
+      <div style={alertTableStyle}>
+        <div style={{
+          fontWeight: 700, fontSize: "1.17rem", letterSpacing: "0.02em",
+          color: "#a1e8e7", background: "#233354", borderRadius: "13px 13px 0 0",
+          padding: "14px 22px"
+        }}>Alertes</div>
         {alertes.length === 0 ? (
-          <Typography>Aucune alerte actuellement.</Typography>
+          <div style={{ padding: "17px 22px", color: "#b5bed4" }}>Aucune alerte actuellement.</div>
         ) : (
-          <Table>
-            <TableHead>
-              <TableRow>
-                <TableCell>Type</TableCell>
-                <TableCell>Détail</TableCell>
-              </TableRow>
-            </TableHead>
-            <TableBody>
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead>
+              <tr>
+                <th style={{
+                  padding: "12px", borderBottom: "1.5px solid #334568",
+                  color: "#7ee4e6", background: "#25355a", fontWeight: 700, letterSpacing: "0.02em"
+                }}>Type</th>
+                <th style={{
+                  padding: "12px", borderBottom: "1.5px solid #334568",
+                  color: "#7ee4e6", background: "#25355a", fontWeight: 700, letterSpacing: "0.02em"
+                }}>Détail</th>
+              </tr>
+            </thead>
+            <tbody>
               {alertes.map((a, i) => (
-                <TableRow key={i} style={{ background: a.type === "Stock bas" ? "#ffebee" : "#fff3e0" }}>
-                  <TableCell>{a.type}</TableCell>
-                  <TableCell>{a.message}</TableCell>
-                </TableRow>
+                <tr key={i}
+                  style={{
+                    background: a.type === "Stock bas" ? "#38304d" : "#3c2f21"
+                  }}>
+                  <td style={{ padding: "13px 11px", fontWeight: 600 }}>{a.type}</td>
+                  <td style={{ padding: "13px 11px" }}>{a.message}</td>
+                </tr>
               ))}
-            </TableBody>
-          </Table>
+            </tbody>
+          </table>
         )}
-      </Paper>
-    </Box>
+      </div>
+    </div>
   );
 }

@@ -2,14 +2,6 @@ import React, { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { createUserWithEmailAndPassword } from "firebase/auth";
 import { auth } from "../../firebase/config";
-import {
-  Box,
-  Paper,
-  Typography,
-  TextField,
-  Button,
-  Alert,
-} from "@mui/material";
 
 export default function Register() {
   const [email, setEmail] = useState("");
@@ -21,90 +13,92 @@ export default function Register() {
   const handleRegister = async (e) => {
     e.preventDefault();
     setError("");
-
     if (password !== confirmPassword) {
       setError("Les mots de passe ne correspondent pas !");
       return;
     }
-
     try {
       await createUserWithEmailAndPassword(auth, email, password);
       navigate("/dashboard");
     } catch (err) {
-      console.error(err);
       setError("Erreur lors de la création du compte !");
     }
   };
 
   return (
-    <Box
-      sx={{
-        display: "flex",
-        justifyContent: "center",
-        alignItems: "center",
-        minHeight: "100vh",
-        background: "linear-gradient(135deg, #43a047 0%, #66bb6a 100%)",
-      }}
-    >
-      <Paper
-        elevation={6}
-        sx={{ p: 4, width: 400, textAlign: "center", borderRadius: 3 }}
-      >
-        <Typography variant="h5" gutterBottom>
+    <div className="fullscreen-table-wrap" style={{
+      minHeight: "100vh", justifyContent: "center", alignItems: "center", display: "flex",
+      background: "linear-gradient(120deg, #19392a 0%, #1e6939 100%)"
+    }}>
+      <div className="paper-card" style={{
+        maxWidth: 410,
+        width: "96%",
+        margin: "0 auto",
+        borderRadius: 18,
+        padding: "30px 28px 26px 28px"
+      }}>
+        <div className="fullscreen-table-title" style={{
+          background: "#224d32",
+          color: "#f1f5fb",
+          fontSize: "1.38rem",
+          textAlign: "center"
+        }}>
           Créer un compte
-        </Typography>
+        </div>
 
-        {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
+        {error &&
+          <div className="status-chip danger" style={{ margin: "18px auto" }}>
+            {error}
+          </div>
+        }
 
-        <form onSubmit={handleRegister}>
-          <TextField
-            label="Email"
+        <form onSubmit={handleRegister} style={{ display: "flex", flexDirection: "column", gap: 13, marginTop: 22 }}>
+          <input
+            className="input"
             type="email"
+            placeholder="Adresse e-mail"
+            autoComplete="email"
             value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            autoComplete="email" // ✅ Pour email
-            fullWidth
+            onChange={e => setEmail(e.target.value)}
             required
-            sx={{ mb: 2 }}
           />
-          <TextField
-            label="Mot de passe"
+          <input
+            className="input"
             type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            autoComplete="new-password" // ✅ Création de mot de passe
-            fullWidth
-            required
-            sx={{ mb: 2 }}
-          />
-          <TextField
-            label="Confirmer le mot de passe"
-            type="password"
-            value={confirmPassword}
-            onChange={(e) => setConfirmPassword(e.target.value)}
+            placeholder="Mot de passe"
             autoComplete="new-password"
-            fullWidth
+            value={password}
+            onChange={e => setPassword(e.target.value)}
             required
-            sx={{ mb: 2 }}
           />
-
-          <Button
-            type="submit"
-            variant="contained"
-            fullWidth
-            sx={{ py: 1.2, fontSize: "16px" }}
-          >
+          <input
+            className="input"
+            type="password"
+            placeholder="Confirmer le mot de passe"
+            autoComplete="new-password"
+            value={confirmPassword}
+            onChange={e => setConfirmPassword(e.target.value)}
+            required
+          />
+          <button className="btn" style={{ width: "100%", fontSize: "1.1rem" }}>
             S'inscrire
-          </Button>
+          </button>
         </form>
 
-        <Typography variant="body2" sx={{ mt: 2 }}>
-          Vous avez déjà un compte ?{" "}
-          <Button onClick={() => navigate("/login")} variant="text">
+        <div style={{ marginTop: 16, color: "#e1e6ef", textAlign: "center", fontSize: "1.04rem" }}>
+          Vous avez déjà un compte ?
+          <button className="btn-neumorph" style={{
+            background: "transparent", color: "#5bed98", border: "none", marginLeft: 9, fontWeight: 700, boxShadow: "none", padding: 0
+          }}
+            onClick={() => navigate("/login")}
+            onMouseOver={e => (e.target.style.textDecoration = "underline")}
+            onMouseOut={e => (e.target.style.textDecoration = "none")}
+            type="button"
+          >
             Connectez-vous
-          </Button>
-        </Typography>
-      </Paper>
-    </Box>
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }

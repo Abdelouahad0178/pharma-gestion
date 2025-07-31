@@ -162,7 +162,7 @@ export default function Navbar() {
               "&:hover": { bgcolor: "#fff5", color: "#1976d2" }
             }}
           >
-            Déconnexion
+            
           </Button>
         </Toolbar>
       </AppBar>

@@ -10,24 +10,6 @@ import {
   query,
   where,
 } from "firebase/firestore";
-import {
-  Box,
-  Typography,
-  Paper,
-  TextField,
-  Button,
-  Table,
-  TableBody,
-  TableCell,
-  TableContainer,
-  TableHead,
-  TableRow,
-  Dialog,
-  DialogActions,
-  DialogContent,
-  DialogTitle,
-  MenuItem,
-} from "@mui/material";
 
 export default function Stock() {
   const [stock, setStock] = useState([]);
@@ -53,12 +35,14 @@ export default function Stock() {
   const [filterStockDateExp, setFilterStockDateExp] = useState("");
   const [filterStockQuantiteMin, setFilterStockQuantiteMin] = useState("");
   const [filterStockQuantiteMax, setFilterStockQuantiteMax] = useState("");
+  const [showFiltresStock, setShowFiltresStock] = useState(false);
 
   // Filtres Retours
   const [filterProduit, setFilterProduit] = useState("");
   const [filterMotif, setFilterMotif] = useState("");
   const [filterDateMin, setFilterDateMin] = useState("");
   const [filterDateMax, setFilterDateMax] = useState("");
+  const [showFiltresRetours, setShowFiltresRetours] = useState(false);
 
   // Charger Stock et Retours
   const fetchStock = async () => {
@@ -154,10 +138,8 @@ export default function Stock() {
     fetchRetours();
   };
 
-  // Annuler Retour (produit vide accepté)
   const handleCancelRetour = async (retour) => {
     if (!window.confirm("Annuler ce retour et réinjecter dans le stock si possible ?")) return;
-
     if (retour?.produit && retour.produit.trim() !== "") {
       const stockQuery = query(collection(db, "stock"), where("nom", "==", retour.produit));
       const stockSnap = await getDocs(stockQuery);
@@ -167,14 +149,8 @@ export default function Stock() {
         await updateDoc(doc(db, "stock", stockDoc.id), {
           quantite: Number(stockData.quantite) + Number(retour.quantite),
         });
-        console.log(`Réinjecté dans stock: ${retour.produit}`);
-      } else {
-        console.warn("Produit non trouvé en stock. Suppression uniquement.");
       }
-    } else {
-      console.warn("Produit vide. Suppression uniquement.");
     }
-
     await deleteDoc(doc(db, "retours", retour.id));
     fetchStock();
     fetchRetours();
@@ -208,120 +184,194 @@ export default function Stock() {
     printWindow.print();
   };
 
+  // --- RENDER ---
   return (
-    <Box sx={{ maxWidth: 1200, margin: "30px auto" }}>
-      <Typography variant="h4" gutterBottom>Gestion du Stock</Typography>
+    <div className="fullscreen-table-wrap">
+      <div className="fullscreen-table-title">Gestion du Stock</div>
 
       {/* Formulaire ajout/modif */}
-      <Paper sx={{ p: 2, mb: 3 }}>
-        <form onSubmit={handleSave} style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-          <TextField label="Médicament" value={nom} onChange={(e) => setNom(e.target.value)} required />
-          <TextField label="Quantité" type="number" value={quantite} onChange={(e) => setQuantite(e.target.value)} required />
-          <TextField label="Prix Achat" type="number" value={prixAchat} onChange={(e) => setPrixAchat(e.target.value)} required />
-          <TextField label="Prix Vente" type="number" value={prixVente} onChange={(e) => setPrixVente(e.target.value)} required />
-          <TextField label="Date Exp." type="date" InputLabelProps={{ shrink: true }} value={datePeremption} onChange={(e) => setDatePeremption(e.target.value)} />
-          <Button type="submit" variant="contained">{editId ? "Modifier" : "Ajouter"}</Button>
-          {editId && <Button onClick={() => setEditId(null)}>Annuler</Button>}
-        </form>
-      </Paper>
+      <form onSubmit={handleSave} className="paper-card" style={{display:'flex',flexWrap:'wrap',gap:14,justifyContent:'flex-start'}}>
+        <div><label>Médicament</label>
+          <input className="w-full" value={nom} onChange={(e) => setNom(e.target.value)} required />
+        </div>
+        <div><label>Quantité</label>
+          <input className="w-full" type="number" value={quantite} onChange={(e) => setQuantite(e.target.value)} required />
+        </div>
+        <div><label>Prix Achat</label>
+          <input className="w-full" type="number" value={prixAchat} onChange={(e) => setPrixAchat(e.target.value)} required />
+        </div>
+        <div><label>Prix Vente</label>
+          <input className="w-full" type="number" value={prixVente} onChange={(e) => setPrixVente(e.target.value)} required />
+        </div>
+        <div><label>Date Exp.</label>
+          <input className="w-full" type="date" value={datePeremption} onChange={(e) => setDatePeremption(e.target.value)} />
+        </div>
+        <button className="btn" type="submit">{editId ? "Modifier" : "Ajouter"}</button>
+        {editId && <button className="btn info" type="button" onClick={() => setEditId(null)}>Annuler</button>}
+      </form>
 
-      {/* Filtres Stock */}
-      <Typography variant="h6">Filtres du stock</Typography>
-      <Paper sx={{ p: 2, mb: 2, display: "flex", gap: 2, flexWrap: "wrap" }}>
-        <TextField label="Nom" value={filterStockNom} onChange={(e) => setFilterStockNom(e.target.value)} />
-        <TextField label="Date Exp. max" type="date" InputLabelProps={{ shrink: true }} value={filterStockDateExp} onChange={(e) => setFilterStockDateExp(e.target.value)} />
-        <TextField label="Qté min" type="number" value={filterStockQuantiteMin} onChange={(e) => setFilterStockQuantiteMin(e.target.value)} />
-        <TextField label="Qté max" type="number" value={filterStockQuantiteMax} onChange={(e) => setFilterStockQuantiteMax(e.target.value)} />
-      </Paper>
-      <Button variant="outlined" onClick={handlePrintStock}>🖨 Imprimer le Stock filtré</Button>
+      {/* Toggle filtres Stock */}
+      <div style={{display:"flex",alignItems:"center",gap:11,marginTop:16,marginBottom:0}}>
+        <button
+          className="btn"
+          type="button"
+          style={{
+            fontSize:"1.32em",
+            padding:"2px 13px",
+            minWidth:35,
+            background:showFiltresStock
+              ? "linear-gradient(90deg,#ee4e61 60%,#fddada 100%)"
+              : "linear-gradient(90deg,#3272e0 50%,#61c7ef 100%)"
+          }}
+          onClick={()=>setShowFiltresStock(v=>!v)}
+          aria-label="Afficher/Masquer les filtres Stock"
+          title="Afficher/Masquer les filtres Stock"
+        >
+          {showFiltresStock ? "➖" : "➕"}
+        </button>
+        <span style={{fontWeight:700,fontSize:17,letterSpacing:0.02}}>Filtres Stock</span>
+      </div>
+      {showFiltresStock && (
+        <div className="paper-card" style={{display:'flex',flexWrap:'wrap',gap:11,alignItems:'center',marginBottom:8,marginTop:7}}>
+          <div><label>Nom</label>
+            <input value={filterStockNom} onChange={(e) => setFilterStockNom(e.target.value)} />
+          </div>
+          <div><label>Date Exp. max</label>
+            <input type="date" value={filterStockDateExp} onChange={(e) => setFilterStockDateExp(e.target.value)} />
+          </div>
+          <div><label>Qté min</label>
+            <input type="number" value={filterStockQuantiteMin} onChange={(e) => setFilterStockQuantiteMin(e.target.value)} />
+          </div>
+          <div><label>Qté max</label>
+            <input type="number" value={filterStockQuantiteMax} onChange={(e) => setFilterStockQuantiteMax(e.target.value)} />
+          </div>
+          <button className="btn info" type="button" onClick={handlePrintStock}>🖨 Imprimer le Stock filtré</button>
+        </div>
+      )}
 
       {/* Tableau Stock */}
-      <TableContainer component={Paper} sx={{ mt: 2, mb: 4 }}>
-        <Table>
-          <TableHead>
-            <TableRow>
-              <TableCell>Médicament</TableCell>
-              <TableCell>Quantité</TableCell>
-              <TableCell>Prix Achat</TableCell>
-              <TableCell>Prix Vente</TableCell>
-              <TableCell>Date Exp.</TableCell>
-              <TableCell>Actions</TableCell>
-            </TableRow>
-          </TableHead>
-          <TableBody>
+      <div className="table-pro-full" style={{marginTop:2, marginBottom:24}}>
+        <table>
+          <thead>
+            <tr>
+              <th>Médicament</th>
+              <th>Quantité</th>
+              <th>Prix Achat</th>
+              <th>Prix Vente</th>
+              <th>Date Exp.</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
             {filteredStock.map((p) => (
-              <TableRow key={p.id}>
-                <TableCell>{p.nom}</TableCell>
-                <TableCell>{p.quantite}</TableCell>
-                <TableCell>{p.prixAchat} DH</TableCell>
-                <TableCell>{p.prixVente} DH</TableCell>
-                <TableCell>{p.datePeremption || "N/A"}</TableCell>
-                <TableCell>
-                  <Button onClick={() => handleEdit(p)}>Modifier</Button>
-                  <Button color="error" onClick={() => handleDelete(p)}>Supprimer</Button>
-                  <Button color="warning" onClick={() => handleOpenRetour(p)}>Retour</Button>
-                </TableCell>
-              </TableRow>
+              <tr key={p.id}>
+                <td>{p.nom}</td>
+                <td>{p.quantite}</td>
+                <td>{p.prixAchat} DH</td>
+                <td>{p.prixVente} DH</td>
+                <td>{p.datePeremption || "N/A"}</td>
+                <td>
+                  <button className="btn info" type="button" onClick={() => handleEdit(p)}>Modifier</button>
+                  <button className="btn danger" type="button" onClick={() => handleDelete(p)}>Supprimer</button>
+                  <button className="btn print" type="button" onClick={() => handleOpenRetour(p)}>Retour</button>
+                </td>
+              </tr>
             ))}
-          </TableBody>
-        </Table>
-      </TableContainer>
+          </tbody>
+        </table>
+      </div>
 
-      {/* Filtres Retours */}
-      <Typography variant="h5" gutterBottom>Historique des retours</Typography>
-      <Paper sx={{ p: 2, mb: 2, display: "flex", gap: 2, flexWrap: "wrap" }}>
-        <TextField label="Produit" value={filterProduit} onChange={(e) => setFilterProduit(e.target.value)} />
-        <TextField select label="Motif" value={filterMotif} onChange={(e) => setFilterMotif(e.target.value)} sx={{ minWidth: 150 }}>
-          <MenuItem value="">Tous</MenuItem>
-          {motifs.map((m) => <MenuItem key={m} value={m}>{m}</MenuItem>)}
-        </TextField>
-        <TextField label="Date min" type="date" InputLabelProps={{ shrink: true }} value={filterDateMin} onChange={(e) => setFilterDateMin(e.target.value)} />
-        <TextField label="Date max" type="date" InputLabelProps={{ shrink: true }} value={filterDateMax} onChange={(e) => setFilterDateMax(e.target.value)} />
-      </Paper>
-      <Button variant="outlined" color="secondary" onClick={handlePrintRetours}>🖨 Imprimer Retours filtrés</Button>
+      {/* Toggle filtres Retours */}
+      <div className="fullscreen-table-title" style={{marginTop:24, fontSize:'1.35rem', display:'flex',alignItems:"center",gap:9}}>
+        <button
+          className="btn"
+          type="button"
+          style={{
+            fontSize:"1.32em",
+            padding:"2px 13px",
+            minWidth:35,
+            background:showFiltresRetours
+              ? "linear-gradient(90deg,#ee4e61 60%,#fddada 100%)"
+              : "linear-gradient(90deg,#3272e0 50%,#61c7ef 100%)"
+          }}
+          onClick={()=>setShowFiltresRetours(v=>!v)}
+          aria-label="Afficher/Masquer les filtres Retours"
+          title="Afficher/Masquer les filtres Retours"
+        >
+          {showFiltresRetours ? "➖" : "➕"}
+        </button>
+        Historique des retours
+      </div>
+      {showFiltresRetours && (
+        <div className="paper-card" style={{display:'flex',flexWrap:'wrap',gap:12,alignItems:'center',marginBottom:8,marginTop:7}}>
+          <div><label>Produit</label>
+            <input value={filterProduit} onChange={(e) => setFilterProduit(e.target.value)} />
+          </div>
+          <div><label>Motif</label>
+            <select value={filterMotif} onChange={(e) => setFilterMotif(e.target.value)}>
+              <option value="">Tous</option>
+              {motifs.map((m) => <option key={m} value={m}>{m}</option>)}
+            </select>
+          </div>
+          <div><label>Date min</label>
+            <input type="date" value={filterDateMin} onChange={(e) => setFilterDateMin(e.target.value)} />
+          </div>
+          <div><label>Date max</label>
+            <input type="date" value={filterDateMax} onChange={(e) => setFilterDateMax(e.target.value)} />
+          </div>
+          <button className="btn print" type="button" onClick={handlePrintRetours}>🖨 Imprimer Retours filtrés</button>
+        </div>
+      )}
 
       {/* Tableau Retours */}
-      <TableContainer component={Paper} sx={{ mt: 2 }}>
-        <Table>
-          <TableHead>
-            <TableRow>
-              <TableCell>Produit</TableCell>
-              <TableCell>Quantité</TableCell>
-              <TableCell>Motif</TableCell>
-              <TableCell>Date</TableCell>
-              <TableCell>Action</TableCell>
-            </TableRow>
-          </TableHead>
-          <TableBody>
+      <div className="table-pro-full" style={{marginTop:2}}>
+        <table>
+          <thead>
+            <tr>
+              <th>Produit</th>
+              <th>Quantité</th>
+              <th>Motif</th>
+              <th>Date</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody>
             {filteredRetours.map((r) => (
-              <TableRow key={r.id}>
-                <TableCell>{r.produit || "Non spécifié"}</TableCell>
-                <TableCell>{r.quantite}</TableCell>
-                <TableCell>{r.motif}</TableCell>
-                <TableCell>{new Date(r.date.seconds * 1000).toLocaleDateString()}</TableCell>
-                <TableCell>
-                  <Button color="success" onClick={() => handleCancelRetour(r)}>Annuler Retour</Button>
-                </TableCell>
-              </TableRow>
+              <tr key={r.id}>
+                <td>{r.produit || "Non spécifié"}</td>
+                <td>{r.quantite}</td>
+                <td>{r.motif}</td>
+                <td>{new Date(r.date.seconds * 1000).toLocaleDateString()}</td>
+                <td>
+                  <button className="btn success" type="button" onClick={() => handleCancelRetour(r)}>Annuler Retour</button>
+                </td>
+              </tr>
             ))}
-          </TableBody>
-        </Table>
-      </TableContainer>
+          </tbody>
+        </table>
+      </div>
 
       {/* Dialog retour */}
-      <Dialog open={openRetour} onClose={() => setOpenRetour(false)}>
-        <DialogTitle>Retour - {selectedProduit?.nom}</DialogTitle>
-        <DialogContent>
-          <TextField label="Quantité" type="number" fullWidth value={quantiteRetour} onChange={(e) => setQuantiteRetour(e.target.value)} sx={{ mt: 2 }} />
-          <TextField select label="Motif" fullWidth value={motifRetour} onChange={(e) => setMotifRetour(e.target.value)} sx={{ mt: 2 }}>
-            {motifs.map((m) => <MenuItem key={m} value={m}>{m}</MenuItem>)}
-          </TextField>
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setOpenRetour(false)}>Annuler</Button>
-          <Button variant="contained" color="warning" onClick={handleRetour}>Valider</Button>
-        </DialogActions>
-      </Dialog>
-    </Box>
+      {openRetour && (
+        <div className="modal-overlay">
+          <div className="paper-card" style={{ maxWidth: 380, margin: "0 auto", background: "#213054" }}>
+            <h3 style={{color:"#fff"}}>Retour - {selectedProduit?.nom}</h3>
+            <form onSubmit={e => {e.preventDefault(); handleRetour();}} style={{display:'flex', flexDirection:'column', gap:10}}>
+              <label>Quantité à retourner</label>
+              <input type="number" value={quantiteRetour} onChange={e => setQuantiteRetour(e.target.value)} min={1} max={selectedProduit?.quantite || 1} required />
+              <label>Motif</label>
+              <select value={motifRetour} onChange={e => setMotifRetour(e.target.value)} required>
+                <option value="">Choisir un motif</option>
+                {motifs.map((m) => <option key={m} value={m}>{m}</option>)}
+              </select>
+              <div style={{marginTop:10, display:'flex', gap:7}}>
+                <button className="btn info" type="button" onClick={() => setOpenRetour(false)}>Annuler</button>
+                <button className="btn print" type="submit">Valider</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }

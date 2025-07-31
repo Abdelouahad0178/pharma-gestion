@@ -13,11 +13,13 @@ import {
 } from "firebase/firestore";
 
 export default function Achats() {
+  // Formulaire
   const [fournisseur, setFournisseur] = useState("");
   const [dateAchat, setDateAchat] = useState("");
   const [statutPaiement, setStatutPaiement] = useState("payé");
   const [remiseGlobale, setRemiseGlobale] = useState(0);
 
+  // Article courant
   const [produit, setProduit] = useState("");
   const [produitNouveau, setProduitNouveau] = useState("");
   const [quantite, setQuantite] = useState(1);
@@ -32,6 +34,13 @@ export default function Achats() {
 
   const [editId, setEditId] = useState(null);
   const [isEditing, setIsEditing] = useState(false);
+
+  // Filtres historiques
+  const [filterFournisseur, setFilterFournisseur] = useState("");
+  const [filterMedicament, setFilterMedicament] = useState("");
+  const [filterDateMin, setFilterDateMin] = useState("");
+  const [filterDateMax, setFilterDateMax] = useState("");
+  const [showFiltres, setShowFiltres] = useState(false);
 
   // Prix auto-rempli
   const handleProduitChange = (value) => {
@@ -48,6 +57,7 @@ export default function Achats() {
     }
   };
 
+  // Ajouter un article à la liste temporaire
   const handleAddArticle = (e) => {
     e.preventDefault();
     const nomProduitFinal = produit === "_new_" ? produitNouveau : produit;
@@ -70,15 +80,19 @@ export default function Achats() {
 
   const handleRemoveArticle = (idx) => setArticles(articles.filter((_, i) => i !== idx));
 
-  // Ajout/Modification du bon
+  // Enregistrer ou modifier un bon
   const handleAddBon = async (e) => {
     e.preventDefault();
     if (!fournisseur || !dateAchat || articles.length === 0) return;
     const articlesValid = articles.filter(a => a.produit && a.quantite > 0 && a.prixUnitaire > 0);
     if (articlesValid.length === 0) return;
+
     if (isEditing && editId) {
+      // Update stock d'abord (remettre l'ancien état)
       const oldBon = achats.find((b) => b.id === editId);
-      await updateStockOnDelete(oldBon);
+      if (oldBon) {
+        await updateStockOnDelete(oldBon);
+      }
       await updateDoc(doc(db, "achats", editId), {
         fournisseur,
         date: Timestamp.fromDate(new Date(dateAchat)),
@@ -171,6 +185,7 @@ export default function Achats() {
     }
   };
 
+  // Gestion du stock
   const updateStockOnAdd = async (bon) => {
     const stockRef = collection(db, "stock");
     for (const art of bon.articles || []) {
@@ -213,7 +228,7 @@ export default function Achats() {
     }
   };
 
-  // fetchAchats optimisé en callback
+  // Fetch Achats et Médicaments
   const fetchAchats = useCallback(async () => {
     const snap = await getDocs(collection(db, "achats"));
     let arr = [];
@@ -242,6 +257,36 @@ export default function Achats() {
 
   const totalBonCourant = (articles || []).reduce((t, a) => t + ((a.prixUnitaire || 0) * (a.quantite || 0) - (a.remise || 0)), 0);
 
+  // Filtres uniques
+  const fournisseursUniques = Array.from(new Set(achats.map(a => a.fournisseur).filter(Boolean)));
+  const medicamentsUniques = Array.from(
+    new Set(
+      achats
+        .flatMap(a => Array.isArray(a.articles) ? a.articles.map(art => art.produit) : [])
+        .filter(Boolean)
+    )
+  );
+
+  // Application des filtres dynamiquement
+  const achatsFiltres = achats.filter((b) => {
+    let keep = true;
+    if (filterFournisseur && b.fournisseur !== filterFournisseur) keep = false;
+    if (filterMedicament) {
+      const hasMedicament = (Array.isArray(b.articles) ? b.articles : []).some(a => a.produit === filterMedicament);
+      if (!hasMedicament) keep = false;
+    }
+    if (filterDateMin) {
+      const bd = b.date?.toDate?.() || null;
+      if (!bd || bd < new Date(filterDateMin)) keep = false;
+    }
+    if (filterDateMax) {
+      const bd = b.date?.toDate?.() || null;
+      if (!bd || bd > new Date(filterDateMax + "T23:59:59")) keep = false;
+    }
+    return keep;
+  });
+
+  // ---- RENDER ----
   return (
     <div className="fullscreen-table-wrap">
       <div className="fullscreen-table-title">Gestion des Achats</div>
@@ -250,6 +295,7 @@ export default function Achats() {
         <div style={{minWidth:180}}>
           <label>Médicament</label>
           <select className="w-full" value={produit} onChange={(e) => handleProduitChange(e.target.value)} required>
+            <option value="">Choisir...</option>
             {medicaments.map(m => <option key={m.nom} value={m.nom}>{m.nom}</option>)}
             <option value="_new_">+ Nouveau médicament</option>
           </select>
@@ -328,7 +374,62 @@ export default function Achats() {
         {isEditing && <button type="button" className="btn info" onClick={resetForm}>Annuler</button>}
       </form>
 
-      <div className="fullscreen-table-title" style={{marginTop:30, fontSize:'1.45rem'}}>Historique des Achats</div>
+      {/* Toggle filtres historiques */}
+      <div style={{display:"flex",alignItems:"center",gap:11,marginTop:15,marginBottom:0}}>
+        <button
+          className="btn"
+          type="button"
+          style={{
+            fontSize:"1.32em",
+            padding:"2px 13px",
+            minWidth:35,
+            background:showFiltres
+              ? "linear-gradient(90deg,#ee4e61 60%,#fddada 100%)"
+              : "linear-gradient(90deg,#3272e0 50%,#61c7ef 100%)"
+          }}
+          onClick={()=>setShowFiltres(v=>!v)}
+          aria-label="Afficher/Masquer les filtres"
+          title="Afficher/Masquer les filtres"
+        >
+          {showFiltres ? "➖" : "➕"}
+        </button>
+        <span style={{fontWeight:700,fontSize:17,letterSpacing:0.02}}>Filtres historiques</span>
+      </div>
+
+      {/* Filtres historiques */}
+      {showFiltres && (
+        <div className="paper-card" style={{display:"flex",gap:20,alignItems:'center',marginTop:7,marginBottom:7,flexWrap:"wrap"}}>
+          <div>
+            <label>Fournisseur&nbsp;</label>
+            <select value={filterFournisseur} onChange={e => setFilterFournisseur(e.target.value)} style={{minWidth:110}}>
+              <option value="">Tous</option>
+              {fournisseursUniques.map(f => <option key={f} value={f}>{f}</option>)}
+            </select>
+          </div>
+          <div>
+            <label>Médicament&nbsp;</label>
+            <select value={filterMedicament} onChange={e => setFilterMedicament(e.target.value)} style={{minWidth:110}}>
+              <option value="">Tous</option>
+              {medicamentsUniques.map(m => <option key={m} value={m}>{m}</option>)}
+            </select>
+          </div>
+          <div>
+            <label>Du&nbsp;</label>
+            <input type="date" value={filterDateMin} onChange={e => setFilterDateMin(e.target.value)} />
+          </div>
+          <div>
+            <label>Au&nbsp;</label>
+            <input type="date" value={filterDateMax} onChange={e => setFilterDateMax(e.target.value)} />
+          </div>
+          {(filterFournisseur || filterMedicament || filterDateMin || filterDateMax) && (
+            <button className="btn danger" type="button" onClick={() => {
+              setFilterFournisseur(""); setFilterMedicament(""); setFilterDateMin(""); setFilterDateMax("");
+            }}>Effacer filtres</button>
+          )}
+        </div>
+      )}
+
+      <div className="fullscreen-table-title" style={{marginTop:15, fontSize:'1.45rem'}}>Historique des Achats</div>
       <div className="table-pro-full" style={{flex: '1 1 0%', minHeight:'46vh'}}>
         <table>
           <thead>
@@ -341,7 +442,7 @@ export default function Achats() {
             </tr>
           </thead>
           <tbody>
-            {achats.map((b) => (
+            {achatsFiltres.map((b) => (
               <tr key={b.id}>
                 <td>{b.fournisseur}</td>
                 <td>{b.date?.toDate().toLocaleDateString()}</td>
