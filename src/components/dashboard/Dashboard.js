@@ -1,8 +1,11 @@
 import React, { useState, useEffect } from "react";
 import { db } from "../../firebase/config";
 import { collection, getDocs } from "firebase/firestore";
+import { useUserRole } from "../../contexts/UserRoleContext";
 
 export default function Dashboard() {
+  const { societeId, user, loading } = useUserRole();
+
   const [totalVentes, setTotalVentes] = useState(0);
   const [totalAchats, setTotalAchats] = useState(0);
   const [produitsStock, setProduitsStock] = useState(0);
@@ -11,12 +14,20 @@ export default function Dashboard() {
   const [dateMin, setDateMin] = useState("");
   const [dateMax, setDateMax] = useState("");
   const [showFilters, setShowFilters] = useState(false);
+  const [waiting, setWaiting] = useState(true);
 
-  // ➡ Charger données Firestore
+  // Synchronisation du chargement
+  useEffect(() => {
+    setWaiting(loading || !societeId || !user);
+  }, [loading, societeId, user]);
+
+  // ➡ Charger données Firestore PAR SOCIÉTÉ
   const fetchData = async () => {
-    const ventesSnap = await getDocs(collection(db, "ventes"));
-    const achatsSnap = await getDocs(collection(db, "achats"));
-    const stockSnap = await getDocs(collection(db, "stock"));
+    if (!societeId) return;
+
+    const ventesSnap = await getDocs(collection(db, "societe", societeId, "ventes"));
+    const achatsSnap = await getDocs(collection(db, "societe", societeId, "achats"));
+    const stockSnap = await getDocs(collection(db, "societe", societeId, "stock"));
 
     let ventesArr = [];
     ventesSnap.forEach((doc) => ventesArr.push(doc.data()));
@@ -97,9 +108,11 @@ export default function Dashboard() {
   };
 
   useEffect(() => {
-    fetchData();
+    if (societeId) {
+      fetchData();
+    }
     // eslint-disable-next-line
-  }, [periode, dateMin, dateMax]);
+  }, [societeId, periode, dateMin, dateMax]);
 
   // --- STYLES DIRECTS ---
   const dashboardStyle = {
@@ -157,6 +170,22 @@ export default function Dashboard() {
     padding: showFilters ? "17px 23px" : 0,
     transition: "all 0.24s cubic-bezier(.6,.15,.43,1.1)"
   };
+
+  // Gestion du chargement
+  if (waiting) {
+    return (
+      <div style={{ padding: 30, textAlign: "center", color: "#1c355e" }}>
+        Chargement...
+      </div>
+    );
+  }
+  if (!user) {
+    return (
+      <div style={{ padding: 30, textAlign: "center", color: "#a32" }}>
+        Non connecté.
+      </div>
+    );
+  }
 
   return (
     <div style={dashboardStyle}>

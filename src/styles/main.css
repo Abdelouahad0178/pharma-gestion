@@ -113,7 +113,7 @@ h1, h2, h3, h4, h5, h6, .fullscreen-table-title {
 .table-pro-full td,
 .table-pro td {
   
-    padding: -3px 7px;
+    padding: 10px 7px;
     font-size: 1.01rem;
     border-bottom: 1px solid #dadee8;
     text-align: center;

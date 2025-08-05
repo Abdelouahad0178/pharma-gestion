@@ -9,9 +9,14 @@ import {
   doc,
   query,
   where,
+  Timestamp
 } from "firebase/firestore";
+import { useUserRole } from "../../contexts/UserRoleContext";
 
 export default function Stock() {
+  const { societeId, user, loading } = useUserRole();
+  const [waiting, setWaiting] = useState(true);
+
   const [stock, setStock] = useState([]);
   const [filteredStock, setFilteredStock] = useState([]);
   const [retours, setRetours] = useState([]);
@@ -44,9 +49,18 @@ export default function Stock() {
   const [filterDateMax, setFilterDateMax] = useState("");
   const [showFiltresRetours, setShowFiltresRetours] = useState(false);
 
-  // Charger Stock et Retours
+  // FORMULAIRE toggle
+  const [showForm, setShowForm] = useState(false);
+
+  // Synchronisation du chargement
+  useEffect(() => {
+    setWaiting(loading || !societeId || !user);
+  }, [loading, societeId, user]);
+
+  // Charger Stock et Retours PAR SOCIÉTÉ
   const fetchStock = async () => {
-    const snap = await getDocs(collection(db, "stock"));
+    if (!societeId) return setStock([]);
+    const snap = await getDocs(collection(db, "societe", societeId, "stock"));
     let arr = [];
     snap.forEach((doc) => arr.push({ id: doc.id, ...doc.data() }));
     arr.sort((a, b) => a.nom.localeCompare(b.nom));
@@ -55,26 +69,36 @@ export default function Stock() {
   };
 
   const fetchRetours = async () => {
-    const snap = await getDocs(collection(db, "retours"));
+    if (!societeId) return setRetours([]);
+    const snap = await getDocs(collection(db, "societe", societeId, "retours"));
     let arr = [];
     snap.forEach((doc) => arr.push({ id: doc.id, ...doc.data() }));
-    arr.sort((a, b) => new Date(b.date.seconds * 1000) - new Date(a.date.seconds * 1000));
+    arr.sort((a, b) =>
+      (b.date?.seconds || 0) - (a.date?.seconds || 0)
+    );
     setRetours(arr);
     setFilteredRetours(arr);
   };
 
   useEffect(() => {
-    fetchStock();
-    fetchRetours();
-  }, []);
+    if (societeId) {
+      fetchStock();
+      fetchRetours();
+    }
+    // eslint-disable-next-line
+  }, [societeId]);
 
   // Filtrage Stock
   useEffect(() => {
     let filtered = stock;
-    if (filterStockNom) filtered = filtered.filter((s) => s.nom.toLowerCase().includes(filterStockNom.toLowerCase()));
-    if (filterStockDateExp) filtered = filtered.filter((s) => s.datePeremption && new Date(s.datePeremption) <= new Date(filterStockDateExp));
-    if (filterStockQuantiteMin) filtered = filtered.filter((s) => s.quantite >= Number(filterStockQuantiteMin));
-    if (filterStockQuantiteMax) filtered = filtered.filter((s) => s.quantite <= Number(filterStockQuantiteMax));
+    if (filterStockNom)
+      filtered = filtered.filter((s) => s.nom.toLowerCase().includes(filterStockNom.toLowerCase()));
+    if (filterStockDateExp)
+      filtered = filtered.filter((s) => s.datePeremption && new Date(s.datePeremption) <= new Date(filterStockDateExp));
+    if (filterStockQuantiteMin)
+      filtered = filtered.filter((s) => s.quantite >= Number(filterStockQuantiteMin));
+    if (filterStockQuantiteMax)
+      filtered = filtered.filter((s) => s.quantite <= Number(filterStockQuantiteMax));
     setFilteredStock(filtered);
   }, [filterStockNom, filterStockDateExp, filterStockQuantiteMin, filterStockQuantiteMax, stock]);
 
@@ -83,21 +107,28 @@ export default function Stock() {
     let filtered = retours;
     if (filterProduit) filtered = filtered.filter((r) => r.produit?.toLowerCase().includes(filterProduit.toLowerCase()));
     if (filterMotif) filtered = filtered.filter((r) => r.motif === filterMotif);
-    if (filterDateMin) filtered = filtered.filter((r) => new Date(r.date.seconds * 1000) >= new Date(filterDateMin));
-    if (filterDateMax) filtered = filtered.filter((r) => new Date(r.date.seconds * 1000) <= new Date(filterDateMax));
+    if (filterDateMin) filtered = filtered.filter((r) => r.date?.seconds && (new Date(r.date.seconds * 1000) >= new Date(filterDateMin)));
+    if (filterDateMax) filtered = filtered.filter((r) => r.date?.seconds && (new Date(r.date.seconds * 1000) <= new Date(filterDateMax)));
     setFilteredRetours(filtered);
   }, [filterProduit, filterMotif, filterDateMin, filterDateMax, retours]);
 
   // Ajouter / Modifier Stock
   const handleSave = async (e) => {
     e.preventDefault();
+    if (!societeId) return alert("Aucune société sélectionnée !");
     if (!nom || !quantite || !prixAchat || !prixVente) return;
-    const data = { nom, quantite: Number(quantite), prixAchat: Number(prixAchat), prixVente: Number(prixVente), datePeremption };
+    const data = {
+      nom,
+      quantite: Number(quantite),
+      prixAchat: Number(prixAchat),
+      prixVente: Number(prixVente),
+      datePeremption
+    };
     if (editId) {
-      await updateDoc(doc(db, "stock", editId), data);
+      await updateDoc(doc(db, "societe", societeId, "stock", editId), data);
       setEditId(null);
     } else {
-      await addDoc(collection(db, "stock"), data);
+      await addDoc(collection(db, "societe", societeId, "stock"), data);
     }
     setNom(""); setQuantite(""); setPrixAchat(""); setPrixVente(""); setDatePeremption("");
     fetchStock();
@@ -110,11 +141,13 @@ export default function Stock() {
     setPrixAchat(prod.prixAchat);
     setPrixVente(prod.prixVente);
     setDatePeremption(prod.datePeremption || "");
+    setShowForm(true); // Ouvre le formulaire lors de la modification
   };
 
   const handleDelete = async (prod) => {
+    if (!societeId) return alert("Aucune société sélectionnée !");
     if (window.confirm("Supprimer ce médicament ?")) {
-      await deleteDoc(doc(db, "stock", prod.id));
+      await deleteDoc(doc(db, "societe", societeId, "stock", prod.id));
       fetchStock();
     }
   };
@@ -128,30 +161,37 @@ export default function Stock() {
   };
 
   const handleRetour = async () => {
+    if (!societeId) return alert("Aucune société sélectionnée !");
     if (!quantiteRetour || quantiteRetour <= 0 || quantiteRetour > selectedProduit.quantite) return alert("Quantité invalide !");
     if (!motifRetour) return alert("Sélectionnez un motif !");
     const newQuantite = selectedProduit.quantite - Number(quantiteRetour);
-    await updateDoc(doc(db, "stock", selectedProduit.id), { quantite: newQuantite });
-    await addDoc(collection(db, "retours"), { produit: selectedProduit.nom, quantite: Number(quantiteRetour), motif: motifRetour, date: new Date() });
+    await updateDoc(doc(db, "societe", societeId, "stock", selectedProduit.id), { quantite: newQuantite });
+    await addDoc(collection(db, "societe", societeId, "retours"), {
+      produit: selectedProduit.nom,
+      quantite: Number(quantiteRetour),
+      motif: motifRetour,
+      date: Timestamp.now()
+    });
     setOpenRetour(false);
     fetchStock();
     fetchRetours();
   };
 
   const handleCancelRetour = async (retour) => {
+    if (!societeId) return alert("Aucune société sélectionnée !");
     if (!window.confirm("Annuler ce retour et réinjecter dans le stock si possible ?")) return;
     if (retour?.produit && retour.produit.trim() !== "") {
-      const stockQuery = query(collection(db, "stock"), where("nom", "==", retour.produit));
+      const stockQuery = query(collection(db, "societe", societeId, "stock"), where("nom", "==", retour.produit));
       const stockSnap = await getDocs(stockQuery);
       if (!stockSnap.empty) {
         const stockDoc = stockSnap.docs[0];
         const stockData = stockDoc.data();
-        await updateDoc(doc(db, "stock", stockDoc.id), {
+        await updateDoc(doc(db, "societe", societeId, "stock", stockDoc.id), {
           quantite: Number(stockData.quantite) + Number(retour.quantite),
         });
       }
     }
-    await deleteDoc(doc(db, "retours", retour.id));
+    await deleteDoc(doc(db, "societe", societeId, "retours", retour.id));
     fetchStock();
     fetchRetours();
   };
@@ -177,38 +217,78 @@ export default function Stock() {
       <h2>Historique des Retours</h2>
       <table border="1" cellspacing="0" cellpadding="5">
         <tr><th>Produit</th><th>Quantité</th><th>Motif</th><th>Date</th></tr>
-        ${filteredRetours.map((r) => `<tr><td>${r.produit || "Non spécifié"}</td><td>${r.quantite}</td><td>${r.motif}</td><td>${new Date(r.date.seconds * 1000).toLocaleDateString()}</td></tr>`).join("")}
+        ${filteredRetours.map((r) => `<tr><td>${r.produit || "Non spécifié"}</td><td>${r.quantite}</td><td>${r.motif}</td><td>${r.date?.seconds ? new Date(r.date.seconds * 1000).toLocaleDateString() : ""}</td></tr>`).join("")}
       </table></body></html>
     `);
     printWindow.document.close();
     printWindow.print();
   };
 
+  // Gestion du chargement
+  if (waiting) {
+    return (
+      <div style={{ padding: 30, textAlign: "center", color: "#1c355e" }}>
+        Chargement...
+      </div>
+    );
+  }
+  if (!user) {
+    return (
+      <div style={{ padding: 30, textAlign: "center", color: "#a32" }}>
+        Non connecté.
+      </div>
+    );
+  }
+
   // --- RENDER ---
   return (
     <div className="fullscreen-table-wrap">
       <div className="fullscreen-table-title">Gestion du Stock</div>
 
-      {/* Formulaire ajout/modif */}
-      <form onSubmit={handleSave} className="paper-card" style={{display:'flex',flexWrap:'wrap',gap:14,justifyContent:'flex-start'}}>
-        <div><label>Médicament</label>
-          <input className="w-full" value={nom} onChange={(e) => setNom(e.target.value)} required />
-        </div>
-        <div><label>Quantité</label>
-          <input className="w-full" type="number" value={quantite} onChange={(e) => setQuantite(e.target.value)} required />
-        </div>
-        <div><label>Prix Achat</label>
-          <input className="w-full" type="number" value={prixAchat} onChange={(e) => setPrixAchat(e.target.value)} required />
-        </div>
-        <div><label>Prix Vente</label>
-          <input className="w-full" type="number" value={prixVente} onChange={(e) => setPrixVente(e.target.value)} required />
-        </div>
-        <div><label>Date Exp.</label>
-          <input className="w-full" type="date" value={datePeremption} onChange={(e) => setDatePeremption(e.target.value)} />
-        </div>
-        <button className="btn" type="submit">{editId ? "Modifier" : "Ajouter"}</button>
-        {editId && <button className="btn info" type="button" onClick={() => setEditId(null)}>Annuler</button>}
-      </form>
+      {/* Toggle FORMULAIRE ajout/modif */}
+      <div style={{display:"flex",alignItems:"center",gap:11,marginTop:12,marginBottom:0}}>
+        <button
+          className="btn"
+          type="button"
+          style={{
+            fontSize:"1.32em",
+            padding:"2px 13px",
+            minWidth:35,
+            background:showForm
+              ? "linear-gradient(90deg,#ee4e61 60%,#fddada 100%)"
+              : "linear-gradient(90deg,#3272e0 50%,#61c7ef 100%)"
+          }}
+          onClick={()=>setShowForm(v=>!v)}
+          aria-label="Afficher/Masquer le formulaire"
+          title="Afficher/Masquer le formulaire"
+        >
+          {showForm ? "➖" : "➕"}
+        </button>
+        <span style={{fontWeight:700,fontSize:17,letterSpacing:0.02}}>Formulaire ajout/modification</span>
+      </div>
+
+      {/* FORMULAIRE MASQUÉ par défaut */}
+      {showForm && (
+        <form onSubmit={handleSave} className="paper-card" style={{display:'flex',flexWrap:'wrap',gap:14,justifyContent:'flex-start',marginBottom:10}}>
+          <div><label>Médicament</label>
+            <input className="w-full" value={nom} onChange={(e) => setNom(e.target.value)} required />
+          </div>
+          <div><label>Quantité</label>
+            <input className="w-full" type="number" value={quantite} onChange={(e) => setQuantite(e.target.value)} required />
+          </div>
+          <div><label>Prix Achat</label>
+            <input className="w-full" type="number" value={prixAchat} onChange={(e) => setPrixAchat(e.target.value)} required />
+          </div>
+          <div><label>Prix Vente</label>
+            <input className="w-full" type="number" value={prixVente} onChange={(e) => setPrixVente(e.target.value)} required />
+          </div>
+          <div><label>Date Exp.</label>
+            <input className="w-full" type="date" value={datePeremption} onChange={(e) => setDatePeremption(e.target.value)} />
+          </div>
+          <button className="btn" type="submit">{editId ? "Modifier" : "Ajouter"}</button>
+          {editId && <button className="btn info" type="button" onClick={() => setEditId(null)}>Annuler</button>}
+        </form>
+      )}
 
       {/* Toggle filtres Stock */}
       <div style={{display:"flex",alignItems:"center",gap:11,marginTop:16,marginBottom:0}}>
@@ -341,7 +421,7 @@ export default function Stock() {
                 <td>{r.produit || "Non spécifié"}</td>
                 <td>{r.quantite}</td>
                 <td>{r.motif}</td>
-                <td>{new Date(r.date.seconds * 1000).toLocaleDateString()}</td>
+                <td>{r.date?.seconds ? new Date(r.date.seconds * 1000).toLocaleDateString() : ""}</td>
                 <td>
                   <button className="btn success" type="button" onClick={() => handleCancelRetour(r)}>Annuler Retour</button>
                 </td>
