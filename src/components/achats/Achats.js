@@ -7,6 +7,7 @@ import {
   updateDoc,
   deleteDoc,
   doc,
+  getDoc,  // ← Ajouté pour charger les paramètres
   query,
   where,
   Timestamp,
@@ -29,7 +30,7 @@ export default function Achats() {
   const [statutPaiement, setStatutPaiement] = useState("payé");
   const [remiseGlobale, setRemiseGlobale] = useState(0);
 
-  // États d’article à ajouter
+  // États d'article à ajouter
   const [produit, setProduit] = useState("");
   const [produitNouveau, setProduitNouveau] = useState("");
   const [quantite, setQuantite] = useState(1);
@@ -42,6 +43,7 @@ export default function Achats() {
   const [articles, setArticles] = useState([]);
   const [achats, setAchats] = useState([]);
   const [medicaments, setMedicaments] = useState([]);
+  const [parametres, setParametres] = useState({ entete: "", pied: "" }); // ← Ajouté pour les paramètres
 
   // Edition
   const [editId, setEditId] = useState(null);
@@ -56,6 +58,54 @@ export default function Achats() {
 
   // Toggle formulaire
   const [showForm, setShowForm] = useState(false);
+
+  // ← NOUVELLE FONCTION : Chargement des paramètres de la société
+  const fetchParametres = async () => {
+    if (!societeId) return;
+    try {
+      // Charger les paramètres documents
+      const docRef = doc(db, "societe", societeId, "parametres", "documents");
+      const docSnap = await getDoc(docRef);
+      if (docSnap.exists()) {
+        const data = docSnap.data();
+        setParametres({ 
+          entete: data.entete || "", 
+          pied: data.pied || "" 
+        });
+        return; // Si trouvé, pas besoin de chercher ailleurs
+      }
+      
+      // Si pas de paramètres documents, essayer les paramètres généraux
+      const generalRef = doc(db, "societe", societeId, "parametres", "general");
+      const generalSnap = await getDoc(generalRef);
+      if (generalSnap.exists()) {
+        const data = generalSnap.data();
+        setParametres({ 
+          entete: data.entete || "", 
+          pied: data.pied || "" 
+        });
+        return;
+      }
+      
+      // Si toujours pas de paramètres, essayer de récupérer le nom de la société
+      const societeRef = doc(db, "societes", societeId);
+      const societeSnap = await getDoc(societeRef);
+      if (societeSnap.exists()) {
+        const societeData = societeSnap.data();
+        setParametres({ 
+          entete: societeData.nom || "Pharmacie", 
+          pied: "Merci pour votre confiance" 
+        });
+      }
+    } catch (error) {
+      console.error("Erreur lors du chargement des paramètres:", error);
+      // Paramètres par défaut en cas d'erreur
+      setParametres({ 
+        entete: "Pharmacie", 
+        pied: "Merci pour votre confiance" 
+      });
+    }
+  };
 
   // Chargement des achats (par société)
   const fetchAchats = useCallback(async () => {
@@ -84,7 +134,11 @@ export default function Achats() {
     setMedicaments(arr);
   }, [societeId]);
 
-  useEffect(() => { fetchAchats(); }, [fetchAchats]);
+  // ← MODIFIÉ : Ajout de fetchParametres
+  useEffect(() => { 
+    fetchAchats(); 
+    fetchParametres(); // ← Ajouter cette ligne
+  }, [fetchAchats, societeId]);
   useEffect(() => { fetchMedicaments(); }, [fetchMedicaments]);
 
   // Sélection médicament ou nouveau
@@ -102,7 +156,7 @@ export default function Achats() {
     }
   };
 
-  // Ajout d’un article
+  // Ajout d'un article
   const handleAddArticle = (e) => {
     e.preventDefault();
     const nomProduitFinal = produit === "_new_" ? produitNouveau : produit;
@@ -123,42 +177,139 @@ export default function Achats() {
     setPrixVente(""); setRemiseArticle(0); setDatePeremption("");
   };
 
-  // Retrait d’article temporaire
+  // Retrait d'article temporaire
   const handleRemoveArticle = (idx) => setArticles(articles.filter((_, i) => i !== idx));
 
-  // Ajout ou modification d’un bon d’achat
+  // 🔥 FONCTION CORRIGÉE : Ajout ou modification d'un bon d'achat AVEC ENREGISTREMENT D'ACTIVITÉ
   const handleAddBon = async (e) => {
     e.preventDefault();
     if (!societeId) return alert("Aucune société sélectionnée !");
+    if (!user) return alert("Utilisateur non connecté !");
     if (!fournisseur || !dateAchat || articles.length === 0) return;
+    
     const articlesValid = articles.filter(a => a.produit && a.quantite > 0 && a.prixUnitaire > 0);
     if (articlesValid.length === 0) return;
 
-    if (isEditing && editId) {
-      const oldBon = achats.find(b => b.id === editId);
-      if (oldBon) await updateStockOnDelete(oldBon);
-      await updateDoc(doc(db, "societe", societeId, "achats", editId), {
-        fournisseur,
-        date: Timestamp.fromDate(new Date(dateAchat)),
-        statutPaiement,
-        remiseGlobale: Number(remiseGlobale) || 0,
-        articles: articlesValid,
-      });
-      await updateStockOnAdd({ fournisseur, articles: articlesValid });
-      setIsEditing(false); setEditId(null);
-    } else {
-      await addDoc(collection(db, "societe", societeId, "achats"), {
-        fournisseur,
-        date: Timestamp.fromDate(new Date(dateAchat)),
-        statutPaiement,
-        remiseGlobale: Number(remiseGlobale) || 0,
-        articles: articlesValid,
-      });
-      await updateStockOnAdd({ fournisseur, articles: articlesValid });
+    // Calculer le montant total
+    const montantTotal = articlesValid.reduce(
+      (sum, a) => sum + ((a.prixUnitaire || 0) * (a.quantite || 0) - (a.remise || 0)),
+      0
+    ) - (Number(remiseGlobale) || 0);
+
+    try {
+      if (isEditing && editId) {
+        // 🔧 MODIFICATION D'UN ACHAT EXISTANT
+        const oldBon = achats.find(b => b.id === editId);
+        if (oldBon) await updateStockOnDelete(oldBon);
+        
+        // Mettre à jour l'achat
+        await updateDoc(doc(db, "societe", societeId, "achats", editId), {
+          fournisseur,
+          date: Timestamp.fromDate(new Date(dateAchat)),
+          timestamp: Timestamp.now(), // Heure actuelle de modification
+          statutPaiement,
+          remiseGlobale: Number(remiseGlobale) || 0,
+          articles: articlesValid,
+          // Champs de traçabilité
+          modifiePar: user.uid,
+          modifieParEmail: user.email,
+          modifieLe: Timestamp.now()
+        });
+        
+        // 🔥 ENREGISTRER L'ACTIVITÉ DE MODIFICATION
+        await addDoc(collection(db, "societe", societeId, "activities"), {
+          type: "achat",
+          userId: user.uid,
+          userEmail: user.email,
+          timestamp: Timestamp.now(), // ← IMPORTANT: Heure actuelle
+          details: {
+            fournisseur,
+            montant: montantTotal,
+            articles: articlesValid.length,
+            action: 'modification',
+            achatId: editId,
+            statutPaiement
+          }
+        });
+        
+        await updateStockOnAdd({ fournisseur, articles: articlesValid });
+        setIsEditing(false); 
+        setEditId(null);
+        
+      } else {
+        // 🔧 CRÉATION D'UN NOUVEL ACHAT
+        const achatRef = await addDoc(collection(db, "societe", societeId, "achats"), {
+          fournisseur,
+          date: Timestamp.fromDate(new Date(dateAchat)),
+          timestamp: Timestamp.now(), // Heure actuelle de création
+          statutPaiement,
+          remiseGlobale: Number(remiseGlobale) || 0,
+          articles: articlesValid,
+          // Champs de traçabilité
+          creePar: user.uid,
+          creeParEmail: user.email,
+          creeLe: Timestamp.now(),
+          societeId: societeId
+        });
+        
+        // 🔥 ENREGISTRER L'ACTIVITÉ DE CRÉATION
+        await addDoc(collection(db, "societe", societeId, "activities"), {
+          type: "achat",
+          userId: user.uid,
+          userEmail: user.email,
+          timestamp: Timestamp.now(), // ← IMPORTANT: Heure actuelle
+          details: {
+            fournisseur,
+            montant: montantTotal,
+            articles: articlesValid.length,
+            action: 'création',
+            achatId: achatRef.id,
+            statutPaiement
+          }
+        });
+        
+        await updateStockOnAdd({ fournisseur, articles: articlesValid });
+        
+        // Si paiement automatique (payé)
+        if (statutPaiement === "payé") {
+          // Enregistrer le paiement
+          await addDoc(collection(db, "societe", societeId, "paiements"), {
+            docId: achatRef.id,
+            montant: montantTotal,
+            mode: "Espèces",
+            type: "achats",
+            date: Timestamp.now(),
+            createdBy: user.email
+          });
+          
+          // 🔥 ENREGISTRER L'ACTIVITÉ DE PAIEMENT
+          await addDoc(collection(db, "societe", societeId, "activities"), {
+            type: "paiement",
+            userId: user.uid,
+            userEmail: user.email,
+            timestamp: Timestamp.now(),
+            details: {
+              mode: "Espèces",
+              type: "achats",
+              montant: montantTotal,
+              fournisseur,
+              paiementAuto: true
+            }
+          });
+        }
+      }
+      
+      resetForm();
+      fetchAchats();
+      fetchMedicaments();
+      
+      // Message de succès
+      console.log("✅ Achat et activité enregistrés avec succès");
+      
+    } catch (error) {
+      console.error("❌ Erreur lors de l'enregistrement:", error);
+      alert("Erreur lors de l'enregistrement de l'achat");
     }
-    resetForm();
-    fetchAchats();
-    fetchMedicaments();
   };
 
   // Réinit form
@@ -167,7 +318,7 @@ export default function Achats() {
     setArticles([]); setEditId(null); setIsEditing(false);
   };
 
-  // Impression d’un bon
+  // ← MODIFIÉ : Impression d'un bon avec nom de société
   const handlePrintBon = (bon) => {
     const articles = Array.isArray(bon.articles) ? bon.articles : [];
     const totalArticles = articles.reduce(
@@ -175,6 +326,15 @@ export default function Achats() {
       0
     );
     const totalApresRemiseGlobale = totalArticles - (bon.remiseGlobale || 0);
+    
+    // Formater la date correctement
+    let dateStr = "";
+    if (bon.timestamp?.toDate) {
+      dateStr = bon.timestamp.toDate().toLocaleString();
+    } else if (bon.date?.toDate) {
+      dateStr = bon.date.toDate().toLocaleDateString();
+    }
+    
     const printWindow = window.open("", "_blank");
     printWindow.document.write(`
       <html>
@@ -184,12 +344,16 @@ export default function Achats() {
             body { font-family: 'Inter', Arial, sans-serif; margin: 20px; }
             table { width: 100%; border-collapse: collapse; margin-top: 20px; }
             th, td { border: 1px solid #000; padding: 8px; text-align: center; }
+            h2 { text-align: center; }
+            .header, .footer { text-align: center; margin-bottom: 20px; font-size: 14px; }
+            .totals { text-align: right; font-size: 16px; margin-top: 20px; }
           </style>
         </head>
         <body>
-          <h2>Bon de Commande</h2>
+          <div class="header">${parametres.entete || "Pharmacie"}</div>
+          <h2>BON DE COMMANDE</h2>
           <p><strong>Fournisseur:</strong> ${bon.fournisseur || ""}</p>
-          <p><strong>Date:</strong> ${bon.date?.toDate().toLocaleDateString() || ""}</p>
+          <p><strong>Date:</strong> ${dateStr}</p>
           <p><strong>Statut:</strong> ${bon.statutPaiement || ""}</p>
           <table>
             <thead>
@@ -220,8 +384,12 @@ export default function Achats() {
                 .join("")}
             </tbody>
           </table>
-          ${bon.remiseGlobale ? `<h3>Remise Globale : ${bon.remiseGlobale} DH</h3>` : ""}
-          <h3>Total : ${totalApresRemiseGlobale} DH</h3>
+          ${bon.remiseGlobale ? `<div class="totals"><p><strong>Remise Globale : ${bon.remiseGlobale} DH</strong></p></div>` : ""}
+          <div class="totals">
+            <p><strong>Total : ${totalApresRemiseGlobale} DH</strong></p>
+          </div>
+          <p style="margin-top:40px; text-align:center;">Signature du Responsable : __________________</p>
+          <div class="footer">${parametres.pied || ""}</div>
         </body>
       </html>
     `);
@@ -229,32 +397,76 @@ export default function Achats() {
     printWindow.print();
   };
 
-  // Mode édition d’un bon
+  // Mode édition d'un bon
   const handleEditBon = (bon) => {
     setEditId(bon.id);
     setIsEditing(true);
     setFournisseur(bon.fournisseur || "");
-    setDateAchat(bon.date?.toDate().toISOString().split("T")[0] || "");
+    
+    // Gérer la date correctement
+    if (bon.date?.toDate) {
+      setDateAchat(bon.date.toDate().toISOString().split("T")[0]);
+    } else if (bon.timestamp?.toDate) {
+      setDateAchat(bon.timestamp.toDate().toISOString().split("T")[0]);
+    } else {
+      setDateAchat("");
+    }
+    
     setStatutPaiement(bon.statutPaiement || "payé");
     setRemiseGlobale(bon.remiseGlobale || 0);
     setArticles(Array.isArray(bon.articles) ? bon.articles : []);
     setShowForm(true);
   };
 
-  // Suppression d’un bon
+  // 🔥 FONCTION CORRIGÉE : Suppression d'un bon AVEC ENREGISTREMENT D'ACTIVITÉ
   const handleDeleteBon = async (bon) => {
     if (!societeId) return alert("Aucune société sélectionnée !");
+    if (!user) return alert("Utilisateur non connecté !");
+    
     if (window.confirm("Supprimer ce bon ?")) {
-      await updateStockOnDelete(bon);
-      await deleteDoc(doc(db, "societe", societeId, "achats", bon.id));
-      fetchAchats();
-      fetchMedicaments();
+      try {
+        // Calculer le montant pour l'activité
+        const montantTotal = Array.isArray(bon.articles) 
+          ? bon.articles.reduce(
+              (sum, a) => sum + ((a.prixUnitaire || 0) * (a.quantite || 0) - (a.remise || 0)),
+              0
+            ) - (bon.remiseGlobale || 0)
+          : 0;
+        
+        // Mettre à jour le stock
+        await updateStockOnDelete(bon);
+        
+        // Supprimer l'achat
+        await deleteDoc(doc(db, "societe", societeId, "achats", bon.id));
+        
+        // 🔥 ENREGISTRER L'ACTIVITÉ DE SUPPRESSION
+        await addDoc(collection(db, "societe", societeId, "activities"), {
+          type: "achat",
+          userId: user.uid,
+          userEmail: user.email,
+          timestamp: Timestamp.now(),
+          details: {
+            fournisseur: bon.fournisseur,
+            montant: montantTotal,
+            action: 'suppression',
+            achatId: bon.id
+          }
+        });
+        
+        fetchAchats();
+        fetchMedicaments();
+        
+        console.log("✅ Achat supprimé et activité enregistrée");
+      } catch (error) {
+        console.error("❌ Erreur lors de la suppression:", error);
+        alert("Erreur lors de la suppression de l'achat");
+      }
     }
   };
 
-  // Mise à jour du stock (ajout)
+  // Mise à jour du stock (ajout) - Pas besoin d'activité ici car déjà gérée dans handleAddBon
   const updateStockOnAdd = async (bon) => {
-    if (!societeId) return;
+    if (!societeId || !user) return;
     const stockRef = collection(db, "societe", societeId, "stock");
     for (const art of bon.articles || []) {
       const q = query(stockRef, where("nom", "==", art.produit || ""));
@@ -262,11 +474,15 @@ export default function Achats() {
       if (!stockSnap.empty) {
         const docId = stockSnap.docs[0].id;
         const current = stockSnap.docs[0].data();
+        
         await updateDoc(doc(db, "societe", societeId, "stock", docId), {
           quantite: Number(current.quantite || 0) + Number(art.quantite || 0),
           prixAchat: art.prixUnitaire || 0,
           prixVente: art.prixVente || current.prixVente || art.prixUnitaire,
           datePeremption: art.datePeremption || current.datePeremption || "",
+          modifiePar: user.uid,
+          modifieParEmail: user.email,
+          modifieLe: Timestamp.now()
         });
       } else {
         await addDoc(stockRef, {
@@ -276,14 +492,18 @@ export default function Achats() {
           prixVente: art.prixVente || art.prixUnitaire || 0,
           seuil: 5,
           datePeremption: art.datePeremption || "",
+          creePar: user.uid,
+          creeParEmail: user.email,
+          creeLe: Timestamp.now(),
+          societeId: societeId
         });
       }
     }
   };
 
-  // Mise à jour du stock (suppression)
+  // Mise à jour du stock (suppression) - Pas besoin d'activité ici
   const updateStockOnDelete = async (bon) => {
-    if (!societeId) return;
+    if (!societeId || !user) return;
     const stockRef = collection(db, "societe", societeId, "stock");
     for (const art of bon.articles || []) {
       const q = query(stockRef, where("nom", "==", art.produit || ""));
@@ -291,11 +511,24 @@ export default function Achats() {
       if (!stockSnap.empty) {
         const docId = stockSnap.docs[0].id;
         const current = stockSnap.docs[0].data();
+        
         await updateDoc(doc(db, "societe", societeId, "stock", docId), {
           quantite: Math.max(0, Number(current.quantite || 0) - Number(art.quantite || 0)),
+          modifiePar: user.uid,
+          modifieParEmail: user.email,
+          modifieLe: Timestamp.now()
         });
       }
     }
+  };
+
+  // Fonction pour formater la date d'affichage
+  const formatDateDisplay = (dateField) => {
+    if (dateField?.toDate) {
+      const date = dateField.toDate();
+      return date.toLocaleDateString() + " " + date.toLocaleTimeString();
+    }
+    return "Date non spécifiée";
   };
 
   // Totaux/filtres
@@ -324,11 +557,11 @@ export default function Achats() {
       if (!hasMedicament) keep = false;
     }
     if (filterDateMin) {
-      const bDate = b.date?.toDate?.() || null;
+      const bDate = b.timestamp?.toDate?.() || b.date?.toDate?.() || null;
       if (!bDate || bDate < new Date(filterDateMin)) keep = false;
     }
     if (filterDateMax) {
-      const bDate = b.date?.toDate?.() || null;
+      const bDate = b.timestamp?.toDate?.() || b.date?.toDate?.() || null;
       if (!bDate || bDate > new Date(filterDateMax + "T23:59:59")) keep = false;
     }
     return keep;
@@ -349,9 +582,6 @@ export default function Achats() {
       </div>
     );
   }
-
-  // (Optionnel) : Limiter selon le rôle
-  // if (role !== "docteur" && role !== "vendeuse") return ...
 
   // RENDU PRINCIPAL
   return (
@@ -377,7 +607,7 @@ export default function Achats() {
           {showForm ? "➖" : "➕"}
         </button>
         <span style={{ fontWeight: 700, fontSize: 17, letterSpacing: 0.02 }}>
-          Formulaire d’ajout/modification
+          Formulaire d'ajout/modification
         </span>
       </div>
 
@@ -560,7 +790,7 @@ export default function Achats() {
           <thead>
             <tr>
               <th>Fournisseur</th>
-              <th>Date</th>
+              <th>Date & Heure</th>
               <th>Statut</th>
               <th>Total</th>
               <th>Actions</th>
@@ -570,7 +800,7 @@ export default function Achats() {
             {achatsFiltres.map((b) => (
               <tr key={b.id}>
                 <td>{b.fournisseur}</td>
-                <td>{b.date?.toDate().toLocaleDateString()}</td>
+                <td>{formatDateDisplay(b.timestamp || b.date)}</td>
                 <td>{b.statutPaiement}</td>
                 <td>
                   {(

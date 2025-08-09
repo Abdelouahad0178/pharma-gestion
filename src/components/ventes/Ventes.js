@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { db } from "../../firebase/config";
+import { useUserRole } from "../../contexts/UserRoleContext";
 import {
   collection,
   addDoc,
@@ -11,11 +12,10 @@ import {
   where,
   Timestamp,
 } from "firebase/firestore";
-import { useUserRole } from "../../contexts/UserRoleContext";
+
 
 export default function Ventes() {
-  const { societeId, user, loading } = useUserRole();
-  const [waiting, setWaiting] = useState(true);
+  const { user, societeId, loading } = useUserRole();
 
   // Formulaires
   const [client, setClient] = useState("");
@@ -38,7 +38,6 @@ export default function Ventes() {
 
   // Filtres historiques
   const [filterClient, setFilterClient] = useState("");
-  const [filterVendeuse, setFilterVendeuse] = useState("");
   const [filterDateMin, setFilterDateMin] = useState("");
   const [filterDateMax, setFilterDateMax] = useState("");
   const [showFiltres, setShowFiltres] = useState(false);
@@ -46,8 +45,11 @@ export default function Ventes() {
   // Toggle FORMULAIRE
   const [showForm, setShowForm] = useState(false);
 
-  // Synchronisation du chargement
-  useEffect(() => {
+  // États de chargement
+  const [waiting, setWaiting] = useState(true);
+
+  // Vérification du chargement
+  React.useEffect(() => {
     setWaiting(loading || !societeId || !user);
   }, [loading, societeId, user]);
 
@@ -89,51 +91,112 @@ export default function Ventes() {
 
   const handleRemoveArticle = (idx) => setArticles(articles.filter((_, i) => i !== idx));
 
-  // Enregistrer ou modifier une vente
+  // Enregistrer ou modifier une vente ✅ AVEC TRAÇABILITÉ
+  
   const handleAddVente = async (e) => {
     e.preventDefault();
-    if (!societeId) return alert("Aucune société sélectionnée !");
+    if (!user || !societeId) return alert("Utilisateur ou société non connecté !");
     if (!client || !dateVente || articles.length === 0) return;
 
+    // Calculer le montant total
+    const montantTotal = articles.reduce(
+      (sum, a) => sum + (a.prixUnitaire * a.quantite - a.remise), 
+      0
+    );
+
     let venteRef = null;
+    
     if (isEditing && editId) {
+      // MODIFICATION d'une vente existante
       const oldVente = ventes.find((v) => v.id === editId);
       await updateStockOnCancel(oldVente);
+      
       await updateDoc(doc(db, "societe", societeId, "ventes", editId), {
         client,
-        date: Timestamp.fromDate(new Date(dateVente)),
+        date: Timestamp.fromDate(new Date(dateVente)), // Date choisie par l'utilisateur
         statutPaiement,
         articles,
-        modifiedBy: user.displayName || user.email || "Inconnu",
-        modifiedByEmail: user.email,
-        modifiedAt: Timestamp.now()
+        // IMPORTANT: Ajouter ces champs
+        updatedAt: Timestamp.now(), // ← Heure actuelle de modification
+        updatedBy: user.email
       });
+      
       venteRef = { id: editId };
       await updateStockOnSell({ client, articles });
-      setIsEditing(false); setEditId(null);
+      
+      // Enregistrer l'activité avec l'heure ACTUELLE
+      await addDoc(collection(db, "societe", societeId, "activities"), {
+        type: "vente",
+        userId: user.uid,
+        userEmail: user.email,
+        timestamp: Timestamp.now(), // ← IMPORTANT: Utiliser Timestamp.now()
+        details: {
+          client,
+          montant: montantTotal,
+          articles: articles.length,
+          action: 'modification', // ← Spécifier l'action
+          venteId: editId
+        }
+      });
+      
+      setIsEditing(false);
+      setEditId(null);
     } else {
+      // NOUVELLE vente
       const added = await addDoc(collection(db, "societe", societeId, "ventes"), {
         client,
-        date: Timestamp.fromDate(new Date(dateVente)),
+        date: Timestamp.fromDate(new Date(dateVente)), // Date de la vente
         statutPaiement,
         articles,
-        createdBy: user.displayName || user.email || "Inconnu",
-        createdByEmail: user.email,
-        createdAt: Timestamp.now()
+        // IMPORTANT: Ajouter ces champs
+        createdAt: Timestamp.now(), // ← Heure actuelle de création
+        createdBy: user.email
       });
+      
       venteRef = added;
       await updateStockOnSell({ client, articles });
+      
+      // Enregistrer l'activité avec l'heure ACTUELLE
+      await addDoc(collection(db, "societe", societeId, "activities"), {
+        type: "vente",
+        userId: user.uid,
+        userEmail: user.email,
+        timestamp: Timestamp.now(), // ← IMPORTANT: Utiliser Timestamp.now()
+        details: {
+          client,
+          montant: montantTotal,
+          articles: articles.length,
+          action: 'création', // ← Spécifier l'action
+          venteId: added.id
+        }
+      });
     }
 
-    // Paiement automatique si "payé"
+    // Si paiement automatique
     if (statutPaiement === "payé" && venteRef) {
-      const total = articles.reduce((sum, a) => sum + (a.prixUnitaire * a.quantite - a.remise), 0);
       await addDoc(collection(db, "societe", societeId, "paiements"), {
         docId: venteRef.id,
-        montant: total,
+        montant: montantTotal,
         mode: "Espèces",
         type: "ventes",
-        date: Timestamp.fromDate(new Date(dateVente)),
+        date: Timestamp.now(), // ← Utiliser Timestamp.now()
+        createdBy: user.email
+      });
+      
+      // Enregistrer l'activité de paiement
+      await addDoc(collection(db, "societe", societeId, "activities"), {
+        type: "paiement",
+        userId: user.uid,
+        userEmail: user.email,
+        timestamp: Timestamp.now(), // ← IMPORTANT
+        details: {
+          mode: "Espèces",
+          type: "ventes",
+          montant: montantTotal,
+          client,
+          paiementAuto: true,
+          action: 'création' // Ajout de l'action pour le paiement
+        }
       });
     }
 
@@ -141,6 +204,7 @@ export default function Ventes() {
     fetchVentes();
     fetchMedicaments();
   };
+
 
   const resetForm = () => {
     setClient(""); setDateVente(""); setStatutPaiement("payé");
@@ -170,7 +234,6 @@ export default function Ventes() {
           <h2>BON DE VENTE</h2>
           <p><strong>Client :</strong> ${vente.client || ""}</p>
           <p><strong>Date :</strong> ${vente.date?.toDate().toLocaleDateString() || ""}</p>
-          <p><strong>Vendeuse :</strong> ${vente.createdBy || "Non spécifié"}</p>
           <p><strong>Statut Paiement :</strong> ${vente.statutPaiement || ""}</p>
           <table>
             <thead>
@@ -192,16 +255,7 @@ export default function Ventes() {
           <div class="totals">
             <p><strong>Total : ${total} DH</strong></p>
           </div>
-          <div style="margin-top:60px; display:flex; justify-content:space-between;">
-            <div style="text-align:center;">
-              <p style="margin-bottom:40px;">Signature Client</p>
-              <p>_____________________</p>
-            </div>
-            <div style="text-align:center;">
-              <p style="margin-bottom:40px;">Vendeuse</p>
-              <p><strong>${vente.createdBy || "_____________________"}</strong></p>
-            </div>
-          </div>
+          <p style="margin-top:40px; text-align:center;">Signature du Vendeur : __________________</p>
           <div class="footer">${parametres.pied || ""}</div>
         </body>
       </html>
@@ -222,17 +276,34 @@ export default function Ventes() {
   };
 
   const handleDeleteVente = async (vente) => {
-    if (!societeId) return alert("Aucune société sélectionnée !");
+    if (!user || !societeId) return alert("Utilisateur non connecté !");
+    // IMPORTANT: Remplacer window.confirm par une modale personnalisée dans une application réelle
     if (window.confirm("Supprimer cette vente ?")) {
       await updateStockOnCancel(vente);
       await deleteDoc(doc(db, "societe", societeId, "ventes", vente.id));
+      
+      // Enregistrer l'activité de suppression
+      await addDoc(collection(db, "societe", societeId, "activities"), {
+        type: "vente",
+        userId: user.uid,
+        userEmail: user.email,
+        timestamp: Timestamp.now(), // Heure actuelle de suppression
+        details: {
+          client: vente.client,
+          montant: (Array.isArray(vente.articles) ? vente.articles : []).reduce((sum, a) => sum + (a.prixUnitaire * a.quantite - a.remise), 0),
+          articles: (vente.articles || []).length,
+          action: 'suppression', // ← Spécifier l'action
+          venteId: vente.id
+        }
+      });
+
       fetchVentes();
     }
   };
 
-  // Gestion du stock PAR SOCIÉTÉ
+  // Gestion du stock PAR SOCIÉTÉ ✅ AVEC TRAÇABILITÉ
   const updateStockOnSell = async (vente) => {
-    if (!societeId) return;
+    if (!user || !societeId) return;
     const stockRef = collection(db, "societe", societeId, "stock");
     for (const art of vente.articles || []) {
       const q = query(stockRef, where("nom", "==", art.produit || ""));
@@ -240,15 +311,21 @@ export default function Ventes() {
       if (!stockSnap.empty) {
         const docId = stockSnap.docs[0].id;
         const current = stockSnap.docs[0].data();
+        
+        // ✅ MODIFICATION STOCK AVEC TRAÇABILITÉ
         await updateDoc(doc(db, "societe", societeId, "stock", docId), {
           quantite: Math.max(0, Number(current.quantite || 0) - Number(art.quantite || 0)),
+          // 🔧 TRAÇABILITÉ MODIFICATION STOCK
+          modifiePar: user.uid,
+          modifieParEmail: user.email,
+          modifieLe: Timestamp.now()
         });
       }
     }
   };
 
   const updateStockOnCancel = async (vente) => {
-    if (!societeId) return;
+    if (!user || !societeId) return;
     const stockRef = collection(db, "societe", societeId, "stock");
     for (const art of vente.articles || []) {
       const q = query(stockRef, where("nom", "==", art.produit || ""));
@@ -256,8 +333,14 @@ export default function Ventes() {
       if (!stockSnap.empty) {
         const docId = stockSnap.docs[0].id;
         const current = stockSnap.docs[0].data();
+        
+        // ✅ RÉINJECTION STOCK AVEC TRAÇABILITÉ
         await updateDoc(doc(db, "societe", societeId, "stock", docId), {
           quantite: Number(current.quantite || 0) + Number(art.quantite || 0),
+          // 🔧 TRAÇABILITÉ RÉINJECTION
+          modifiePar: user.uid,
+          modifieParEmail: user.email,
+          modifieLe: Timestamp.now()
         });
       }
     }
@@ -280,24 +363,17 @@ export default function Ventes() {
     setMedicaments(arr);
   };
 
-  useEffect(() => {
-    if (societeId) {
-      fetchVentes();
-      fetchMedicaments();
-      fetchParametres();
-    }
-  }, [societeId]);
+  useEffect(() => { fetchVentes(); }, [societeId]);
+  useEffect(() => { fetchMedicaments(); fetchParametres(); }, [societeId]);
 
   const totalVenteCourante = (articles || []).reduce(
     (t, a) => t + ((a.prixUnitaire || 0) * (a.quantite || 0) - (a.remise || 0)), 0);
 
   // -- Filtrage historique ventes
   const uniqueClients = Array.from(new Set(ventes.map(v => v.client).filter(Boolean)));
-  const uniqueVendeuses = Array.from(new Set(ventes.map(v => v.createdBy).filter(Boolean)));
   const ventesFiltrees = ventes.filter((v) => {
     let keep = true;
     if (filterClient && v.client !== filterClient) keep = false;
-    if (filterVendeuse && v.createdBy !== filterVendeuse) keep = false;
     if (filterDateMin) {
       const vd = v.date?.toDate?.() || null;
       if (!vd || vd < new Date(filterDateMin)) keep = false;
@@ -309,7 +385,7 @@ export default function Ventes() {
     return keep;
   });
 
-  // Gestion du chargement
+  // AFFICHAGE conditionnel
   if (waiting) {
     return (
       <div style={{ padding: 30, textAlign: "center", color: "#1c355e" }}>
@@ -317,10 +393,19 @@ export default function Ventes() {
       </div>
     );
   }
+
   if (!user) {
     return (
       <div style={{ padding: 30, textAlign: "center", color: "#a32" }}>
         Non connecté.
+      </div>
+    );
+  }
+
+  if (!societeId) {
+    return (
+      <div style={{ padding: 30, textAlign: "center", color: "#a32" }}>
+        Aucune société sélectionnée.
       </div>
     );
   }
@@ -472,13 +557,6 @@ export default function Ventes() {
             </select>
           </div>
           <div>
-            <label>Vendeuse&nbsp;</label>
-            <select value={filterVendeuse} onChange={e => setFilterVendeuse(e.target.value)} style={{minWidth:110}}>
-              <option value="">Toutes</option>
-              {uniqueVendeuses.map(v => <option key={v} value={v}>{v}</option>)}
-            </select>
-          </div>
-          <div>
             <label>Du&nbsp;</label>
             <input type="date" value={filterDateMin} onChange={e => setFilterDateMin(e.target.value)} />
           </div>
@@ -486,9 +564,9 @@ export default function Ventes() {
             <label>Au&nbsp;</label>
             <input type="date" value={filterDateMax} onChange={e => setFilterDateMax(e.target.value)} />
           </div>
-          {(filterClient || filterVendeuse || filterDateMin || filterDateMax) && (
+          {(filterClient || filterDateMin || filterDateMax) && (
             <button className="btn danger" type="button" onClick={() => {
-              setFilterClient(""); setFilterVendeuse(""); setFilterDateMin(""); setFilterDateMax("");
+              setFilterClient(""); setFilterDateMin(""); setFilterDateMax("");
             }}>Effacer filtres</button>
           )}
         </div>
@@ -501,7 +579,6 @@ export default function Ventes() {
             <tr>
               <th>Client</th>
               <th>Date</th>
-              <th>Vendeuse</th>
               <th>Statut</th>
               <th>Total</th>
               <th>Actions</th>
@@ -512,7 +589,6 @@ export default function Ventes() {
               <tr key={v.id}>
                 <td>{v.client}</td>
                 <td>{v.date?.toDate().toLocaleDateString()}</td>
-                <td>{v.createdBy || "Non spécifié"}</td>
                 <td>{v.statutPaiement}</td>
                 <td>
                   {(Array.isArray(v.articles) ? v.articles : [])

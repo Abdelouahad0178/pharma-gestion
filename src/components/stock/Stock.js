@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { db } from "../../firebase/config";
+import { useUserRole } from "../../contexts/UserRoleContext";
 import {
   collection,
   getDocs,
@@ -11,11 +12,9 @@ import {
   where,
   Timestamp
 } from "firebase/firestore";
-import { useUserRole } from "../../contexts/UserRoleContext";
 
 export default function Stock() {
-  const { societeId, user, loading } = useUserRole();
-  const [waiting, setWaiting] = useState(true);
+  const { user, societeId, loading } = useUserRole();
 
   const [stock, setStock] = useState([]);
   const [filteredStock, setFilteredStock] = useState([]);
@@ -52,8 +51,11 @@ export default function Stock() {
   // FORMULAIRE toggle
   const [showForm, setShowForm] = useState(false);
 
-  // Synchronisation du chargement
-  useEffect(() => {
+  // États de chargement
+  const [waiting, setWaiting] = useState(true);
+
+  // Vérification du chargement
+  React.useEffect(() => {
     setWaiting(loading || !societeId || !user);
   }, [loading, societeId, user]);
 
@@ -81,11 +83,8 @@ export default function Stock() {
   };
 
   useEffect(() => {
-    if (societeId) {
-      fetchStock();
-      fetchRetours();
-    }
-    // eslint-disable-next-line
+    fetchStock();
+    fetchRetours();
   }, [societeId]);
 
   // Filtrage Stock
@@ -112,11 +111,12 @@ export default function Stock() {
     setFilteredRetours(filtered);
   }, [filterProduit, filterMotif, filterDateMin, filterDateMax, retours]);
 
-  // Ajouter / Modifier Stock
+  // Ajouter / Modifier Stock ✅ AVEC TRAÇABILITÉ
   const handleSave = async (e) => {
     e.preventDefault();
-    if (!societeId) return alert("Aucune société sélectionnée !");
+    if (!user || !societeId) return;
     if (!nom || !quantite || !prixAchat || !prixVente) return;
+    
     const data = {
       nom,
       quantite: Number(quantite),
@@ -124,12 +124,59 @@ export default function Stock() {
       prixVente: Number(prixVente),
       datePeremption
     };
+    
     if (editId) {
-      await updateDoc(doc(db, "societe", societeId, "stock", editId), data);
+      // ✅ MODIFICATION AVEC TRAÇABILITÉ
+      await updateDoc(doc(db, "societe", societeId, "stock", editId), {
+        ...data,
+        // 🔧 CHAMPS DE TRAÇABILITÉ MODIFICATION
+        modifiePar: user.uid,
+        modifieParEmail: user.email,
+        modifieLe: Timestamp.now()
+      });
+
+      // Enregistrer l'activité de modification du stock
+      await addDoc(collection(db, "societe", societeId, "activities"), {
+        type: "stock",
+        userId: user.uid,
+        userEmail: user.email,
+        timestamp: Timestamp.now(),
+        details: {
+          produit: nom,
+          quantite: Number(quantite),
+          action: 'modification', // Spécifier l'action
+          stockId: editId
+        }
+      });
+
       setEditId(null);
     } else {
-      await addDoc(collection(db, "societe", societeId, "stock"), data);
+      // ✅ CRÉATION AVEC TRAÇABILITÉ
+      const newDocRef = await addDoc(collection(db, "societe", societeId, "stock"), {
+        ...data,
+        seuil: 5, // Valeur par défaut
+        // 🔧 CHAMPS DE TRAÇABILITÉ CRÉATION
+        creePar: user.uid,
+        creeParEmail: user.email,
+        creeLe: Timestamp.now(),
+        societeId: societeId
+      });
+
+      // Enregistrer l'activité de création du stock
+      await addDoc(collection(db, "societe", societeId, "activities"), {
+        type: "stock",
+        userId: user.uid,
+        userEmail: user.email,
+        timestamp: Timestamp.now(),
+        details: {
+          produit: nom,
+          quantite: Number(quantite),
+          action: 'création', // Spécifier l'action
+          stockId: newDocRef.id
+        }
+      });
     }
+    
     setNom(""); setQuantite(""); setPrixAchat(""); setPrixVente(""); setDatePeremption("");
     fetchStock();
   };
@@ -145,14 +192,30 @@ export default function Stock() {
   };
 
   const handleDelete = async (prod) => {
-    if (!societeId) return alert("Aucune société sélectionnée !");
+    if (!user || !societeId) return;
+    // IMPORTANT: Remplacer window.confirm par une modale personnalisée dans une application réelle
     if (window.confirm("Supprimer ce médicament ?")) {
       await deleteDoc(doc(db, "societe", societeId, "stock", prod.id));
+
+      // Enregistrer l'activité de suppression du stock
+      await addDoc(collection(db, "societe", societeId, "activities"), {
+        type: "stock",
+        userId: user.uid,
+        userEmail: user.email,
+        timestamp: Timestamp.now(),
+        details: {
+          produit: prod.nom,
+          quantite: prod.quantite,
+          action: 'suppression', // Spécifier l'action
+          stockId: prod.id
+        }
+      });
+
       fetchStock();
     }
   };
 
-  // Retour
+  // Retour ✅ AVEC TRAÇABILITÉ
   const handleOpenRetour = (prod) => {
     setSelectedProduit(prod);
     setQuantiteRetour("");
@@ -161,37 +224,94 @@ export default function Stock() {
   };
 
   const handleRetour = async () => {
-    if (!societeId) return alert("Aucune société sélectionnée !");
+    if (!user || !societeId) return;
     if (!quantiteRetour || quantiteRetour <= 0 || quantiteRetour > selectedProduit.quantite) return alert("Quantité invalide !");
     if (!motifRetour) return alert("Sélectionnez un motif !");
+    
     const newQuantite = selectedProduit.quantite - Number(quantiteRetour);
-    await updateDoc(doc(db, "societe", societeId, "stock", selectedProduit.id), { quantite: newQuantite });
-    await addDoc(collection(db, "societe", societeId, "retours"), {
+    
+    // ✅ MODIFICATION STOCK AVEC TRAÇABILITÉ
+    await updateDoc(doc(db, "societe", societeId, "stock", selectedProduit.id), { 
+      quantite: newQuantite,
+      // 🔧 TRAÇABILITÉ MODIFICATION
+      modifiePar: user.uid,
+      modifieParEmail: user.email,
+      modifieLe: Timestamp.now()
+    });
+    
+    // ✅ CRÉATION RETOUR AVEC TRAÇABILITÉ
+    const newRetourRef = await addDoc(collection(db, "societe", societeId, "retours"), {
       produit: selectedProduit.nom,
       quantite: Number(quantiteRetour),
       motif: motifRetour,
-      date: Timestamp.now()
+      date: Timestamp.now(),
+      // 🔧 CHAMPS DE TRAÇABILITÉ CRÉATION
+      creePar: user.uid,
+      creeParEmail: user.email,
+      creeLe: Timestamp.now(),
+      societeId: societeId
     });
+
+    // Enregistrer l'activité de création de retour
+    await addDoc(collection(db, "societe", societeId, "activities"), {
+      type: "retour",
+      userId: user.uid,
+      userEmail: user.email,
+      timestamp: Timestamp.now(),
+      details: {
+        produit: selectedProduit.nom,
+        quantite: Number(quantiteRetour),
+        motif: motifRetour,
+        action: 'création', // Spécifier l'action
+        retourId: newRetourRef.id
+      }
+    });
+    
     setOpenRetour(false);
     fetchStock();
     fetchRetours();
   };
 
   const handleCancelRetour = async (retour) => {
-    if (!societeId) return alert("Aucune société sélectionnée !");
+    if (!user || !societeId) return;
+    // IMPORTANT: Remplacer window.confirm par une modale personnalisée dans une application réelle
     if (!window.confirm("Annuler ce retour et réinjecter dans le stock si possible ?")) return;
+    
     if (retour?.produit && retour.produit.trim() !== "") {
       const stockQuery = query(collection(db, "societe", societeId, "stock"), where("nom", "==", retour.produit));
       const stockSnap = await getDocs(stockQuery);
       if (!stockSnap.empty) {
         const stockDoc = stockSnap.docs[0];
         const stockData = stockDoc.data();
+        
+        // ✅ RÉINJECTION STOCK AVEC TRAÇABILITÉ
         await updateDoc(doc(db, "societe", societeId, "stock", stockDoc.id), {
           quantite: Number(stockData.quantite) + Number(retour.quantite),
+          // 🔧 TRAÇABILITÉ MODIFICATION
+          modifiePar: user.uid,
+          modifieParEmail: user.email,
+          modifieLe: Timestamp.now()
         });
       }
     }
+    
     await deleteDoc(doc(db, "societe", societeId, "retours", retour.id));
+
+    // Enregistrer l'activité d'annulation de retour
+    await addDoc(collection(db, "societe", societeId, "activities"), {
+      type: "retour",
+      userId: user.uid,
+      userEmail: user.email,
+      timestamp: Timestamp.now(),
+      details: {
+        produit: retour.produit,
+        quantite: retour.quantite,
+        motif: retour.motif,
+        action: 'annulation_retour', // Spécifier l'action
+        retourId: retour.id
+      }
+    });
+
     fetchStock();
     fetchRetours();
   };
@@ -224,7 +344,7 @@ export default function Stock() {
     printWindow.print();
   };
 
-  // Gestion du chargement
+  // AFFICHAGE conditionnel
   if (waiting) {
     return (
       <div style={{ padding: 30, textAlign: "center", color: "#1c355e" }}>
@@ -232,10 +352,19 @@ export default function Stock() {
       </div>
     );
   }
+
   if (!user) {
     return (
       <div style={{ padding: 30, textAlign: "center", color: "#a32" }}>
         Non connecté.
+      </div>
+    );
+  }
+
+  if (!societeId) {
+    return (
+      <div style={{ padding: 30, textAlign: "center", color: "#a32" }}>
+        Aucune société sélectionnée.
       </div>
     );
   }
