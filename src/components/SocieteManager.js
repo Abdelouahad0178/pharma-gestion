@@ -253,9 +253,9 @@ export default function SocieteManager() {
       // Créer un premier produit dans le stock pour initialiser la collection
       await addDoc(collection(db, "societe", societeId, "stock"), {
         nom: "Paracétamol 500mg",
-        quantite: 100,
-        prixAchat: 5,
-        prixVente: 10,
+        quantite:10,
+        prixAchat: 50,
+        prixVente: 100,
         seuil: 20,
         datePeremption: "",
         createdAt: Timestamp.now()
