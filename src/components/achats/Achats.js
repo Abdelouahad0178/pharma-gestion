@@ -675,13 +675,22 @@ export default function Achats() {
       const isIOS = /iphone|ipad|ipod/.test(userAgent);
       const isAndroid = /android/.test(userAgent);
       
+      // Créer un contenu optimisé pour mobile avec moins de hauteur fixe
+      const mobileOptimizedContent = htmlContent.replace(
+        /height: calc\(100vh[^)]*\)/g, 
+        'height: auto'
+      ).replace(
+        /min-height: calc\(100vh[^)]*\)/g, 
+        'min-height: auto'
+      );
+      
       // Pour iOS et Android, utiliser une approche différente
       if (isIOS || isAndroid) {
         // Créer un bouton de téléchargement temporaire
-        showMobileDownloadOption(htmlContent, titleDocument, numero);
+        showMobileDownloadOption(mobileOptimizedContent, titleDocument, numero);
       } else {
         // Pour autres mobiles, essayer l'approche nouvelle fenêtre
-        handleMobileNewWindow(htmlContent, titleDocument, numero);
+        handleMobileNewWindow(mobileOptimizedContent, titleDocument, numero);
       }
       
     } catch (error) {
@@ -693,13 +702,28 @@ export default function Achats() {
   // 📱 Nouvelle fenêtre pour mobiles non iOS/Android
   const handleMobileNewWindow = (htmlContent, titleDocument, numero) => {
     try {
+      // Optimiser le contenu pour mobile avant d'ouvrir la nouvelle fenêtre
+      const optimizedContent = htmlContent.replace(
+        '<body>',
+        `<body style="margin: 0; padding: 10px; font-size: 12px; overflow: auto; height: auto;">`
+      );
+      
       // Créer une nouvelle fenêtre avec le contenu
-      const printWindow = window.open('', '_blank');
+      const printWindow = window.open('', '_blank', 'width=device-width,height=device-height,scrollbars=yes,resizable=yes');
       
       if (printWindow) {
         printWindow.document.open();
-        printWindow.document.write(htmlContent);
+        printWindow.document.write(optimizedContent);
         printWindow.document.close();
+        
+        // Attendre le chargement et ajuster la fenêtre
+        printWindow.onload = () => {
+          // Ajuster la vue pour mobile
+          const viewport = printWindow.document.createElement('meta');
+          viewport.setAttribute('name', 'viewport');
+          viewport.setAttribute('content', 'width=device-width, initial-scale=1.0, user-scalable=yes');
+          printWindow.document.head.appendChild(viewport);
+        };
         
         // Ajouter un bouton d'impression dans la nouvelle fenêtre
         const printButton = printWindow.document.createElement('div');
@@ -718,8 +742,27 @@ export default function Achats() {
             font-weight: bold;
             text-align: center;
             font-size: 16px;
+            user-select: none;
           " onclick="window.print()">
             🖨️ Imprimer
+          </div>
+          <div style="
+            position: fixed; 
+            bottom: 80px; 
+            right: 20px; 
+            background: #48bb78; 
+            color: white; 
+            padding: 10px 20px; 
+            border-radius: 20px; 
+            cursor: pointer; 
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+            z-index: 9999;
+            font-weight: bold;
+            text-align: center;
+            font-size: 14px;
+            user-select: none;
+          " onclick="window.close()">
+            ✖️ Fermer
           </div>
         `;
         printWindow.document.body.appendChild(printButton);
@@ -1086,8 +1129,8 @@ export default function Achats() {
               line-height: 1.3;
               -webkit-print-color-adjust: exact !important;
               print-color-adjust: exact !important;
-              height: 100vh;
-              overflow: hidden;
+              height: auto;
+              overflow: auto;
             }
             
             .document-container {
@@ -1097,7 +1140,8 @@ export default function Achats() {
               border-radius: 0;
               overflow: hidden;
               position: relative;
-              height: ${isMobileDevice ? 'calc(100vh - 10px)' : 'calc(100vh - 20px)'};
+              height: auto;
+              min-height: ${isMobileDevice ? 'calc(100vh - 10px)' : 'calc(100vh - 20px)'};
               display: flex;
               flex-direction: column;
             }
@@ -1152,7 +1196,7 @@ export default function Achats() {
             .content-wrapper {
               padding: ${isMobileDevice ? '15px 10px' : '20px 15px'};
               flex: 1;
-              overflow: hidden;
+              overflow: auto;
               display: flex;
               flex-direction: column;
             }
@@ -1225,10 +1269,9 @@ export default function Achats() {
             
             .articles-section {
               margin: ${isMobileDevice ? '10px 0' : '15px 0'};
-              flex: 1;
-              overflow: hidden;
-              display: flex;
-              flex-direction: column;
+              flex-shrink: 0;
+              max-height: ${isMobileDevice ? '300px' : '400px'};
+              overflow: auto;
             }
             
             .section-title {
@@ -1262,7 +1305,7 @@ export default function Achats() {
               overflow: hidden;
               margin: ${isMobileDevice ? '8px 0' : '10px 0'};
               font-size: ${isMobileDevice ? '0.75em' : '0.85em'};
-              flex: 1;
+              max-height: ${isMobileDevice ? '250px' : '350px'};
             }
             
             .articles-table thead {
@@ -1525,100 +1568,127 @@ export default function Achats() {
             /* 🖨️ Optimisations d'impression - TOUT SUR UNE PAGE */
             @media print {
               @page {
-                margin: 0.3cm;
+                margin: 0.5cm;
                 size: A4;
               }
               
               body {
                 background: white !important;
                 padding: 0 !important;
+                margin: 0 !important;
                 -webkit-print-color-adjust: exact !important;
                 print-color-adjust: exact !important;
-                height: 29.7cm !important;
-                overflow: hidden !important;
-                font-size: 10px !important;
+                height: auto !important;
+                overflow: visible !important;
+                font-size: 11px !important;
+                width: 100% !important;
               }
               
               .document-container {
                 box-shadow: none !important;
                 border-radius: 0 !important;
                 max-width: none !important;
-                height: 29.7cm !important;
+                width: 100% !important;
+                height: auto !important;
+                max-height: none !important;
                 page-break-inside: avoid !important;
-                display: flex !important;
-                flex-direction: column !important;
+                display: block !important;
+                overflow: visible !important;
+                margin: 0 !important;
+                padding: 0 !important;
               }
               
               .header-section {
-                padding: 12px 10px !important;
-                flex-shrink: 0 !important;
+                padding: 15px 10px !important;
                 -webkit-print-color-adjust: exact !important;
                 print-color-adjust: exact !important;
+                page-break-inside: avoid !important;
               }
               
               .content-wrapper {
                 padding: 15px 10px !important;
-                flex: 1 !important;
-                overflow: hidden !important;
+                height: auto !important;
+                max-height: none !important;
+                overflow: visible !important;
               }
               
               .info-section {
                 grid-template-columns: 1fr 1fr 1fr 1fr !important;
                 gap: 8px !important;
-                margin-bottom: 10px !important;
+                margin-bottom: 15px !important;
+                page-break-inside: avoid !important;
               }
               
               .info-card {
-                padding: 6px !important;
+                padding: 8px !important;
                 border-radius: 4px !important;
               }
               
+              .articles-section {
+                margin: 15px 0 !important;
+                height: auto !important;
+                max-height: none !important;
+                overflow: visible !important;
+                page-break-inside: avoid !important;
+              }
+              
               .articles-table {
-                font-size: 8px !important;
-                margin: 8px 0 !important;
+                font-size: 9px !important;
+                margin: 10px 0 !important;
+                height: auto !important;
+                max-height: none !important;
+                overflow: visible !important;
+                page-break-inside: avoid !important;
               }
               
               .articles-table th,
               .articles-table td {
-                padding: 3px 2px !important;
-                font-size: 7px !important;
+                padding: 6px 4px !important;
+                font-size: 8px !important;
+                line-height: 1.2 !important;
               }
               
               .product-name {
                 font-size: 8px !important;
-                max-width: 60px !important;
+                max-width: 80px !important;
+                word-wrap: break-word !important;
               }
               
               .grand-total-section {
-                margin: 8px 0 !important;
-                padding: 10px !important;
-                flex-shrink: 0 !important;
+                margin: 15px 0 !important;
+                padding: 15px !important;
+                page-break-inside: avoid !important;
               }
               
               .total-amount {
-                font-size: 1.3em !important;
+                font-size: 1.8em !important;
+                line-height: 1.2 !important;
               }
               
               .signature-section {
-                margin: 10px 0 5px 0 !important;
-                flex-shrink: 0 !important;
+                margin: 15px 0 !important;
+                page-break-inside: avoid !important;
+                display: flex !important;
+                justify-content: space-between !important;
               }
               
               .signature-area {
-                height: 25px !important;
+                height: 40px !important;
+                margin-bottom: 8px !important;
               }
               
               .footer-section {
-                padding: 8px 6px !important;
-                flex-shrink: 0 !important;
+                padding: 10px 8px !important;
+                page-break-inside: avoid !important;
               }
               
               .footer-message {
-                font-size: 0.7em !important;
+                font-size: 0.8em !important;
+                line-height: 1.2 !important;
               }
               
               .print-info {
-                font-size: 0.5em !important;
+                font-size: 0.6em !important;
               }
               
               /* Forcer les couleurs pour l'impression */
@@ -1633,26 +1703,53 @@ export default function Achats() {
                 print-color-adjust: exact !important;
               }
               
-              /* Empêcher les sauts de page */
-              .header-section,
-              .info-section,
-              .articles-section,
-              .grand-total-section,
-              .signature-section,
-              .footer-section {
-                page-break-inside: avoid !important;
-                break-inside: avoid !important;
-              }
-              
-              .articles-table {
-                page-break-inside: avoid !important;
-                break-inside: avoid !important;
-              }
-              
               /* Masquer le filigrane en impression pour économiser l'encre */
               .watermark {
                 display: none !important;
               }
+              
+              /* Optimisations spéciales pour impression mobile */
+              ${isMobileDevice ? `
+                body {
+                  font-size: 9px !important;
+                }
+                
+                .header-section {
+                  padding: 10px 8px !important;
+                }
+                
+                .content-wrapper {
+                  padding: 10px 8px !important;
+                }
+                
+                .info-section {
+                  grid-template-columns: 1fr 1fr !important;
+                  gap: 6px !important;
+                }
+                
+                .articles-table th,
+                .articles-table td {
+                  padding: 4px 2px !important;
+                  font-size: 7px !important;
+                }
+                
+                .product-name {
+                  max-width: 60px !important;
+                  font-size: 7px !important;
+                }
+                
+                .signature-section {
+                  display: block !important;
+                }
+                
+                .signature-box {
+                  margin-bottom: 15px !important;
+                }
+                
+                .signature-area {
+                  height: 30px !important;
+                }
+              ` : ''}
             }
             
             /* 📱 Styles spéciaux pour très petits écrans */

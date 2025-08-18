@@ -351,7 +351,7 @@ export default function DevisFactures() {
     }
   };
 
-  // ✨ IMPRESSION OPTIMISÉE POUR TOUTES DIMENSIONS ✨
+  // ✨ IMPRESSION OPTIMISÉE CORRIGÉE ✨
   const handlePrintDoc = (docData) => {
     const articles = Array.isArray(docData.articles) ? docData.articles : [];
     const total = articles.reduce(
@@ -363,21 +363,21 @@ export default function DevisFactures() {
     const cachetHtml = generateCachetHtml(isFacture);
     const titleDocument = isFacture ? "Facture" : "Devis";
     
-    // 📱 Détection de l'environnement mobile pour optimiser l'impression
-    const isMobileDevice = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) || window.innerWidth < 768;
+    // 📱 Détection mobile simple et fiable
+    const isMobileDevice = window.innerWidth < 768 || /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
     
     try {
       const htmlContent = generatePrintHTML(docData, articles, total, cachetHtml, isFacture, titleDocument, isMobileDevice);
       
       if (isMobileDevice) {
-        // 📱 Stratégie spéciale pour mobile : utiliser un iframe caché
-        handleMobilePrint(htmlContent, titleDocument, docData.numero);
+        // 📱 Méthode mobile simplifiée
+        downloadPrintFile(htmlContent, titleDocument, docData.numero);
+        showNotification(`${titleDocument} téléchargé ! Ouvrez le fichier pour imprimer.`, "success");
       } else {
-        // 💻 Stratégie desktop classique améliorée
+        // 💻 Impression desktop standard
         handleDesktopPrint(htmlContent, titleDocument, docData.numero);
+        showNotification(`${titleDocument} envoyé vers l'imprimante !`, "success");
       }
-      
-      showNotification(`${titleDocument} ${isMobileDevice ? 'préparé pour téléchargement/impression' : 'envoyé vers l\'imprimante'} !`, "success");
       
     } catch (error) {
       console.error("Erreur lors de la préparation d'impression:", error);
@@ -385,208 +385,36 @@ export default function DevisFactures() {
     }
   };
 
-  // 📱 Gestion impression mobile optimisée - VERSION CORRIGÉE ROBUSTE
-  const handleMobilePrint = (htmlContent, titleDocument, numero) => {
-    try {
-      // Créer un iframe caché pour l'impression mobile
-      const iframe = document.createElement('iframe');
-      iframe.style.cssText = `
-        position: fixed;
-        top: -9999px;
-        left: -9999px;
-        width: 794px;
-        height: 1123px;
-        border: none;
-        z-index: -1;
-        opacity: 0;
-      `;
-      
-      // Fonction de nettoyage sécurisée
-      const cleanupIframe = () => {
-        try {
-          if (iframe && iframe.parentNode) {
-            iframe.parentNode.removeChild(iframe);
-          }
-        } catch (error) {
-          console.warn("Erreur lors du nettoyage de l'iframe:", error);
-        }
-      };
-      
-      document.body.appendChild(iframe);
-      
-      // Approche robuste pour écrire le contenu
-      const iframeDoc = iframe.contentDocument || iframe.contentWindow.document;
-      if (iframeDoc) {
-        try {
-          // Méthode 1: Essayer avec document.write() en premier (plus fiable pour iframe)
-          iframeDoc.open();
-          iframeDoc.write(htmlContent);
-          iframeDoc.close();
-          
-          // Attendre que le contenu soit chargé
-          setTimeout(() => {
-            try {
-              if (iframe.contentWindow) {
-                iframe.contentWindow.focus();
-                iframe.contentWindow.print();
-              }
-              
-              // Nettoyer après impression
-              setTimeout(cleanupIframe, 2000);
-              
-            } catch (printError) {
-              console.warn("Impression iframe échouée, fallback vers téléchargement:", printError);
-              cleanupIframe();
-              downloadPrintFile(htmlContent, titleDocument, numero);
-            }
-          }, 1000);
-          
-        } catch (writeError) {
-          console.warn("document.write() échoué, essai avec innerHTML:", writeError);
-          
-          // Méthode 2: Fallback avec innerHTML si document.write() échoue
-          try {
-            if (iframeDoc.documentElement) {
-              iframeDoc.documentElement.innerHTML = htmlContent;
-              
-              setTimeout(() => {
-                try {
-                  if (iframe.contentWindow) {
-                    iframe.contentWindow.focus();
-                    iframe.contentWindow.print();
-                  }
-                  setTimeout(cleanupIframe, 2000);
-                } catch (printError) {
-                  cleanupIframe();
-                  downloadPrintFile(htmlContent, titleDocument, numero);
-                }
-              }, 1000);
-              
-            } else {
-              // Si documentElement est null, créer le document manuellement
-              iframeDoc.open();
-              iframeDoc.write('<!DOCTYPE html><html><head></head><body></body></html>');
-              iframeDoc.close();
-              
-              setTimeout(() => {
-                if (iframeDoc.documentElement) {
-                  iframeDoc.documentElement.innerHTML = htmlContent;
-                  
-                  setTimeout(() => {
-                    try {
-                      if (iframe.contentWindow) {
-                        iframe.contentWindow.focus();
-                        iframe.contentWindow.print();
-                      }
-                      setTimeout(cleanupIframe, 2000);
-                    } catch (printError) {
-                      cleanupIframe();
-                      downloadPrintFile(htmlContent, titleDocument, numero);
-                    }
-                  }, 500);
-                } else {
-                  cleanupIframe();
-                  downloadPrintFile(htmlContent, titleDocument, numero);
-                }
-              }, 100);
-            }
-          } catch (innerError) {
-            console.warn("innerHTML également échoué:", innerError);
-            cleanupIframe();
-            downloadPrintFile(htmlContent, titleDocument, numero);
-          }
-        }
-        
-      } else {
-        cleanupIframe();
-        downloadPrintFile(htmlContent, titleDocument, numero);
-      }
-      
-      // Timeout de sécurité global
-      setTimeout(() => {
-        cleanupIframe();
-      }, 10000);
-      
-    } catch (error) {
-      console.error("Erreur dans handleMobilePrint:", error);
-      downloadPrintFile(htmlContent, titleDocument, numero);
-    }
-  };
-
-  // 💻 Gestion impression desktop améliorée - VERSION CORRIGÉE ROBUSTE
+  // 💻 Gestion impression desktop simplifiée
   const handleDesktopPrint = (htmlContent, titleDocument, numero) => {
     try {
-      const printWindow = window.open("", "_blank", "width=800,height=600,scrollbars=yes,resizable=yes");
+      const printWindow = window.open("", "_blank", "width=900,height=700,scrollbars=yes,resizable=yes");
       
-      if (printWindow && printWindow.document) {
-        try {
-          // Méthode 1: Essayer avec document.write() (plus fiable)
-          printWindow.document.open();
-          printWindow.document.write(htmlContent);
-          printWindow.document.close();
-          
-          // Attendre le chargement complet
-          setTimeout(() => {
-            try {
-              printWindow.focus();
-              printWindow.print();
-              
-              // Fermer après impression
-              setTimeout(() => {
-                if (printWindow && !printWindow.closed) {
-                  printWindow.close();
-                }
-              }, 1000);
-              
-            } catch (printError) {
-              console.warn("Erreur d'impression:", printError);
-              if (printWindow && !printWindow.closed) {
-                printWindow.close();
-              }
-            }
-          }, 500);
-          
-        } catch (writeError) {
-          console.warn("document.write() échoué pour popup, essai avec innerHTML:", writeError);
-          
-          // Méthode 2: Fallback avec innerHTML
+      if (printWindow) {
+        printWindow.document.open();
+        printWindow.document.write(htmlContent);
+        printWindow.document.close();
+        
+        // Attendre le chargement puis imprimer
+        setTimeout(() => {
           try {
-            if (printWindow.document.documentElement) {
-              printWindow.document.documentElement.innerHTML = htmlContent;
-              
-              setTimeout(() => {
-                try {
-                  printWindow.focus();
-                  printWindow.print();
-                  setTimeout(() => {
-                    if (printWindow && !printWindow.closed) {
-                      printWindow.close();
-                    }
-                  }, 1000);
-                } catch (printError) {
-                  if (printWindow && !printWindow.closed) {
-                    printWindow.close();
-                  }
-                }
-              }, 500);
-            } else {
+            printWindow.focus();
+            printWindow.print();
+            setTimeout(() => {
               if (printWindow && !printWindow.closed) {
                 printWindow.close();
               }
-              downloadPrintFile(htmlContent, titleDocument, numero);
-            }
-          } catch (innerError) {
-            console.warn("innerHTML également échoué pour popup:", innerError);
+            }, 1000);
+          } catch (error) {
+            console.warn("Erreur d'impression:", error);
             if (printWindow && !printWindow.closed) {
               printWindow.close();
             }
-            downloadPrintFile(htmlContent, titleDocument, numero);
           }
-        }
+        }, 500);
         
       } else {
         // Fallback si popup bloquée
-        showNotification("Popups bloquées - Téléchargement du document...", "info");
         downloadPrintFile(htmlContent, titleDocument, numero);
       }
       
@@ -598,47 +426,30 @@ export default function DevisFactures() {
 
   // 💾 Fonction de téléchargement de secours
   const downloadPrintFile = (htmlContent, titleDocument, numero) => {
-    const blob = new Blob([htmlContent], { type: 'text/html;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    
-    link.href = url;
-    link.download = `${titleDocument}_${numero}_${new Date().toISOString().slice(0, 10)}.html`;
-    link.style.display = 'none';
-    
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
-    showNotification(`${titleDocument} téléchargé ! Ouvrez le fichier pour imprimer.`, "info");
+    try {
+      const blob = new Blob([htmlContent], { type: 'text/html;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      
+      link.href = url;
+      link.download = `${titleDocument}_${numero}_${new Date().toISOString().slice(0, 10)}.html`;
+      link.style.display = 'none';
+      
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (error) {
+      console.error("Erreur lors du téléchargement:", error);
+      showNotification("Erreur lors du téléchargement", "error");
+    }
   };
 
-  // Fonction helper pour générer le HTML d'impression optimisé - VERSION CORRIGÉE
+  // ✨ Fonction helper pour générer le HTML d'impression CORRIGÉE ✨
   const generatePrintHTML = (docData, articles, total, cachetHtml, isFacture, titleDocument, isMobileDevice = false) => {
     const primaryColor = isFacture ? "#667eea" : "#10b981";
     const secondaryColor = isFacture ? "#764ba2" : "#059669";
-    
-    // 📱 Adaptations pour les petites dimensions
-    const mobileOptimizations = isMobileDevice ? {
-      fontSize: "12px",
-      headerPadding: "20px 15px",
-      contentPadding: "25px 15px",
-      titleSize: "1.8em",
-      badgeSize: "1em",
-      cardPadding: "15px",
-      tablePadding: "8px 6px",
-      sectionGap: "20px"
-    } : {
-      fontSize: "14px",
-      headerPadding: "40px",
-      contentPadding: "50px",
-      titleSize: "2.8em",
-      badgeSize: "1.4em",
-      cardPadding: "30px",
-      tablePadding: "18px 15px",
-      sectionGap: "40px"
-    };
     
     return `<!DOCTYPE html>
       <html lang="fr">
@@ -658,36 +469,31 @@ export default function DevisFactures() {
             body { 
               font-family: 'Inter', Arial, sans-serif; 
               margin: 0;
-              padding: ${isMobileDevice ? '5px' : '10px'};
+              padding: 15px;
               background: white;
               color: #2d3748;
-              font-size: ${isMobileDevice ? '10px' : '12px'};
-              line-height: 1.3;
+              font-size: 14px;
+              line-height: 1.4;
               -webkit-print-color-adjust: exact !important;
               print-color-adjust: exact !important;
-              height: 100vh;
-              overflow: hidden;
             }
             
             .document-container {
               background: white;
-              max-width: 100%;
+              max-width: 800px;
               margin: 0 auto;
-              border-radius: 0;
+              border-radius: 8px;
               overflow: hidden;
               position: relative;
-              height: ${isMobileDevice ? 'calc(100vh - 10px)' : 'calc(100vh - 20px)'};
-              display: flex;
-              flex-direction: column;
+              min-height: auto;
             }
             
             .header-section {
               background: linear-gradient(135deg, ${primaryColor} 0%, ${secondaryColor} 100%);
-              padding: ${isMobileDevice ? '15px 10px' : '20px 15px'};
+              padding: 20px;
               text-align: center;
               position: relative;
               overflow: hidden;
-              flex-shrink: 0;
               -webkit-print-color-adjust: exact !important;
               print-color-adjust: exact !important;
             }
@@ -699,88 +505,75 @@ export default function DevisFactures() {
             
             .company-title {
               color: white;
-              font-size: ${isMobileDevice ? '1.4em' : '1.8em'};
+              font-size: 1.8em;
               font-weight: 800;
-              margin-bottom: ${isMobileDevice ? '5px' : '8px'};
+              margin-bottom: 8px;
               text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
-              letter-spacing: ${isMobileDevice ? '0.5px' : '1px'};
-              word-wrap: break-word;
+              letter-spacing: 1px;
             }
             
             .document-badge {
               background: rgba(255,255,255,0.9);
               color: ${primaryColor};
-              padding: ${isMobileDevice ? '4px 12px' : '6px 16px'};
+              padding: 8px 16px;
               border-radius: 20px;
-              font-size: ${isMobileDevice ? '0.8em' : '1em'};
+              font-size: 1em;
               font-weight: 700;
               text-transform: uppercase;
-              letter-spacing: ${isMobileDevice ? '0.5px' : '1px'};
+              letter-spacing: 1px;
               display: inline-block;
               border: 1px solid rgba(255,255,255,0.3);
             }
             
             .document-number {
               color: #e2e8f0;
-              font-size: ${isMobileDevice ? '0.7em' : '0.8em'};
+              font-size: 0.9em;
               font-weight: 600;
-              margin-top: ${isMobileDevice ? '4px' : '6px'};
+              margin-top: 8px;
               letter-spacing: 0.5px;
             }
             
             .content-wrapper {
-              padding: ${isMobileDevice ? '15px 10px' : '20px 15px'};
-              flex: 1;
-              overflow: hidden;
-              display: flex;
-              flex-direction: column;
+              padding: 25px;
             }
             
             .info-section {
               display: grid;
-              grid-template-columns: ${isMobileDevice ? '1fr 1fr' : '1fr 1fr 1fr 1fr'};
-              gap: ${isMobileDevice ? '8px' : '12px'};
-              margin-bottom: ${isMobileDevice ? '12px' : '15px'};
-              flex-shrink: 0;
+              grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+              gap: 15px;
+              margin-bottom: 25px;
             }
             
             .info-card {
               background: linear-gradient(135deg, #f8fafc 0%, #edf2f7 100%);
-              padding: ${isMobileDevice ? '8px' : '12px'};
-              border-radius: ${isMobileDevice ? '6px' : '8px'};
-              border-left: ${isMobileDevice ? '2px' : '3px'} solid ${primaryColor};
+              padding: 15px;
+              border-radius: 8px;
+              border-left: 3px solid ${primaryColor};
               box-shadow: 0 2px 8px rgba(0,0,0,0.05);
-              position: relative;
-              overflow: hidden;
             }
             
             .info-label {
               color: #4a5568;
               font-weight: 700;
-              font-size: ${isMobileDevice ? '0.6em' : '0.7em'};
+              font-size: 0.75em;
               text-transform: uppercase;
-              letter-spacing: ${isMobileDevice ? '0.5px' : '1px'};
-              margin-bottom: ${isMobileDevice ? '3px' : '4px'};
-              position: relative;
-              z-index: 2;
+              letter-spacing: 1px;
+              margin-bottom: 5px;
             }
             
             .info-value {
               color: #1a202c;
               font-weight: 700;
-              font-size: ${isMobileDevice ? '0.8em' : '0.9em'};
-              position: relative;
-              z-index: 2;
+              font-size: 1em;
               word-wrap: break-word;
-              line-height: 1.2;
             }
             
             .status-badge {
               display: inline-block;
-              padding: ${isMobileDevice ? '6px 12px' : '10px 20px'};
+              padding: 10px 20px;
               border-radius: 30px;
               font-weight: 700;
-              font-size: ${isMobileDevice ? '0.8em' : '0.9em'};
+              font-size: 0.9em;
               text-transform: uppercase;
               letter-spacing: 1px;
               background: linear-gradient(135deg, ${primaryColor} 0%, ${secondaryColor} 100%);
@@ -789,46 +582,45 @@ export default function DevisFactures() {
               print-color-adjust: exact !important;
             }
             
+            /* ✅ CORRECTION: Section articles avec hauteur normale */
             .articles-section {
-              margin: ${isMobileDevice ? '10px 0' : '15px 0'};
-              flex: 1;
-              overflow: hidden;
-              display: flex;
-              flex-direction: column;
+              margin: 20px 0;
+              /* Suppression de flex: 1 qui causait l'expansion */
             }
             
             .section-title {
               color: ${primaryColor};
-              font-size: ${isMobileDevice ? '1em' : '1.2em'};
+              font-size: 1.3em;
               font-weight: 800;
-              margin-bottom: ${isMobileDevice ? '8px' : '10px'};
+              margin-bottom: 15px;
               text-align: center;
               text-transform: uppercase;
-              letter-spacing: ${isMobileDevice ? '0.5px' : '1px'};
+              letter-spacing: 1px;
               position: relative;
-              flex-shrink: 0;
             }
             
             .section-title::after {
               content: '';
               position: absolute;
-              bottom: -2px;
+              bottom: -3px;
               left: 50%;
               transform: translateX(-50%);
-              width: ${isMobileDevice ? '40px' : '60px'};
-              height: 2px;
+              width: 60px;
+              height: 3px;
               background: linear-gradient(90deg, ${primaryColor} 0%, ${secondaryColor} 100%);
-              border-radius: 1px;
+              border-radius: 2px;
             }
             
+            /* ✅ CORRECTION: Tableau articles avec hauteur contrôlée */
             .articles-table {
               width: 100%;
               border-collapse: collapse;
-              border-radius: ${isMobileDevice ? '4px' : '6px'};
+              border-radius: 8px;
               overflow: hidden;
-              margin: ${isMobileDevice ? '8px 0' : '10px 0'};
-              font-size: ${isMobileDevice ? '0.75em' : '0.85em'};
-              flex: 1;
+              margin: 15px 0;
+              font-size: 0.9em;
+              /* Hauteur automatique basée sur le contenu */
+              height: auto;
             }
             
             .articles-table thead {
@@ -838,15 +630,14 @@ export default function DevisFactures() {
             }
             
             .articles-table th {
-              padding: ${mobileOptimizations.tablePadding};
+              padding: 12px 10px;
               text-align: center;
               color: white;
               font-weight: 700;
-              font-size: ${isMobileDevice ? '0.8em' : '0.9em'};
+              font-size: 0.85em;
               text-transform: uppercase;
               letter-spacing: 1px;
               border-right: 1px solid rgba(255,255,255,0.1);
-              word-wrap: break-word;
             }
             
             .articles-table th:last-child {
@@ -855,27 +646,30 @@ export default function DevisFactures() {
             
             .articles-table tbody tr {
               background: white;
-              page-break-inside: avoid;
             }
             
             .articles-table tbody tr:nth-child(even) {
               background: #f8fafc;
             }
             
+            /* ✅ CORRECTION: Padding normal pour les cellules */
             .articles-table td {
-              padding: ${mobileOptimizations.tablePadding};
+              padding: 10px 8px;
               text-align: center;
               border-bottom: 1px solid #e2e8f0;
               font-weight: 600;
               word-wrap: break-word;
-              font-size: ${isMobileDevice ? '0.85em' : '1em'};
+              font-size: 0.9em;
+              /* Hauteur automatique */
+              height: auto;
+              vertical-align: middle;
             }
             
             .product-name {
               font-weight: 700;
               color: #2d3748;
               text-align: left;
-              max-width: ${isMobileDevice ? '120px' : '200px'};
+              max-width: 200px;
               word-wrap: break-word;
               overflow-wrap: break-word;
             }
@@ -883,7 +677,7 @@ export default function DevisFactures() {
             .price-cell {
               color: ${primaryColor};
               font-weight: 800;
-              font-size: ${isMobileDevice ? '0.9em' : '1.1em'};
+              font-size: 1em;
             }
             
             .quantity-cell {
@@ -891,7 +685,7 @@ export default function DevisFactures() {
               color: ${primaryColor};
               font-weight: 800;
               border-radius: 6px;
-              padding: ${isMobileDevice ? '4px 8px' : '8px 12px'};
+              padding: 6px 10px;
             }
             
             .discount-cell {
@@ -903,20 +697,19 @@ export default function DevisFactures() {
               background: linear-gradient(135deg, ${primaryColor}20 0%, ${secondaryColor}20 100%);
               color: ${primaryColor};
               font-weight: 900;
-              font-size: ${isMobileDevice ? '0.95em' : '1.15em'};
+              font-size: 1.1em;
               border-radius: 6px;
             }
             
             .grand-total-section {
-              margin: ${isMobileDevice ? '25px 0' : '50px 0'};
-              padding: ${isMobileDevice ? '20px 15px' : '40px'};
+              margin: 30px 0;
+              padding: 25px;
               background: linear-gradient(135deg, ${primaryColor} 0%, ${secondaryColor} 100%);
-              border-radius: ${isMobileDevice ? '10px' : '20px'};
+              border-radius: 15px;
               color: white;
               text-align: center;
               position: relative;
               overflow: hidden;
-              page-break-inside: avoid;
               -webkit-print-color-adjust: exact !important;
               print-color-adjust: exact !important;
             }
@@ -927,50 +720,47 @@ export default function DevisFactures() {
             }
             
             .total-label {
-              font-size: ${isMobileDevice ? '1.1em' : '1.4em'};
+              font-size: 1.2em;
               font-weight: 600;
-              margin-bottom: ${isMobileDevice ? '8px' : '15px'};
+              margin-bottom: 10px;
               text-transform: uppercase;
-              letter-spacing: ${isMobileDevice ? '1px' : '2px'};
+              letter-spacing: 1px;
               opacity: 0.9;
             }
             
             .total-amount {
-              font-size: ${isMobileDevice ? '2em' : '3em'};
+              font-size: 2.5em;
               font-weight: 900;
               text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
-              margin-bottom: ${isMobileDevice ? '10px' : '20px'};
-              word-wrap: break-word;
+              margin-bottom: 15px;
             }
             
             .total-note {
-              font-size: ${isMobileDevice ? '0.85em' : '1em'};
+              font-size: 0.9em;
               opacity: 0.8;
               font-style: italic;
-              padding-top: ${isMobileDevice ? '10px' : '20px'};
+              padding-top: 15px;
               border-top: 2px solid rgba(255,255,255,0.3);
             }
             
             .signature-section {
-              margin: ${isMobileDevice ? '30px 0' : '60px 0'};
-              display: ${isMobileDevice ? 'block' : 'flex'};
+              margin: 40px 0;
+              display: flex;
               justify-content: space-between;
               align-items: flex-end;
-              gap: ${isMobileDevice ? '20px' : '40px'};
-              page-break-inside: avoid;
+              gap: 30px;
             }
             
             .signature-box {
               text-align: center;
               flex: 1;
-              max-width: ${isMobileDevice ? '100%' : '200px'};
-              margin-bottom: ${isMobileDevice ? '20px' : '0'};
+              max-width: 200px;
             }
             
             .signature-area {
-              height: ${isMobileDevice ? '50px' : '80px'};
-              border-bottom: ${isMobileDevice ? '2px' : '3px'} solid #cbd5e0;
-              margin-bottom: ${isMobileDevice ? '8px' : '15px'};
+              height: 60px;
+              border-bottom: 2px solid #cbd5e0;
+              margin-bottom: 10px;
               position: relative;
               background: linear-gradient(135deg, #f7fafc 0%, #edf2f7 100%);
               border-radius: 8px 8px 0 0;
@@ -979,36 +769,32 @@ export default function DevisFactures() {
             .signature-label {
               font-weight: 700;
               color: #4a5568;
-              font-size: ${isMobileDevice ? '0.8em' : '0.9em'};
+              font-size: 0.85em;
               text-transform: uppercase;
               letter-spacing: 1px;
             }
             
             .footer-section {
               background: linear-gradient(135deg, #1a202c 0%, #2d3748 100%);
-              padding: ${isMobileDevice ? '10px 8px' : '12px 10px'};
+              padding: 20px;
               text-align: center;
               color: white;
               position: relative;
-              flex-shrink: 0;
               -webkit-print-color-adjust: exact !important;
               print-color-adjust: exact !important;
             }
             
             .footer-message {
-              font-size: ${isMobileDevice ? '0.8em' : '0.9em'};
+              font-size: 1em;
               font-weight: 600;
-              margin-bottom: ${isMobileDevice ? '4px' : '6px'};
+              margin-bottom: 8px;
               font-style: italic;
-              word-wrap: break-word;
-              line-height: 1.2;
             }
             
             .print-info {
               color: #a0aec0;
-              font-size: ${isMobileDevice ? '0.5em' : '0.6em'};
-              margin-top: ${isMobileDevice ? '4px' : '6px'};
-              line-height: 1.1;
+              font-size: 0.7em;
+              margin-top: 8px;
             }
             
             .watermark {
@@ -1016,8 +802,8 @@ export default function DevisFactures() {
               top: 50%;
               left: 50%;
               transform: translate(-50%, -50%) rotate(-20deg);
-              font-size: ${isMobileDevice ? '60px' : '80px'};
-              color: rgba(102, 126, 234, 0.02);
+              font-size: 100px;
+              color: rgba(102, 126, 234, 0.03);
               font-weight: 900;
               z-index: 1;
               pointer-events: none;
@@ -1026,56 +812,23 @@ export default function DevisFactures() {
             
             .document-type-indicator {
               position: absolute;
-              top: ${isMobileDevice ? '8px' : '10px'};
-              right: ${isMobileDevice ? '8px' : '10px'};
+              top: 10px;
+              right: 10px;
               background: rgba(255,255,255,0.9);
               color: ${primaryColor};
-              padding: ${isMobileDevice ? '3px 8px' : '4px 10px'};
+              padding: 5px 12px;
               border-radius: 15px;
-              font-size: ${isMobileDevice ? '0.5em' : '0.6em'};
+              font-size: 0.7em;
               font-weight: 700;
               text-transform: uppercase;
               letter-spacing: 0.5px;
               border: 1px solid rgba(255,255,255,0.3);
             }
             
-            /* 📱 Optimisations spéciales pour mobile */
-            ${isMobileDevice ? `
-              .info-section {
-                grid-template-columns: 1fr !important;
-              }
-              
-              .signature-section {
-                display: block !important;
-              }
-              
-              .signature-section .signature-box {
-                margin-bottom: 25px;
-              }
-              
-              .signature-section .signature-box:last-child {
-                margin-bottom: 0;
-              }
-              
-              .articles-table {
-                font-size: 0.8em;
-              }
-              
-              .articles-table th,
-              .articles-table td {
-                padding: 6px 4px;
-              }
-              
-              .product-name {
-                max-width: 100px;
-                font-size: 0.85em;
-              }
-            ` : ''}
-            
-            /* 🖨️ Optimisations d'impression - TOUT SUR UNE PAGE */
+            /* 🖨️ Optimisations d'impression */
             @media print {
               @page {
-                margin: 0.3cm;
+                margin: 1cm;
                 size: A4;
               }
               
@@ -1084,91 +837,86 @@ export default function DevisFactures() {
                 padding: 0 !important;
                 -webkit-print-color-adjust: exact !important;
                 print-color-adjust: exact !important;
-                height: 29.7cm !important;
-                overflow: hidden !important;
-                font-size: 10px !important;
+                font-size: 12px !important;
               }
               
               .document-container {
                 box-shadow: none !important;
                 border-radius: 0 !important;
                 max-width: none !important;
-                height: 29.7cm !important;
                 page-break-inside: avoid !important;
-                display: flex !important;
-                flex-direction: column !important;
               }
               
               .header-section {
-                padding: 12px 10px !important;
-                flex-shrink: 0 !important;
+                padding: 15px !important;
                 -webkit-print-color-adjust: exact !important;
                 print-color-adjust: exact !important;
               }
               
               .content-wrapper {
-                padding: 15px 10px !important;
-                flex: 1 !important;
-                overflow: hidden !important;
+                padding: 20px !important;
               }
               
               .info-section {
-                grid-template-columns: 1fr 1fr 1fr 1fr !important;
-                gap: 8px !important;
-                margin-bottom: 10px !important;
+                grid-template-columns: repeat(2, 1fr) !important;
+                gap: 10px !important;
+                margin-bottom: 20px !important;
               }
               
               .info-card {
-                padding: 6px !important;
+                padding: 10px !important;
                 border-radius: 4px !important;
               }
               
+              /* ✅ CORRECTION: Articles normalisés pour impression */
+              .articles-section {
+                margin: 15px 0 !important;
+              }
+              
               .articles-table {
-                font-size: 9px !important;
-                margin: 8px 0 !important;
+                font-size: 10px !important;
+                margin: 10px 0 !important;
               }
               
               .articles-table th,
               .articles-table td {
-                padding: 3px 2px !important;
-                font-size: 8px !important;
+                padding: 6px 4px !important;
+                font-size: 9px !important;
               }
               
               .product-name {
-                font-size: 8px !important;
-                max-width: 60px !important;
+                font-size: 9px !important;
+                max-width: 120px !important;
               }
               
               .grand-total-section {
-                margin: 8px 0 !important;
-                padding: 10px !important;
-                flex-shrink: 0 !important;
+                margin: 15px 0 !important;
+                padding: 15px !important;
               }
               
               .total-amount {
-                font-size: 1.3em !important;
+                font-size: 1.8em !important;
               }
               
               .signature-section {
-                margin: 10px 0 5px 0 !important;
-                flex-shrink: 0 !important;
+                margin: 20px 0 !important;
+                flex-direction: row !important;
               }
               
               .signature-area {
-                height: 25px !important;
+                height: 40px !important;
               }
               
               .footer-section {
-                padding: 8px 6px !important;
-                flex-shrink: 0 !important;
+                padding: 12px !important;
               }
               
               .footer-message {
-                font-size: 0.7em !important;
+                font-size: 0.8em !important;
               }
               
               .print-info {
-                font-size: 0.5em !important;
+                font-size: 0.6em !important;
               }
               
               /* Forcer les couleurs pour l'impression */
@@ -1194,48 +942,44 @@ export default function DevisFactures() {
                 break-inside: avoid !important;
               }
               
-              .articles-table {
-                page-break-inside: avoid !important;
-                break-inside: avoid !important;
-              }
-              
-              /* Masquer le filigrane en impression pour économiser l'encre */
+              /* Masquer le filigrane en impression */
               .watermark {
                 display: none !important;
               }
             }
             
-            /* 📱 Styles spéciaux pour très petits écrans */
-            @media screen and (max-width: 480px) {
+            /* 📱 Styles pour mobile/tablette */
+            @media screen and (max-width: 768px) {
               body {
-                font-size: 9px !important;
+                font-size: 12px !important;
+                padding: 10px !important;
               }
               
               .company-title {
-                font-size: 1.2em !important;
+                font-size: 1.4em !important;
               }
               
               .info-section {
                 grid-template-columns: 1fr !important;
-                gap: 6px !important;
+                gap: 10px !important;
               }
               
               .articles-table {
-                font-size: 0.7em !important;
+                font-size: 0.8em !important;
               }
               
               .product-name {
-                max-width: 60px !important;
-                font-size: 0.7em !important;
+                max-width: 100px !important;
+                font-size: 0.8em !important;
               }
               
               .total-amount {
-                font-size: 1.2em !important;
+                font-size: 1.8em !important;
               }
               
               .signature-section {
                 flex-direction: column !important;
-                gap: 10px !important;
+                gap: 15px !important;
               }
               
               .signature-box {

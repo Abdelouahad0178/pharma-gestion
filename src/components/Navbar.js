@@ -1,5 +1,4 @@
-// src/components/Navbar.js
-import React, { useState, useEffect } from "react";
+import React, { useState } from "react";
 import { Link, useNavigate, useLocation } from "react-router-dom";
 import {
   AppBar,
@@ -13,8 +12,7 @@ import {
   ListItemText,
   Box,
   Button,
-  Divider,
-  Chip
+  Divider
 } from "@mui/material";
 import {
   Menu as MenuIcon,
@@ -25,51 +23,34 @@ import {
   Description as DescriptionIcon,
   AttachMoney as AttachMoneyIcon,
   Settings as SettingsIcon,
+  People as PeopleIcon, // NOUVEAU : Icône pour la gestion des utilisateurs
+  PersonAdd as PersonAddIcon, // NOUVEAU : Icône pour les invitations
   Logout as LogoutIcon,
-  Business as BusinessIcon,
 } from "@mui/icons-material";
 
 import { signOut } from "firebase/auth";
-import { auth, db } from "../firebase/config";
-import { doc, getDoc } from "firebase/firestore";
+import { auth } from "../firebase/config";
 import { useUserRole } from "../contexts/UserRoleContext";
 
 export default function Navbar() {
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const [societeNom, setSocieteNom] = useState("");
   const navigate = useNavigate();
   const location = useLocation();
-  const { role, loading, societeId } = useUserRole();
-
-  // Charger le nom de la société
-  useEffect(() => {
-    const fetchSocieteNom = async () => {
-      if (societeId) {
-        try {
-          const societeDoc = await getDoc(doc(db, "societes", societeId));
-          if (societeDoc.exists()) {
-            setSocieteNom(societeDoc.data().nom || "Société");
-          }
-        } catch (e) {
-          console.error("Erreur chargement société:", e);
-        }
-      } else {
-        setSocieteNom("");
-      }
-    };
-    fetchSocieteNom();
-  }, [societeId]);
+  const { role, loading } = useUserRole();
 
   // Menus visibles selon le rôle
+  // - Docteur: tous
+  // - Vendeuse: pas de Paramètres, ni Achats, ni Gestion Utilisateurs, ni Invitations
   const menuItems = [
     { text: "Dashboard", icon: <DashboardIcon />, path: "/dashboard", allowed: ["docteur", "vendeuse"] },
-    { text: "Achats", icon: <ShoppingCartIcon />, path: "/achats", allowed: ["docteur"] },
+    { text: "Achats", icon: <ShoppingCartIcon />, path: "/achats", allowed: ["docteur"] }, // Docteur uniquement
     { text: "Ventes", icon: <PointOfSaleIcon />, path: "/ventes", allowed: ["docteur", "vendeuse"] },
     { text: "Stock", icon: <LocalPharmacyIcon />, path: "/stock", allowed: ["docteur", "vendeuse"] },
     { text: "Devis & Factures", icon: <DescriptionIcon />, path: "/devis-factures", allowed: ["docteur", "vendeuse"] },
     { text: "Paiements", icon: <AttachMoneyIcon />, path: "/paiements", allowed: ["docteur", "vendeuse"] },
-    { text: "Paramètres", icon: <SettingsIcon />, path: "/parametres", allowed: ["docteur"] },
-    { text: "Ma Société", icon: <BusinessIcon />, path: "/societe", allowed: ["docteur", "vendeuse"] },
+    { text: "Gestion Utilisateurs", icon: <PeopleIcon />, path: "/gestion-utilisateurs", allowed: ["docteur"] }, // NOUVEAU
+    { text: "Invitations", icon: <PersonAddIcon />, path: "/gestion-invitations", allowed: ["docteur"] }, // NOUVEAU
+    { text: "Paramètres", icon: <SettingsIcon />, path: "/parametres", allowed: ["docteur"] }, // Docteur uniquement
   ];
 
   const handleLogout = async () => {
@@ -104,28 +85,7 @@ export default function Navbar() {
       >
         💊 Pharma Gestion
       </Typography>
-      
-      {/* Affichage de la société */}
-      {societeNom && (
-        <Box sx={{ px: 2, pb: 1 }}>
-          <Chip
-            icon={<BusinessIcon />}
-            label={societeNom}
-            sx={{
-              width: "100%",
-              background: "rgba(255,255,255,0.15)",
-              color: "#7ee4e6",
-              fontWeight: 600,
-              '& .MuiChip-icon': {
-                color: "#7ee4e6"
-              }
-            }}
-          />
-        </Box>
-      )}
-      
       <Divider sx={{ bgcolor: "#fff3", mb: 2 }} />
-      
       <List>
         {menuItems
           .filter(item => item.allowed.includes(role))
@@ -139,7 +99,6 @@ export default function Navbar() {
                 color: location.pathname === item.path ? "#1976d2" : "#fff",
                 background: location.pathname === item.path ? "#fff" : "transparent",
                 my: 0.5,
-                mx: 1,
                 borderRadius: 2,
                 "&:hover": {
                   background: "#fff3",
@@ -152,19 +111,7 @@ export default function Navbar() {
             </ListItemButton>
           ))}
       </List>
-      
       <Divider sx={{ bgcolor: "#fff3", mt: 2 }} />
-      
-      {/* Affichage du rôle */}
-      <Box sx={{ px: 2, py: 1 }}>
-        <Typography variant="caption" sx={{ color: "#98c4f9" }}>
-          Connecté en tant que :
-        </Typography>
-        <Typography variant="body2" sx={{ color: "#fff", fontWeight: 600 }}>
-          {role === "docteur" ? "Pharmacien (Admin)" : "Vendeuse"}
-        </Typography>
-      </Box>
-      
       <Box sx={{ textAlign: "center", my: 2 }}>
         <Button
           variant="contained"
@@ -207,7 +154,6 @@ export default function Navbar() {
           >
             <MenuIcon />
           </IconButton>
-          
           <Typography
             variant="h6"
             sx={{
@@ -215,50 +161,11 @@ export default function Navbar() {
               fontFamily: "'Montserrat', 'Segoe UI', Arial, sans-serif",
               fontWeight: 700,
               letterSpacing: "1.5px",
-              textShadow: "0 1px 10px #0003",
-              display: "flex",
-              alignItems: "center",
-              gap: 2
+              textShadow: "0 1px 10px #0003"
             }}
           >
             💊 Pharma Gestion
-            {societeNom && (
-              <Chip
-                icon={<BusinessIcon />}
-                label={societeNom}
-                size="small"
-                sx={{
-                  background: "rgba(255,255,255,0.2)",
-                  color: "#fff",
-                  fontWeight: 600,
-                  '& .MuiChip-icon': {
-                    color: "#7ee4e6"
-                  }
-                }}
-              />
-            )}
           </Typography>
-          
-          {/* Bouton pour gérer la société */}
-          {societeId && (
-            <Button
-              color="inherit"
-              onClick={() => navigate("/societe")}
-              startIcon={<BusinessIcon />}
-              sx={{
-                fontWeight: 600,
-                bgcolor: "#fff2",
-                borderRadius: 2,
-                px: 2,
-                mr: 1,
-                transition: "background 0.2s",
-                "&:hover": { bgcolor: "#fff5", color: "#1976d2" }
-              }}
-            >
-              Ma Société
-            </Button>
-          )}
-          
           <Button
             color="inherit"
             onClick={handleLogout}

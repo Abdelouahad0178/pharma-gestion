@@ -1,113 +1,48 @@
+// src/components/Protected.js
 import React from "react";
 import { useUserRole } from "../contexts/UserRoleContext";
 
 export default function Protected({ permission, children }) {
-  const { loading, user, can, error } = useUserRole();
+  const { loading, user, userActive, can } = useUserRole();
 
   // En cours de chargement
-  if (loading) {
-    return (
-      <div style={{ 
-        padding: 40, 
-        textAlign: "center",
-        minHeight: "60vh",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        flexDirection: "column"
-      }}>
-        <div style={{ fontSize: "1.2rem", color: "#1c355e", marginBottom: "10px" }}>
-          Chargement...
-        </div>
-        <div style={{ fontSize: "0.9rem", color: "#7a8fa8" }}>
-          Vérification des permissions...
-        </div>
-      </div>
-    );
-  }
-
-  // Si erreur
-  if (error) {
-    return (
-      <div style={{ 
-        padding: 40, 
-        textAlign: "center", 
-        color: "#a32",
-        minHeight: "60vh",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        flexDirection: "column"
-      }}>
-        <div style={{ fontSize: "1.2rem", marginBottom: "10px" }}>
-          ⚠️ Erreur de chargement
-        </div>
-        <div style={{ fontSize: "0.9rem" }}>
-          {error}
-        </div>
-        <button 
-          onClick={() => window.location.reload()} 
-          style={{
-            marginTop: "20px",
-            padding: "10px 20px",
-            backgroundColor: "#3272e0",
-            color: "white",
-            border: "none",
-            borderRadius: "5px",
-            cursor: "pointer"
-          }}
-        >
-          Recharger la page
-        </button>
-      </div>
-    );
-  }
+  if (loading) return <div style={{ padding: 40, textAlign: "center" }}>Chargement...</div>;
 
   // Si non connecté
-  if (!user) {
-    return (
-      <div style={{ 
-        padding: 40, 
-        textAlign: "center", 
-        color: "#a32",
-        minHeight: "60vh",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        flexDirection: "column"
-      }}>
-        <div style={{ fontSize: "1.2rem", marginBottom: "10px" }}>
-          🔒 Non connecté
-        </div>
-        <div style={{ fontSize: "0.9rem" }}>
-          Veuillez vous connecter pour accéder à cette page.
-        </div>
-      </div>
-    );
-  }
+  if (!user) return <div style={{ padding: 40, textAlign: "center", color: "#a32" }}>Non connecté.</div>;
 
-  // Si pas la permission
-  if (permission && !can(permission)) {
+  // Si l'utilisateur n'est pas actif
+  if (!userActive) {
     return (
       <div style={{ 
         padding: 40, 
         textAlign: "center", 
         color: "#bc3453",
-        minHeight: "60vh",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        flexDirection: "column"
+        background: "#ffebee",
+        border: "2px solid #f44336",
+        borderRadius: 8,
+        margin: 20,
+        maxWidth: 600,
+        marginLeft: "auto",
+        marginRight: "auto"
       }}>
-        <div style={{ fontSize: "1.2rem", marginBottom: "10px" }}>
-          🚫 Accès refusé
-        </div>
-        <div style={{ fontSize: "0.9rem" }}>
-          Vous n'avez pas l'autorisation d'accéder à cette page.
-        </div>
-        <div style={{ fontSize: "0.8rem", marginTop: "10px", color: "#7a8fa8" }}>
-          Permission requise: {permission}
-        </div>
+        <h2 style={{ color: "#d32f2f", marginBottom: 15 }}>🚫 Compte désactivé</h2>
+        <p style={{ fontSize: "1.1em", lineHeight: 1.6 }}>
+          Votre compte a été désactivé par un administrateur. 
+          Vous ne pouvez plus accéder aux fonctionnalités de l'application.
+        </p>
+        <p style={{ fontSize: "0.9em", color: "#666", marginTop: 20 }}>
+          Si vous pensez qu'il s'agit d'une erreur, contactez votre responsable ou l'administrateur du système.
+        </p>
+      </div>
+    );
+  }
+
+  // Si pas la permission
+  if (!can(permission)) {
+    return (
+      <div style={{ padding: 40, textAlign: "center", color: "#bc3453" }}>
+        Accès refusé : vous n'avez pas l'autorisation d'accéder à cette page.
       </div>
     );
   }

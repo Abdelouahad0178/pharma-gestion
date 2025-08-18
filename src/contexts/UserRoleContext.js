@@ -1,7 +1,6 @@
-// src/contexts/UserRoleContext.js
 import React, { createContext, useContext, useState, useEffect } from "react";
-import { getAuth, onAuthStateChanged } from "firebase/auth";
-import { doc, getDoc, onSnapshot } from "firebase/firestore";
+import { getAuth, onAuthStateChanged, signOut } from "firebase/auth";
+import { doc, getDoc } from "firebase/firestore";
 import { db } from "../firebase/config";
 
 // Création du contexte
@@ -15,255 +14,158 @@ export function useUserRole() {
 // Provider du contexte
 export function UserRoleProvider({ children }) {
   const [role, setRole] = useState(null);         // ex: "docteur", "vendeuse"
-  const [user, setUser] = useState(null);         // Utilisateur Firebase enrichi
+  const [user, setUser] = useState(null);         // Utilisateur Firebase enrichi (avec societeId)
   const [societeId, setSocieteId] = useState(null); // Id de la société partagée
-  const [loading, setLoading] = useState(true);   // État de chargement
-  const [userDocListener, setUserDocListener] = useState(null); // Pour le listener Firestore
-
-  // Fonction de log pour debug
-  const log = (message, data = null) => {
-    console.log(`[UserRoleContext] ${message}`, data || "");
-  };
-
-  // Fonction pour rafraîchir les données utilisateur
-  const refreshUserData = async () => {
-    const auth = getAuth();
-    const firebaseUser = auth.currentUser;
-    
-    if (firebaseUser) {
-      log("Rafraîchissement des données utilisateur", firebaseUser.uid);
-      try {
-        const userRef = doc(db, "users", firebaseUser.uid);
-        const snap = await getDoc(userRef);
-        
-        if (snap.exists()) {
-          const data = snap.data();
-          setRole(data.role || "vendeuse");
-          setSocieteId(data.societeId || null);
-          setUser({
-            ...firebaseUser,
-            societeId: data.societeId || null,
-            role: data.role || "vendeuse"
-          });
-          log("Données rafraîchies", { role: data.role, societeId: data.societeId });
-        }
-      } catch (e) {
-        log("Erreur lors du rafraîchissement", e);
-      }
-    }
-  };
+  const [societeInfo, setSocieteInfo] = useState(null); // Infos de la société
+  const [loading, setLoading] = useState(true);   // Etat de chargement
+  const [userActive, setUserActive] = useState(true); // Statut actif de l'utilisateur
 
   useEffect(() => {
-    log("Initialisation du contexte utilisateur");
     const auth = getAuth();
-    
-    const unsubscribeAuth = onAuthStateChanged(auth, async (firebaseUser) => {
-      log("Changement d'état d'authentification", firebaseUser?.uid);
+    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       setLoading(true);
-      
-      // Nettoyer l'ancien listener si existe
-      if (userDocListener) {
-        log("Nettoyage de l'ancien listener");
-        userDocListener();
-        setUserDocListener(null);
-      }
-      
       if (firebaseUser) {
         try {
-          log("Utilisateur connecté, récupération des données", firebaseUser.uid);
-          
-          // Configurer un listener en temps réel sur le document utilisateur
+          // Va chercher le document user (avec role + societeId + active)
           const userRef = doc(db, "users", firebaseUser.uid);
+          const snap = await getDoc(userRef);
           
-          const unsubscribeUser = onSnapshot(userRef, (snap) => {
-            if (snap.exists()) {
-              const data = snap.data();
-              log("Données utilisateur mises à jour", data);
-              
-              const userRole = data.role || "vendeuse";
-              const userSocieteId = data.societeId || null;
-              
-              setRole(userRole);
-              setSocieteId(userSocieteId);
-              setUser({
-                ...firebaseUser,
-                societeId: userSocieteId,
-                role: userRole
-              });
-              
-              if (!userSocieteId) {
-                log("Aucune société assignée");
-              } else {
-                log("Société assignée", userSocieteId);
-              }
-              
-              log("Utilisateur configuré avec succès", {
-                uid: firebaseUser.uid,
-                role: userRole,
-                societeId: userSocieteId
-              });
-            } else {
-              log("Document utilisateur inexistant, valeurs par défaut");
-              setRole("vendeuse");
+          if (snap.exists()) {
+            const userData = snap.data();
+            
+            // Vérifier si l'utilisateur est actif
+            const isActive = userData.active !== false; // Par défaut true si le champ n'existe pas
+            
+            if (!isActive) {
+              // L'utilisateur est désactivé, le déconnecter immédiatement
+              await signOut(auth);
+              setRole(null);
               setSocieteId(null);
-              setUser({
-                ...firebaseUser,
-                societeId: null,
-                role: "vendeuse"
-              });
+              setSocieteInfo(null);
+              setUser(null);
+              setUserActive(false);
+              setLoading(false);
+              return;
             }
-            setLoading(false);
-            log("Chargement terminé");
-          }, (error) => {
-            log("Erreur listener Firestore", error);
-            setRole("vendeuse");
-            setSocieteId(null);
+            
+            setRole(userData.role || "vendeuse");
+            setSocieteId(userData.societeId || null);
+            setUserActive(isActive);
+            
+            // Charger les informations de la société si disponible
+            if (userData.societeId) {
+              try {
+                const societeRef = doc(db, "societes", userData.societeId);
+                const societeSnap = await getDoc(societeRef);
+                if (societeSnap.exists()) {
+                  setSocieteInfo(societeSnap.data());
+                } else {
+                  setSocieteInfo(null);
+                }
+              } catch (societeError) {
+                console.error("Erreur lors du chargement des infos société:", societeError);
+                setSocieteInfo(null);
+              }
+            } else {
+              setSocieteInfo(null);
+            }
+            
             setUser({
               ...firebaseUser,
-              societeId: null,
-              role: "vendeuse"
+              societeId: userData.societeId || null,
+              role: userData.role || "vendeuse",
+              active: isActive,
+              isCompanyOwner: userData.isCompanyOwner || false,
+              invitedBy: userData.invitedBy || null
             });
-            setLoading(false);
-          });
-          
-          setUserDocListener(() => unsubscribeUser);
-          
+          } else {
+            // Utilisateur sans document = problème, déconnecter
+            console.warn("Utilisateur sans document user associé");
+            await signOut(auth);
+            setRole(null);
+            setSocieteId(null);
+            setSocieteInfo(null);
+            setUser(null);
+            setUserActive(false);
+          }
         } catch (e) {
-          log("Erreur lors de la récupération des données", e);
-          setRole("vendeuse");
+          console.error("Erreur lors de la vérification du statut utilisateur:", e);
+          // En cas d'erreur, déconnecter par sécurité
+          await signOut(auth);
+          setRole(null);
           setSocieteId(null);
-          setUser({
-            ...firebaseUser,
-            societeId: null,
-            role: "vendeuse"
-          });
-          setLoading(false);
+          setSocieteInfo(null);
+          setUser(null);
+          setUserActive(false);
         }
       } else {
-        log("Utilisateur déconnecté");
         setRole(null);
         setSocieteId(null);
+        setSocieteInfo(null);
         setUser(null);
-        setLoading(false);
+        setUserActive(true);
       }
+      setLoading(false);
     });
-    
-    return () => {
-      log("Nettoyage de l'abonnement");
-      unsubscribeAuth();
-      if (userDocListener) {
-        userDocListener();
-      }
-    };
+    return () => unsubscribe();
   }, []);
 
   // Gestion des permissions
   const can = (permission) => {
+    // Si l'utilisateur n'est pas actif, aucune permission
+    if (!userActive) return false;
+    
     const rolePermissions = {
       docteur: [
         "voir_achats",
-        "ajouter_achat",
-        "modifier_achat",
-        "supprimer_achat",
         "voir_ventes",
-        "ajouter_vente",
-        "modifier_vente",
-        "supprimer_vente",
-        "voir_stock",
         "ajouter_stock",
+        "parametres",
         "modifier_stock",
         "supprimer_stock",
-        "voir_retours",
-        "ajouter_retour",
-        "annuler_retour",
-        "parametres",
-        "gerer_societe",
         "voir_devis_factures",
         "voir_paiements",
         "voir_dashboard",
+        "gerer_utilisateurs", // Gestion des utilisateurs
+        "gerer_invitations",  // Gestion des invitations
+        "gerer_societe",      // Gestion des paramètres de société
       ],
       vendeuse: [
         "voir_ventes",
         "ajouter_vente",
         "voir_stock",
-        "ajouter_stock",
-        "voir_retours",
-        "ajouter_retour",
+        "voir_dashboard",
         "voir_devis_factures",
         "voir_paiements",
-        "voir_dashboard",
       ],
     };
-    
-    if (!role) {
-      log("Permission refusée - pas de rôle:", permission);
-      return false;
-    }
-    
-    // Si docteur, toutes les permissions
-    if (role === "docteur") {
-      log(`Permission ${permission} pour rôle ${role}: true`);
-      return true;
-    }
-    
-    // Sinon vérifier dans la liste des permissions du rôle
-    const hasPermission = (rolePermissions[role] || []).includes(permission);
-    log(`Permission ${permission} pour rôle ${role}: ${hasPermission}`);
-    return hasPermission;
+    if (!role) return false;
+    if (role === "docteur") return true;
+    return (rolePermissions[role] || []).includes(permission);
   };
 
-  // Fonction pour vérifier si l'utilisateur a une société
-  const hasSociete = () => {
-    return societeId !== null && societeId !== undefined && societeId !== "";
+  // Fonction utilitaire pour vérifier si l'utilisateur est propriétaire de la société
+  const isCompanyOwner = () => {
+    return user?.isCompanyOwner === true;
   };
 
-  // Fonctions helper pour les permissions courantes
-  const canModify = () => {
-    // Seul le docteur peut modifier
-    return role === "docteur";
+  // Fonction utilitaire pour obtenir le nom de la société
+  const getSocieteName = () => {
+    return societeInfo?.name || societeId || "Société inconnue";
   };
-
-  const canDelete = () => {
-    // Seul le docteur peut supprimer
-    return role === "docteur";
-  };
-
-  const canViewAchats = () => {
-    return can("voir_achats");
-  };
-
-  const canViewVentes = () => {
-    return can("voir_ventes");
-  };
-
-  const canAddVente = () => {
-    return can("ajouter_vente");
-  };
-
-  const value = {
-    role,
-    user,
-    societeId,
-    loading,
-    can,
-    hasSociete,
-    refreshUserData,
-    canModify,
-    canDelete,
-    canViewAchats,
-    canViewVentes,
-    canAddVente
-  };
-
-  log("Rendu du contexte", {
-    role,
-    societeId,
-    loading,
-    userUid: user?.uid
-  });
 
   return (
-    <UserRoleContext.Provider value={value}>
+    <UserRoleContext.Provider value={{ 
+      role, 
+      user, 
+      societeId, 
+      societeInfo,
+      loading, 
+      userActive, 
+      can,
+      isCompanyOwner,
+      getSocieteName
+    }}>
       {children}
     </UserRoleContext.Provider>
   );

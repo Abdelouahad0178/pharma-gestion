@@ -1,4 +1,3 @@
-// src/App.js
 import React from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import Login from './components/auth/Login';
@@ -11,169 +10,111 @@ import Navbar from './components/Navbar';
 import Parametres from './components/parametres/Parametres';
 import DevisFactures from './components/devisFactures/DevisFactures';
 import Paiements from './components/paiements/Paiements';
-import SocieteManager from './components/SocieteManager';
-import { UserRoleProvider, useUserRole } from './contexts/UserRoleContext';
+import GestionUtilisateurs from './components/admin/GestionUtilisateurs'; // NOUVEAU
+import GestionInvitations from './components/admin/GestionInvitations'; // NOUVEAU  
+import MigrationUtilisateurs from './components/admin/MigrationUtilisateurs'; // NOUVEAU
+import MigrationVersSocietes from './components/admin/MigrationVersSocietes'; // NOUVEAU SAAS
+import { UserRoleProvider } from './contexts/UserRoleContext';
 import Protected from './components/Protected';
+import AddSocieteIdToAllUsers from './components/admin/AddSocieteIdToAllUsers';
 import './styles/main.css';
 
-// Composant pour rediriger si pas de société
-function RequireSociete({ children }) {
-  const { societeId, loading, user } = useUserRole();
-  
-  if (loading) {
-    return (
-      <div style={{ 
-        padding: 50, 
-        textAlign: "center", 
-        color: "#7ee4e6",
-        fontSize: "1.2em"
-      }}>
-        Chargement...
-      </div>
-    );
-  }
-  
-  if (!user) {
-    return <Navigate to="/login" />;
-  }
-  
-  if (!societeId) {
-    return <Navigate to="/societe" />;
-  }
-  
-  return <>{children}</>;
-}
-
-// Wrapper pour masquer la Navbar sur Login/Register et gérer les redirections
+// Wrapper pour masquer la Navbar sur Login/Register
 function AppWrapper() {
   const location = useLocation();
-  const { user, loading, societeId } = useUserRole();
-  
-  const hideNavbar = 
-    location.pathname === "/login" || 
-    location.pathname === "/register" ||
-    location.pathname === "/societe";
-
-  // Si en cours de chargement
-  if (loading) {
-    return (
-      <div style={{ 
-        minHeight: "100vh", 
-        display: "flex", 
-        alignItems: "center", 
-        justifyContent: "center",
-        background: "#223049",
-        color: "#7ee4e6",
-        fontSize: "1.4em"
-      }}>
-        Chargement de l'application...
-      </div>
-    );
-  }
+  const hideNavbar = location.pathname === "/login" || location.pathname === "/register";
 
   return (
     <>
       {!hideNavbar && <Navbar />}
       <div style={{ minHeight: "100vh", background: "#f6f8fa" }}>
         <Routes>
-          {/* Auth - Accessible sans société */}
+          {/* Auth */}
           <Route path="/login" element={<Login />} />
           <Route path="/register" element={<Register />} />
-          
-          {/* Gestion société - Accessible si connecté */}
-          <Route 
-            path="/societe" 
-            element={
-              user ? <SocieteManager /> : <Navigate to="/login" />
-            } 
-          />
 
-          {/* Dashboard - Nécessite société */}
-          <Route 
-            path="/dashboard" 
-            element={
-              <RequireSociete>
-                <Dashboard />
-              </RequireSociete>
-            } 
-          />
+          {/* Dashboard */}
+          <Route path="/dashboard" element={<Dashboard />} />
 
-          {/* Routes protégées (nécessitent société + permissions) */}
+          {/* Routes protégées (avec permissions) */}
           <Route
             path="/achats"
             element={
-              <RequireSociete>
-                <Protected permission="voir_achats">
-                  <Achats />
-                </Protected>
-              </RequireSociete>
+              <Protected permission="voir_achats">
+                <Achats />
+              </Protected>
             }
           />
           <Route
             path="/ventes"
             element={
-              <RequireSociete>
-                <Protected permission="voir_ventes">
-                  <Ventes />
-                </Protected>
-              </RequireSociete>
+              <Protected permission="voir_ventes">
+                <Ventes />
+              </Protected>
             }
           />
           <Route
             path="/stock"
             element={
-              <RequireSociete>
-                <Protected permission="voir_stock">
-                  <Stock />
-                </Protected>
-              </RequireSociete>
+              <Protected permission="ajouter_stock">
+                <Stock />
+              </Protected>
             }
           />
 
-          {/* Modules secondaires - Nécessitent société */}
+          {/* Modules secondaires */}
           <Route
             path="/devis-factures"
             element={
-              <RequireSociete>
-                <Protected permission="voir_devis_factures">
-                  <DevisFactures />
-                </Protected>
-              </RequireSociete>
+              <Protected permission="voir_ventes">
+                <DevisFactures />
+              </Protected>
             }
           />
           <Route
             path="/paiements"
             element={
-              <RequireSociete>
-                <Protected permission="voir_paiements">
-                  <Paiements />
-                </Protected>
-              </RequireSociete>
+              <Protected permission="voir_ventes">
+                <Paiements />
+              </Protected>
             }
           />
           <Route
             path="/parametres"
             element={
-              <RequireSociete>
-                <Protected permission="parametres">
-                  <Parametres />
-                </Protected>
-              </RequireSociete>
+              <Protected permission="parametres">
+                <Parametres />
+              </Protected>
             }
           />
 
-          {/* Redirection par défaut */}
-          <Route 
-            path="/" 
+          {/* NOUVELLE ROUTE : Gestion des utilisateurs (Docteur uniquement) */}
+          <Route
+            path="/gestion-utilisateurs"
             element={
-              user ? (
-                societeId ? <Navigate to="/dashboard" /> : <Navigate to="/societe" />
-              ) : (
-                <Navigate to="/login" />
-              )
-            } 
+              <Protected permission="gerer_utilisateurs">
+                <GestionUtilisateurs />
+              </Protected>
+            }
           />
-          <Route path="*" element={<Navigate to="/" />} />
+
+          {/* NOUVELLE ROUTE : Gestion des invitations (Docteur uniquement) */}
+          <Route
+            path="/gestion-invitations"
+            element={
+              <Protected permission="gerer_utilisateurs">
+                <GestionInvitations />
+              </Protected>
+            }
+          />
+
+          {/* ROUTE ADMIN TEMPORAIRE */}
+          <Route path="/admin-update-societe" element={<AddSocieteIdToAllUsers />} />
+          <Route path="/migration-utilisateurs" element={<MigrationUtilisateurs />} />
+          <Route path="/migration-societes" element={<MigrationVersSocietes />} />
+
+          {/* Redirection par défaut */}
+          <Route path="*" element={<Navigate to="/login" />} />
         </Routes>
       </div>
     </>

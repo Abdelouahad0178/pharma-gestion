@@ -14,7 +14,7 @@ import { signOut } from "firebase/auth";
 import { auth } from "../../firebase/config";
 import { useNavigate } from "react-router-dom";
 
-// Fonction de formatage des dates CORRIGÉE ET OPTIMISÉE
+// Fonction de formatage des dates OPTIMISÉE
 function formatActivityDate(dateInput) {
   let date;
   
@@ -90,8 +90,10 @@ export default function Dashboard() {
   const [totalAchats, setTotalAchats] = useState(0);
   const [totalPaiements, setTotalPaiements] = useState(0);
   const [produitsStock, setProduitsStock] = useState(0);
+  const [lotsActifs, setLotsActifs] = useState(0); // 🆕 Nombre de lots actifs
+  const [fournisseursActifs, setFournisseursActifs] = useState(0); // 🆕 Fournisseurs
   const [documentsImpayes, setDocumentsImpayes] = useState(0);
-  const [soldeCaisse, setSoldeCaisse] = useState(0); // 🆕 Solde caisse journée
+  const [soldeCaisse, setSoldeCaisse] = useState(0);
   const [alertes, setAlertes] = useState([]);
   const [activities, setActivities] = useState([]);
   const [periode, setPeriode] = useState("mois");
@@ -138,7 +140,7 @@ export default function Dashboard() {
     }
   };
 
-  // Charger les activités récentes - OPTIMISÉ POUR AUJOURD'HUI
+  // 🆕 Charger les activités récentes - OPTIMISÉ POUR MULTI-LOTS
   const fetchActivities = async () => {
     if (!societeId) {
       setActivities([]);
@@ -173,10 +175,10 @@ export default function Dashboard() {
         });
       });
       
-      console.log(`🔥 Activités d'aujourd'hui chargées: ${activitiesData.length}`);
+      console.log(`🔥 Activités multi-lots d'aujourd'hui: ${activitiesData.length}`);
       setActivities(activitiesData);
     } catch (error) {
-      console.error("Erreur lors du chargement des activités d'aujourd'hui:", error);
+      console.error("Erreur lors du chargement des activités:", error);
       
       // Fallback strategy
       try {
@@ -233,7 +235,7 @@ export default function Dashboard() {
     }
   };
 
-  // Charger les données principales - OPTIMISÉ ET CORRIGÉ
+  // 🆕 Charger les données principales - OPTIMISÉ POUR MULTI-LOTS
   const fetchData = async () => {
     if (!societeId) return;
 
@@ -241,13 +243,14 @@ export default function Dashboard() {
     try {
       console.log("🔄 Début du chargement des données multi-lots...");
 
-      // Charger toutes les collections en parallèle pour optimiser les performances
-      const [ventesSnap, achatsSnap, stockSnap, stockEntriesSnap, paiementsSnap] = await Promise.all([
+      // Charger toutes les collections en parallèle
+      const [ventesSnap, achatsSnap, stockSnap, stockEntriesSnap, paiementsSnap, retoursSnap] = await Promise.all([
         getDocs(collection(db, "societe", societeId, "ventes")),
         getDocs(collection(db, "societe", societeId, "achats")),
         getDocs(collection(db, "societe", societeId, "stock")),
-        getDocs(collection(db, "societe", societeId, "stock_entries")),
-        getDocs(collection(db, "societe", societeId, "paiements"))
+        getDocs(collection(db, "societe", societeId, "stock_entries")), // 🆕 Multi-lots
+        getDocs(collection(db, "societe", societeId, "paiements")),
+        getDocs(collection(db, "societe", societeId, "retours")) // 🆕 Retours
       ]);
 
       // Convertir les snapshots en arrays
@@ -256,18 +259,27 @@ export default function Dashboard() {
       const stockArr = [];
       const stockEntriesArr = [];
       const paiementsArr = [];
+      const retoursArr = [];
 
       ventesSnap.forEach((doc) => ventesArr.push({ id: doc.id, ...doc.data() }));
       achatsSnap.forEach((doc) => achatsArr.push({ id: doc.id, ...doc.data() }));
       stockSnap.forEach((doc) => stockArr.push({ id: doc.id, ...doc.data() }));
       stockEntriesSnap.forEach((doc) => stockEntriesArr.push({ id: doc.id, ...doc.data() }));
       paiementsSnap.forEach((doc) => paiementsArr.push({ id: doc.id, ...doc.data() }));
+      retoursSnap.forEach((doc) => retoursArr.push({ id: doc.id, ...doc.data() }));
 
-      console.log(`📊 Données chargées: ${ventesArr.length} ventes, ${achatsArr.length} achats, ${stockArr.length} stock, ${stockEntriesArr.length} entrées, ${paiementsArr.length} paiements`);
+      console.log(`📊 Données chargées: ${ventesArr.length} ventes, ${achatsArr.length} achats, ${stockArr.length} stock, ${stockEntriesArr.length} entrées multi-lots, ${paiementsArr.length} paiements, ${retoursArr.length} retours`);
 
-      // Compter les produits (stock traditionnel + entrées multi-lots actives)
-      const totalProduits = stockArr.length + stockEntriesArr.filter(entry => (entry.quantite || 0) > 0).length;
+      // 🆕 Statistiques multi-lots complètes
+      const totalProduitsTraditionnels = stockArr.length;
+      const lotsActifsList = stockEntriesArr.filter(entry => (entry.quantite || 0) > 0);
+      const totalLotsActifs = lotsActifsList.length;
+      const totalProduits = totalProduitsTraditionnels + totalLotsActifs;
+      const fournisseurs = new Set(stockEntriesArr.map(e => e.fournisseur).filter(Boolean));
+      
       setProduitsStock(totalProduits);
+      setLotsActifs(totalLotsActifs);
+      setFournisseursActifs(fournisseurs.size);
 
       // Filtrer par période
       const filteredVentes = filterByPeriodeOuDates(ventesArr, periode, dateMin, dateMax);
@@ -299,7 +311,7 @@ export default function Dashboard() {
           return filteredAchats.reduce((total, achat) => {
             const articles = Array.isArray(achat.articles) ? achat.articles : [];
             const totalArticles = articles.reduce((sum, a) => {
-              const prixUnitaire = Number(a.prixUnitaire) || 0;
+              const prixUnitaire = Number(a.prixUnitaire) || Number(a.prixAchat) || 0;
               const quantite = Number(a.quantite) || 0;
               const remise = Number(a.remise) || 0;
               return sum + (prixUnitaire * quantite - remise);
@@ -329,7 +341,7 @@ export default function Dashboard() {
       setTotalAchats(calculateAchatsTotal());
       setTotalPaiements(calculatePaiementsTotal());
 
-      // 🆕 CALCULER LE SOLDE DE CAISSE DE LA JOURNÉE (VENTES EN ESPÈCES) - CORRIGÉ
+      // 🆕 CALCULER LE SOLDE DE CAISSE DE LA JOURNÉE (VENTES EN ESPÈCES)
       const calculateSoldeCaisse = () => {
         try {
           const today = new Date();
@@ -352,16 +364,14 @@ export default function Dashboard() {
 
           console.log(`💵 Ventes d'aujourd'hui: ${ventesAujourdhui.length}`);
 
-          // Calculer uniquement les ventes en espèces de la journée
           const soldeCaisseJour = ventesAujourdhui.reduce((total, vente) => {
             try {
-              // Vérifier si la vente est payée en espèces (différentes variantes possibles)
               const modePaiement = (vente.modePaiement || '').toLowerCase();
               const isEspeces = modePaiement === 'especes' || 
                               modePaiement === 'espèces' || 
                               modePaiement === 'cash' ||
                               modePaiement === '' || 
-                              !vente.modePaiement; // Par défaut espèces si non spécifié
+                              !vente.modePaiement;
 
               if (isEspeces) {
                 const articles = Array.isArray(vente.articles) ? vente.articles : [];
@@ -405,30 +415,29 @@ export default function Dashboard() {
       }
       setDocumentsImpayes(impayes);
 
-      // Générer les alertes (stock traditionnel + multi-lots) - OPTIMISÉ
+      // 🆕 Générer les alertes multi-lots complètes
       const generateAlertes = () => {
         const alertList = [];
         const today = new Date();
         
         try {
-          // Alertes stock traditionnel
+          // 🆕 Alertes stock traditionnel
           stockArr.forEach((item) => {
             try {
               const quantite = Number(item.quantite) || 0;
               const seuil = Number(item.seuil) || 5;
               const nom = item.nom || "Produit sans nom";
 
-              // Stock bas
               if (quantite <= seuil && quantite > 0) {
                 alertList.push({ 
-                  type: "Stock bas", 
+                  type: "Stock bas (Traditionnel)", 
                   message: `${nom} (Qté: ${quantite})`,
                   severity: "warning",
-                  icon: "📦"
+                  icon: "📦",
+                  category: "stock"
                 });
               }
               
-              // Péremption
               if (item.datePeremption) {
                 try {
                   const expDate = new Date(item.datePeremption);
@@ -440,14 +449,16 @@ export default function Dashboard() {
                         type: "Produit périmé", 
                         message: `${nom} est périmé !`,
                         severity: "critical",
-                        icon: "🚫"
+                        icon: "🚫",
+                        category: "expiration"
                       });
                     } else if (diffDays <= 30) {
                       alertList.push({ 
                         type: "Péremption proche", 
                         message: `${nom} (${diffDays} j)`,
                         severity: "danger",
-                        icon: "🟡"
+                        icon: "⚠️",
+                        category: "expiration"
                       });
                     }
                   }
@@ -460,24 +471,24 @@ export default function Dashboard() {
             }
           });
 
-          // Alertes stock multi-lots
+          // 🆕 Alertes stock multi-lots (spécifiques aux lots)
           stockEntriesArr.forEach((entry) => {
             try {
               const quantite = Number(entry.quantite) || 0;
               const nom = entry.nom || "Produit sans nom";
               const numeroLot = entry.numeroLot || 'N/A';
+              const fournisseur = entry.fournisseur || 'N/A';
 
-              // Stock bas multi-lots
               if (quantite <= 5 && quantite > 0) {
                 alertList.push({ 
-                  type: "Stock bas (Multi-Lots)", 
-                  message: `${nom} - Lot ${numeroLot} (Qté: ${quantite})`,
+                  type: "Stock bas (Lot)", 
+                  message: `${nom} - Lot ${numeroLot} de ${fournisseur} (Qté: ${quantite})`,
                   severity: "warning",
-                  icon: "📦🏷️"
+                  icon: "📦🏷️",
+                  category: "stock-multilots"
                 });
               }
               
-              // Péremption multi-lots
               if (entry.datePeremption) {
                 try {
                   const expDate = new Date(entry.datePeremption);
@@ -487,16 +498,18 @@ export default function Dashboard() {
                     if (diffDays <= 0) {
                       alertList.push({ 
                         type: "Lot périmé", 
-                        message: `${nom} - Lot ${numeroLot} est périmé !`,
+                        message: `${nom} - Lot ${numeroLot} de ${fournisseur} est périmé !`,
                         severity: "critical",
-                        icon: "🚫🏷️"
+                        icon: "🚫🏷️",
+                        category: "expiration-multilots"
                       });
                     } else if (diffDays <= 30) {
                       alertList.push({ 
                         type: "Lot bientôt périmé", 
-                        message: `${nom} - Lot ${numeroLot} (${diffDays} j)`,
+                        message: `${nom} - Lot ${numeroLot} de ${fournisseur} (${diffDays} j)`,
                         severity: "danger",
-                        icon: "🟡🏷️"
+                        icon: "⚠️🏷️",
+                        category: "expiration-multilots"
                       });
                     }
                   }
@@ -508,6 +521,29 @@ export default function Dashboard() {
               console.warn("Erreur traitement entrée:", entry.id, entryError);
             }
           });
+
+          // 🆕 Alertes retours récents (dernières 24h)
+          const recent24h = new Date(Date.now() - 24*60*60*1000);
+          const retoursRecents = retoursArr.filter(r => {
+            try {
+              const retourDate = r.date?.seconds ? new Date(r.date.seconds * 1000) : null;
+              return retourDate && retourDate >= recent24h;
+            } catch {
+              return false;
+            }
+          });
+
+          if (retoursRecents.length > 0) {
+            const totalQuantiteRetours = retoursRecents.reduce((sum, r) => sum + (Number(r.quantite) || 0), 0);
+            alertList.push({
+              type: "Retours récents",
+              message: `${retoursRecents.length} retours (${totalQuantiteRetours} unités) dans les 24h`,
+              severity: "info",
+              icon: "↩️",
+              category: "retours"
+            });
+          }
+
         } catch (alertError) {
           console.error("Erreur génération alertes:", alertError);
         }
@@ -574,14 +610,14 @@ export default function Dashboard() {
     }
   }, [societeId, loading, periode, dateMin, dateMax]);
 
-  // FONCTION AMÉLIORÉE : Styles et labels pour les types d'activités avec actions
+  // 🆕 FONCTION AMÉLIORÉE : Styles et labels pour les activités multi-lots
   const getActivityStyle = (type, action) => {
     const baseStyles = {
       vente: { icon: '💰', color: '#667eea', label: 'Vente' },
       achat: { icon: '🛒', color: '#48bb78', label: 'Achat' },
       paiement: { icon: '💳', color: '#4299e1', label: 'Paiement' },
       stock: { icon: '📦', color: '#ed8936', label: 'Stock' },
-      retour: { icon: '↩️', color: '#ab47bc', label: 'Retour stock' },
+      retour: { icon: '↩️', color: '#ab47bc', label: 'Retour' },
       facture: { icon: '📄', color: '#5c6bc0', label: 'Facture' },
       devis: { icon: '📋', color: '#42a5f5', label: 'Devis' }
     };
@@ -614,16 +650,22 @@ export default function Dashboard() {
     return style;
   };
 
-  // Filtrer les activités
+  // 🆕 Filtrer les activités avec support multi-lots
   const filteredActivities = activities.filter(activity => {
     if (activityFilter === "all") return true;
-    if (activity.type === 'stock_ajout' || activity.type === 'stock_modif' || activity.type === 'stock_retour') {
-      return activityFilter === 'stock' || activityFilter === 'retour';
+    
+    if (activityFilter === "stock") {
+      return ['stock', 'retour'].includes(activity.type);
     }
+    
+    if (activityFilter === "multilots") {
+      return activity.details?.numeroLot || activity.details?.fournisseur;
+    }
+    
     return activity.type === activityFilter;
-  }).slice(0, 15);
+  }).slice(0, 20);
 
-  // 📱 STYLES CSS RESPONSIFS INTÉGRÉS - Style Multi-Lots CORRIGÉ
+  // 📱 STYLES CSS RESPONSIFS
   const getResponsiveStyles = () => ({
     container: {
       background: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
@@ -921,7 +963,7 @@ export default function Dashboard() {
             </div>
           )}
 
-          {/* Indicateur Multi-Lots */}
+          {/* 🆕 Indicateur Multi-Lots Amélioré */}
           <div style={{
             background: "linear-gradient(135deg, #e6fffa 0%, #b2f5ea 100%)",
             padding: "15px",
@@ -943,7 +985,7 @@ export default function Dashboard() {
               fontSize: "0.9em", 
               margin: 0
             }}>
-              📊 {produitsStock} produits en stock • {alertes.length} alertes • {activities.length} activités aujourd'hui • 💵 {soldeCaisse.toFixed(2)} DH en caisse
+              📦 {produitsStock} produits • 🏷️ {lotsActifs} lots actifs • 🏭 {fournisseursActifs} fournisseurs • 🚨 {alertes.length} alertes • 📊 {activities.length} activités aujourd'hui • 💵 {soldeCaisse.toFixed(2)} DH en caisse
             </p>
           </div>
 
@@ -1053,7 +1095,7 @@ export default function Dashboard() {
             </div>
           )}
 
-          {/* Cartes statistiques modernes */}
+          {/* 🆕 Cartes statistiques multi-lots étendues */}
           <div style={styles.statsGrid}>
             <div 
               style={{
@@ -1112,7 +1154,41 @@ export default function Dashboard() {
               <div style={{...styles.statValue, color: "#ed8936"}}>
                 {produitsStock}
               </div>
-              <div style={styles.statLabel}>Produits & Lots en Stock</div>
+              <div style={styles.statLabel}>Produits & Lots</div>
+            </div>
+
+            {/* 🆕 Carte spécifique aux lots actifs */}
+            <div 
+              style={{
+                ...styles.statCard,
+                borderLeft: "5px solid #805ad5",
+                background: "linear-gradient(135deg, #f7fafc 0%, #e9d8fd 100%)"
+              }}
+              onMouseEnter={e => e.currentTarget.style.transform = "translateY(-5px)"}
+              onMouseLeave={e => e.currentTarget.style.transform = "translateY(0)"}
+            >
+              <div style={{...styles.statIcon, color: "#805ad5"}}>🏷️</div>
+              <div style={{...styles.statValue, color: "#805ad5"}}>
+                {lotsActifs}
+              </div>
+              <div style={styles.statLabel}>Lots Actifs</div>
+            </div>
+
+            {/* 🆕 Carte fournisseurs actifs */}
+            <div 
+              style={{
+                ...styles.statCard,
+                borderLeft: "5px solid #38a169",
+                background: "linear-gradient(135deg, #f7fafc 0%, #c6f6d5 100%)"
+              }}
+              onMouseEnter={e => e.currentTarget.style.transform = "translateY(-5px)"}
+              onMouseLeave={e => e.currentTarget.style.transform = "translateY(0)"}
+            >
+              <div style={{...styles.statIcon, color: "#38a169"}}>🏭</div>
+              <div style={{...styles.statValue, color: "#38a169"}}>
+                {fournisseursActifs}
+              </div>
+              <div style={styles.statLabel}>Fournisseurs Actifs</div>
             </div>
             
             <div 
@@ -1145,7 +1221,7 @@ export default function Dashboard() {
               <div style={styles.statLabel}>Alertes Multi-Lots</div>
             </div>
 
-            {/* 🆕 SOLDE CAISSE JOURNÉE - DESIGN AMÉLIORÉ */}
+            {/* 🆕 SOLDE CAISSE JOURNÉE - DESIGN PREMIUM */}
             <div 
               style={{
                 ...styles.statCard,
@@ -1176,7 +1252,7 @@ export default function Dashboard() {
             </div>
           </div>
 
-          {/* Section Alertes */}
+          {/* 🆕 Section Alertes Multi-Lots Améliorée */}
           {alertes.length > 0 && (
             <div style={styles.alertCard}>
               <h3 style={{
@@ -1201,6 +1277,7 @@ export default function Dashboard() {
                     <tr>
                       <th style={styles.tableCell}>Type d'alerte</th>
                       <th style={styles.tableCell}>Détail du problème</th>
+                      <th style={styles.tableCell}>Catégorie</th>
                       <th style={styles.tableCell}>Gravité</th>
                     </tr>
                   </thead>
@@ -1216,6 +1293,28 @@ export default function Dashboard() {
                         <td style={{...styles.tableCell, textAlign: "left", color: "#4a5568"}}>
                           {alerte.message}
                         </td>
+                        <td style={{...styles.tableCell, textAlign: "center"}}>
+                          <span style={{
+                            padding: "4px 8px",
+                            borderRadius: "12px",
+                            fontSize: "0.7em",
+                            fontWeight: 600,
+                            background: alerte.category?.includes("multilots") ? "#667eea20" : 
+                                       alerte.category === "stock" ? "#ed893620" :
+                                       alerte.category === "expiration" ? "#f5656520" : "#4299e120",
+                            color: alerte.category?.includes("multilots") ? "#667eea" : 
+                                   alerte.category === "stock" ? "#ed8936" :
+                                   alerte.category === "expiration" ? "#f56565" : "#4299e1",
+                            border: `1px solid ${alerte.category?.includes("multilots") ? "#667eea" : 
+                                   alerte.category === "stock" ? "#ed8936" :
+                                   alerte.category === "expiration" ? "#f56565" : "#4299e1"}`
+                          }}>
+                            {alerte.category?.includes("multilots") ? "MULTI-LOTS" :
+                             alerte.category === "stock" ? "STOCK" :
+                             alerte.category === "expiration" ? "EXPIRATION" :
+                             alerte.category === "retours" ? "RETOURS" : "GÉNÉRAL"}
+                          </span>
+                        </td>
                         <td style={styles.tableCell}>
                           <span style={{
                             padding: "4px 12px",
@@ -1223,11 +1322,13 @@ export default function Dashboard() {
                             fontWeight: 600,
                             fontSize: "0.8em",
                             background: alerte.severity === "critical" ? "#f56565" :
-                                       alerte.severity === "danger" ? "#ed8936" : "#ffa726",
+                                       alerte.severity === "danger" ? "#ed8936" : 
+                                       alerte.severity === "warning" ? "#ffa726" : "#4299e1",
                             color: "white"
                           }}>
                             {alerte.severity === "critical" ? "CRITIQUE" :
-                             alerte.severity === "danger" ? "DANGER" : "ATTENTION"}
+                             alerte.severity === "danger" ? "DANGER" : 
+                             alerte.severity === "warning" ? "ATTENTION" : "INFO"}
                           </span>
                         </td>
                       </tr>
@@ -1238,7 +1339,7 @@ export default function Dashboard() {
             </div>
           )}
 
-          {/* Section Activités Récentes */}
+          {/* 🆕 Section Activités Multi-Lots Récentes */}
           <div style={styles.activitiesCard}>
             <div style={{
               display: "flex",
@@ -1256,7 +1357,7 @@ export default function Dashboard() {
                 textTransform: "uppercase",
                 letterSpacing: "1px"
               }}>
-                📊 Activités d'Aujourd'hui Multi-Lots
+                📊 Activités Multi-Lots d'Aujourd'hui
               </h3>
               <button
                 style={{
@@ -1275,7 +1376,7 @@ export default function Dashboard() {
 
             {showActivities && (
               <>
-                {/* Filtres d'activités */}
+                {/* 🆕 Filtres d'activités multi-lots */}
                 <div style={{
                   display: "flex",
                   flexWrap: "wrap",
@@ -1315,9 +1416,22 @@ export default function Dashboard() {
                       </button>
                     );
                   })}
+                  <button
+                    onClick={() => setActivityFilter("multilots")}
+                    style={{
+                      ...styles.button,
+                      background: activityFilter === "multilots" ? 
+                        "linear-gradient(135deg, #805ad5 0%, #6b46c1 100%)" :
+                        "linear-gradient(135deg, #a0aec0 0%, #718096 100%)",
+                      padding: "8px 16px",
+                      fontSize: "0.8em"
+                    }}
+                  >
+                    🏷️ Multi-Lots
+                  </button>
                 </div>
 
-                {/* Liste des activités */}
+                {/* 🆕 Liste des activités multi-lots */}
                 <div style={{
                   maxHeight: "400px",
                   overflowY: "auto",
@@ -1388,7 +1502,7 @@ export default function Dashboard() {
                                 <span style={{ fontSize: "0.8em", color: style.color, marginLeft: 8 }}>
                                   par {activity.userEmail?.split('@')[0] || 'utilisateur'}
                                 </span>
-                                {/* Badge pour l'action */}
+                                {/* 🆕 Badge pour l'action */}
                                 {details.action && (
                                   <span style={{
                                     marginLeft: 10,
@@ -1404,6 +1518,20 @@ export default function Dashboard() {
                                     {details.action.toUpperCase()}
                                   </span>
                                 )}
+                                {/* 🆕 Badge multi-lots */}
+                                {(details.numeroLot || details.fournisseur) && (
+                                  <span style={{
+                                    marginLeft: 8,
+                                    padding: "2px 6px",
+                                    borderRadius: 8,
+                                    fontSize: "0.6em",
+                                    background: "#805ad5",
+                                    color: "#fff",
+                                    fontWeight: 600
+                                  }}>
+                                    🏷️ MULTI-LOTS
+                                  </span>
+                                )}
                               </div>
                               <div style={{ fontSize: "0.85em", color: "#6b7280", marginTop: 2 }}>
                                 {activity.type === 'vente' && `Client: ${details.client || 'N/A'}`}
@@ -1412,6 +1540,17 @@ export default function Dashboard() {
                                 {activity.type === 'stock' && `Produit: ${details.produit || 'N/A'} (Qté: ${details.quantite || 'N/A'})`}
                                 {activity.type === 'retour' && `${details.produit || 'N/A'} - ${details.motif || ''}`}
                                 {details.articles && ` (${details.articles} articles)`}
+                                {/* 🆕 Informations lot spécifiques */}
+                                {details.numeroLot && (
+                                  <span style={{ marginLeft: 10, color: "#805ad5", fontWeight: 600 }}>
+                                    Lot: {details.numeroLot}
+                                  </span>
+                                )}
+                                {details.fournisseur && activity.type !== 'achat' && (
+                                  <span style={{ marginLeft: 10, color: "#38a169", fontWeight: 600 }}>
+                                    {details.fournisseur}
+                                  </span>
+                                )}
                                 {details.statutPaiement && (
                                   <span style={{
                                     marginLeft: 10,
