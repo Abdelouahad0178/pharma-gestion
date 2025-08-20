@@ -1,3 +1,4 @@
+// src/components/Navbar.js
 import React, { useState } from "react";
 import { Link, useNavigate, useLocation } from "react-router-dom";
 import {
@@ -23,8 +24,8 @@ import {
   Description as DescriptionIcon,
   AttachMoney as AttachMoneyIcon,
   Settings as SettingsIcon,
-  People as PeopleIcon, // NOUVEAU : Icône pour la gestion des utilisateurs
-  PersonAdd as PersonAddIcon, // NOUVEAU : Icône pour les invitations
+  People as PeopleIcon,
+  GroupAdd as GroupAddIcon,
   Logout as LogoutIcon,
 } from "@mui/icons-material";
 
@@ -36,21 +37,19 @@ export default function Navbar() {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const navigate = useNavigate();
   const location = useLocation();
-  const { role, loading } = useUserRole();
+  const { role, loading, societeName } = useUserRole(); // ✅ on récupère le nom lisible
 
   // Menus visibles selon le rôle
-  // - Docteur: tous
-  // - Vendeuse: pas de Paramètres, ni Achats, ni Gestion Utilisateurs, ni Invitations
   const menuItems = [
     { text: "Dashboard", icon: <DashboardIcon />, path: "/dashboard", allowed: ["docteur", "vendeuse"] },
-    { text: "Achats", icon: <ShoppingCartIcon />, path: "/achats", allowed: ["docteur"] }, // Docteur uniquement
+    { text: "Achats", icon: <ShoppingCartIcon />, path: "/achats", allowed: ["docteur"] },
     { text: "Ventes", icon: <PointOfSaleIcon />, path: "/ventes", allowed: ["docteur", "vendeuse"] },
     { text: "Stock", icon: <LocalPharmacyIcon />, path: "/stock", allowed: ["docteur", "vendeuse"] },
     { text: "Devis & Factures", icon: <DescriptionIcon />, path: "/devis-factures", allowed: ["docteur", "vendeuse"] },
     { text: "Paiements", icon: <AttachMoneyIcon />, path: "/paiements", allowed: ["docteur", "vendeuse"] },
-    { text: "Gestion Utilisateurs", icon: <PeopleIcon />, path: "/gestion-utilisateurs", allowed: ["docteur"] }, // NOUVEAU
-    { text: "Invitations", icon: <PersonAddIcon />, path: "/gestion-invitations", allowed: ["docteur"] }, // NOUVEAU
-    { text: "Paramètres", icon: <SettingsIcon />, path: "/parametres", allowed: ["docteur"] }, // Docteur uniquement
+    { text: "Invitations", icon: <GroupAddIcon />, path: "/invitations", allowed: ["docteur", "vendeuse"] },
+    { text: "Gestion Utilisateurs", icon: <PeopleIcon />, path: "/gestion-utilisateurs", allowed: ["docteur"] },
+    { text: "Paramètres", icon: <SettingsIcon />, path: "/parametres", allowed: ["docteur"] },
   ];
 
   const handleLogout = async () => {
@@ -85,32 +84,69 @@ export default function Navbar() {
       >
         💊 Pharma Gestion
       </Typography>
+
+      {/* ✅ Bandeau nom de la pharmacie */}
+      <Box
+        sx={{
+          display: "flex",
+          alignItems: "center",
+          gap: 1,
+          px: 2,
+          py: 1,
+          mb: 1,
+          color: "#e8f0ff",
+          bgcolor: "#00000022",
+          borderTop: "1px solid #ffffff22",
+          borderBottom: "1px solid #ffffff22",
+        }}
+      >
+        <LocalPharmacyIcon fontSize="small" />
+        <Typography
+          variant="body2"
+          sx={{
+            fontWeight: 600,
+            whiteSpace: "nowrap",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            maxWidth: "190px",
+          }}
+          title={societeName || "—"}
+        >
+          {societeName || "—"}
+        </Typography>
+      </Box>
+
       <Divider sx={{ bgcolor: "#fff3", mb: 2 }} />
+
       <List>
         {menuItems
           .filter(item => item.allowed.includes(role))
-          .map((item) => (
-            <ListItemButton
-              key={item.text}
-              component={Link}
-              to={item.path}
-              selected={location.pathname === item.path}
-              sx={{
-                color: location.pathname === item.path ? "#1976d2" : "#fff",
-                background: location.pathname === item.path ? "#fff" : "transparent",
-                my: 0.5,
-                borderRadius: 2,
-                "&:hover": {
-                  background: "#fff3",
-                  color: "#1c3db1"
-                }
-              }}
-            >
-              <ListItemIcon sx={{ color: "inherit" }}>{item.icon}</ListItemIcon>
-              <ListItemText primary={item.text} />
-            </ListItemButton>
-          ))}
+          .map((item) => {
+            const selected = location.pathname === item.path;
+            return (
+              <ListItemButton
+                key={item.text}
+                component={Link}
+                to={item.path}
+                selected={selected}
+                sx={{
+                  color: selected ? "#1976d2" : "#fff",
+                  background: selected ? "#fff" : "transparent",
+                  my: 0.5,
+                  borderRadius: 2,
+                  "&:hover": {
+                    background: "#fff3",
+                    color: "#1c3db1"
+                  }
+                }}
+              >
+                <ListItemIcon sx={{ color: "inherit" }}>{item.icon}</ListItemIcon>
+                <ListItemText primary={item.text} />
+              </ListItemButton>
+            );
+          })}
       </List>
+
       <Divider sx={{ bgcolor: "#fff3", mt: 2 }} />
       <Box sx={{ textAlign: "center", my: 2 }}>
         <Button
@@ -154,29 +190,49 @@ export default function Navbar() {
           >
             <MenuIcon />
           </IconButton>
-          <Typography
-            variant="h6"
-            sx={{
-              flexGrow: 1,
-              fontFamily: "'Montserrat', 'Segoe UI', Arial, sans-serif",
-              fontWeight: 700,
-              letterSpacing: "1.5px",
-              textShadow: "0 1px 10px #0003"
-            }}
-          >
-            💊 Pharma Gestion
-          </Typography>
+
+          {/* ✅ Titre + nom de la pharmacie (tronqué si long) */}
+          <Box sx={{ display: "flex", alignItems: "baseline", gap: 2, flexGrow: 1, minWidth: 0 }}>
+            <Typography
+              variant="h6"
+              sx={{
+                fontFamily: "'Montserrat', 'Segoe UI', Arial, sans-serif",
+                fontWeight: 700,
+                letterSpacing: "1.5px",
+                textShadow: "0 1px 10px #0003",
+                whiteSpace: "nowrap"
+              }}
+            >
+              💊 Pharma Gestion
+            </Typography>
+            {societeName && (
+              <Typography
+                variant="subtitle2"
+                sx={{
+                  opacity: 0.95,
+                  maxWidth: "50vw",
+                  whiteSpace: "nowrap",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis"
+                }}
+                title={societeName}
+              >
+                | {societeName}
+              </Typography>
+            )}
+          </Box>
+
           <Button
             color="inherit"
             onClick={handleLogout}
             startIcon={<LogoutIcon />}
             sx={{
               fontWeight: 600,
-              bgcolor: "#fff2",
+              bgcolor: "#ffffff22",
               borderRadius: 2,
               px: 2,
               transition: "background 0.2s",
-              "&:hover": { bgcolor: "#fff5", color: "#1976d2" }
+              "&:hover": { bgcolor: "#ffffff55", color: "#1976d2" }
             }}
           >
             Déconnexion

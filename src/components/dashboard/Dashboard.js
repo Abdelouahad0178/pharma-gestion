@@ -3,10 +3,6 @@ import { db } from "../../firebase/config";
 import { 
   collection, 
   getDocs, 
-  query, 
-  orderBy, 
-  limit, 
-  where, 
   Timestamp 
 } from "firebase/firestore";
 import { useUserRole } from "../../contexts/UserRoleContext";
@@ -14,7 +10,7 @@ import { signOut } from "firebase/auth";
 import { auth } from "../../firebase/config";
 import { useNavigate } from "react-router-dom";
 
-// Fonction de formatage des dates OPTIMISÉE
+// Fonction de formatage des dates
 function formatActivityDate(dateInput) {
   let date;
   
@@ -82,7 +78,13 @@ function formatActivityDate(dateInput) {
 }
 
 export default function Dashboard() {
-  const { user, societeId, role, loading } = useUserRole();
+  const { 
+    user, 
+    societeId,
+    role, 
+    loading
+  } = useUserRole();
+  
   const navigate = useNavigate();
   
   // États principaux
@@ -90,24 +92,28 @@ export default function Dashboard() {
   const [totalAchats, setTotalAchats] = useState(0);
   const [totalPaiements, setTotalPaiements] = useState(0);
   const [produitsStock, setProduitsStock] = useState(0);
-  const [lotsActifs, setLotsActifs] = useState(0); // 🆕 Nombre de lots actifs
-  const [fournisseursActifs, setFournisseursActifs] = useState(0); // 🆕 Fournisseurs
   const [documentsImpayes, setDocumentsImpayes] = useState(0);
   const [soldeCaisse, setSoldeCaisse] = useState(0);
   const [alertes, setAlertes] = useState([]);
-  const [activities, setActivities] = useState([]);
   const [periode, setPeriode] = useState("mois");
   const [dateMin, setDateMin] = useState("");
   const [dateMax, setDateMax] = useState("");
   const [showFilters, setShowFilters] = useState(false);
-  const [showActivities, setShowActivities] = useState(true);
-  const [activityFilter, setActivityFilter] = useState("all");
+  const [notification, setNotification] = useState(null);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+
+  // États pour les données
+  const [ventes, setVentes] = useState([]);
+  const [achats, setAchats] = useState([]);
+  const [stock, setStock] = useState([]);
+  const [paiements, setPaiements] = useState([]);
+  const [retours, setRetours] = useState([]);
+  const [dataLoading, setDataLoading] = useState(true);
+  const [dataError, setDataError] = useState(null);
 
   // États pour responsive
   const [isMobile, setIsMobile] = useState(false);
   const [isTablet, setIsTablet] = useState(false);
-  const [notification, setNotification] = useState(null);
-  const [isLoading, setIsLoading] = useState(false);
 
   // Hook pour détecter la taille d'écran
   useEffect(() => {
@@ -140,153 +146,88 @@ export default function Dashboard() {
     }
   };
 
-  // 🆕 Charger les activités récentes - OPTIMISÉ POUR MULTI-LOTS
-  const fetchActivities = async () => {
+  // Fonction pour charger les données depuis la NOUVELLE structure (multi-société)
+  const fetchAllData = async () => {
     if (!societeId) {
-      setActivities([]);
+      setVentes([]);
+      setAchats([]);
+      setStock([]);
+      setPaiements([]);
+      setRetours([]);
+      setDataLoading(false);
       return;
     }
-    
+
     try {
-      const now = new Date();
-      const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0);
-      const endOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59);
-      
-      const startTimestamp = Timestamp.fromDate(startOfDay);
-      const endTimestamp = Timestamp.fromDate(endOfDay);
-      
-      const q = query(
-        collection(db, "societe", societeId, "activities"),
-        where("timestamp", ">=", startTimestamp),
-        where("timestamp", "<=", endTimestamp),
-        orderBy("timestamp", "desc"),
-        limit(50)
-      );
-      
-      const snapshot = await getDocs(q);
-      const activitiesData = [];
-      
-      snapshot.forEach((doc) => {
-        const data = doc.data();
-        activitiesData.push({
-          id: doc.id,
-          ...data,
-          timestamp: data.timestamp || data.date || data.createdAt || Timestamp.now()
-        });
-      });
-      
-      console.log(`🔥 Activités multi-lots d'aujourd'hui: ${activitiesData.length}`);
-      setActivities(activitiesData);
-    } catch (error) {
-      console.error("Erreur lors du chargement des activités:", error);
-      
-      // Fallback strategy
-      try {
-        console.log("🔄 Tentative avec méthode de fallback...");
-        const q = query(
-          collection(db, "societe", societeId, "activities"),
-          orderBy("timestamp", "desc"),
-          limit(100)
-        );
-        
-        const snapshot = await getDocs(q);
-        const allActivities = [];
-        
-        snapshot.forEach((doc) => {
-          const data = doc.data();
-          allActivities.push({
-            id: doc.id,
-            ...data,
-            timestamp: data.timestamp || data.date || data.createdAt || Timestamp.now()
-          });
-        });
-        
-        const now = new Date();
-        const today = now.toDateString();
-        
-        const todayActivities = allActivities.filter(activity => {
-          try {
-            let activityDate;
-            
-            if (activity.timestamp?.toDate) {
-              activityDate = activity.timestamp.toDate();
-            } else if (activity.timestamp?.seconds) {
-              activityDate = new Date(activity.timestamp.seconds * 1000);
-            } else if (activity.date) {
-              activityDate = new Date(activity.date);
-            } else {
-              return false;
-            }
-            
-            return activityDate.toDateString() === today;
-          } catch (dateError) {
-            console.warn("Erreur de traitement de date pour l'activité:", activity.id, dateError);
-            return false;
-          }
-        });
-        
-        console.log(`📅 Activités filtrées pour aujourd'hui: ${todayActivities.length}`);
-        setActivities(todayActivities);
-        
-      } catch (fallbackError) {
-        console.error("Erreur même avec la méthode de fallback:", fallbackError);
-        setActivities([]);
-      }
-    }
-  };
+      setDataLoading(true);
+      setDataError(null);
 
-  // 🆕 Charger les données principales - OPTIMISÉ POUR MULTI-LOTS
-  const fetchData = async () => {
-    if (!societeId) return;
+      console.log("🔄 Chargement des données pour la société:", societeId);
 
-    setIsLoading(true);
-    try {
-      console.log("🔄 Début du chargement des données multi-lots...");
-
-      // Charger toutes les collections en parallèle
-      const [ventesSnap, achatsSnap, stockSnap, stockEntriesSnap, paiementsSnap, retoursSnap] = await Promise.all([
-        getDocs(collection(db, "societe", societeId, "ventes")),
-        getDocs(collection(db, "societe", societeId, "achats")),
-        getDocs(collection(db, "societe", societeId, "stock")),
-        getDocs(collection(db, "societe", societeId, "stock_entries")), // 🆕 Multi-lots
-        getDocs(collection(db, "societe", societeId, "paiements")),
-        getDocs(collection(db, "societe", societeId, "retours")) // 🆕 Retours
+      // Charger toutes les collections depuis la NOUVELLE structure (societe/id/collections)
+      const [ventesSnap, achatsSnap, stockSnap, paiementsSnap, retoursSnap] = await Promise.all([
+        getDocs(collection(db, "societe", societeId, "ventes")).catch(() => ({ docs: [] })),
+        getDocs(collection(db, "societe", societeId, "achats")).catch(() => ({ docs: [] })),
+        getDocs(collection(db, "societe", societeId, "stock")).catch(() => ({ docs: [] })),
+        getDocs(collection(db, "societe", societeId, "paiements")).catch(() => ({ docs: [] })),
+        getDocs(collection(db, "societe", societeId, "retours")).catch(() => ({ docs: [] }))
       ]);
 
       // Convertir les snapshots en arrays
       const ventesArr = [];
       const achatsArr = [];
       const stockArr = [];
-      const stockEntriesArr = [];
       const paiementsArr = [];
       const retoursArr = [];
 
-      ventesSnap.forEach((doc) => ventesArr.push({ id: doc.id, ...doc.data() }));
-      achatsSnap.forEach((doc) => achatsArr.push({ id: doc.id, ...doc.data() }));
-      stockSnap.forEach((doc) => stockArr.push({ id: doc.id, ...doc.data() }));
-      stockEntriesSnap.forEach((doc) => stockEntriesArr.push({ id: doc.id, ...doc.data() }));
-      paiementsSnap.forEach((doc) => paiementsArr.push({ id: doc.id, ...doc.data() }));
-      retoursSnap.forEach((doc) => retoursArr.push({ id: doc.id, ...doc.data() }));
+      ventesSnap.docs.forEach((doc) => ventesArr.push({ id: doc.id, ...doc.data() }));
+      achatsSnap.docs.forEach((doc) => achatsArr.push({ id: doc.id, ...doc.data() }));
+      stockSnap.docs.forEach((doc) => stockArr.push({ id: doc.id, ...doc.data() }));
+      paiementsSnap.docs.forEach((doc) => paiementsArr.push({ id: doc.id, ...doc.data() }));
+      retoursSnap.docs.forEach((doc) => retoursArr.push({ id: doc.id, ...doc.data() }));
 
-      console.log(`📊 Données chargées: ${ventesArr.length} ventes, ${achatsArr.length} achats, ${stockArr.length} stock, ${stockEntriesArr.length} entrées multi-lots, ${paiementsArr.length} paiements, ${retoursArr.length} retours`);
+      console.log(`📊 Données chargées: ${ventesArr.length} ventes, ${achatsArr.length} achats, ${stockArr.length} stock, ${paiementsArr.length} paiements, ${retoursArr.length} retours`);
 
-      // 🆕 Statistiques multi-lots complètes
-      const totalProduitsTraditionnels = stockArr.length;
-      const lotsActifsList = stockEntriesArr.filter(entry => (entry.quantite || 0) > 0);
-      const totalLotsActifs = lotsActifsList.length;
-      const totalProduits = totalProduitsTraditionnels + totalLotsActifs;
-      const fournisseurs = new Set(stockEntriesArr.map(e => e.fournisseur).filter(Boolean));
-      
-      setProduitsStock(totalProduits);
-      setLotsActifs(totalLotsActifs);
-      setFournisseursActifs(fournisseurs.size);
+      // Mettre à jour les états
+      setVentes(ventesArr);
+      setAchats(achatsArr);
+      setStock(stockArr);
+      setPaiements(paiementsArr);
+      setRetours(retoursArr);
 
-      // Filtrer par période
-      const filteredVentes = filterByPeriodeOuDates(ventesArr, periode, dateMin, dateMax);
-      const filteredAchats = filterByPeriodeOuDates(achatsArr, periode, dateMin, dateMax);
-      const filteredPaiements = filterByPeriodeOuDates(paiementsArr, periode, dateMin, dateMax);
+      showNotification("Données chargées avec succès !", "success");
 
-      // Calculer les totaux avec gestion d'erreur
+    } catch (error) {
+      console.error("Erreur lors du chargement des données:", error);
+      setDataError(error);
+      showNotification("Erreur lors du chargement des données", "error");
+    } finally {
+      setDataLoading(false);
+    }
+  };
+
+  // Charger les données à l'initialisation
+  useEffect(() => {
+    if (!loading && user && societeId) {
+      fetchAllData();
+    }
+  }, [loading, user, societeId]);
+
+  // Calculer les statistiques basées sur les données
+  useEffect(() => {
+    if (dataLoading) return;
+
+    try {
+      console.log("🔄 Calcul des statistiques...");
+
+      // Filtrer les données par période
+      const filteredVentes = filterByPeriodeOuDates(ventes, periode, dateMin, dateMax);
+      const filteredAchats = filterByPeriodeOuDates(achats, periode, dateMin, dateMax);
+      const filteredPaiements = filterByPeriodeOuDates(paiements, periode, dateMin, dateMax);
+
+      setProduitsStock(stock.length);
+
+      // Calculer les totaux
       const calculateVentesTotal = () => {
         try {
           return filteredVentes.reduce((total, vente) => {
@@ -341,13 +282,13 @@ export default function Dashboard() {
       setTotalAchats(calculateAchatsTotal());
       setTotalPaiements(calculatePaiementsTotal());
 
-      // 🆕 CALCULER LE SOLDE DE CAISSE DE LA JOURNÉE (VENTES EN ESPÈCES)
+      // Calculer le solde de caisse
       const calculateSoldeCaisse = () => {
         try {
           const today = new Date();
           const todayStr = today.toDateString();
 
-          const ventesAujourdhui = ventesArr.filter(vente => {
+          const ventesAujourdhui = ventes.filter(vente => {
             if (!vente.date && !vente.timestamp) return false;
             
             try {
@@ -357,14 +298,11 @@ export default function Dashboard() {
               
               return venteDate.toDateString() === todayStr;
             } catch (dateError) {
-              console.warn("Erreur de date pour vente:", vente.id, dateError);
               return false;
             }
           });
 
-          console.log(`💵 Ventes d'aujourd'hui: ${ventesAujourdhui.length}`);
-
-          const soldeCaisseJour = ventesAujourdhui.reduce((total, vente) => {
+          return ventesAujourdhui.reduce((total, vente) => {
             try {
               const modePaiement = (vente.modePaiement || '').toLowerCase();
               const isEspeces = modePaiement === 'especes' || 
@@ -387,13 +325,9 @@ export default function Dashboard() {
               }
               return total;
             } catch (venteError) {
-              console.warn("Erreur calcul vente caisse:", vente.id, venteError);
               return total;
             }
           }, 0);
-
-          console.log(`💰 Solde caisse calculé: ${soldeCaisseJour.toFixed(2)} DH`);
-          return soldeCaisseJour;
         } catch (error) {
           console.error("Erreur calcul solde caisse:", error);
           return 0;
@@ -405,7 +339,7 @@ export default function Dashboard() {
       // Calculer documents impayés
       let impayes = 0;
       try {
-        [...ventesArr, ...achatsArr].forEach(doc => {
+        [...ventes, ...achats].forEach(doc => {
           if (doc.statutPaiement && (doc.statutPaiement === 'impayé' || doc.statutPaiement === 'partiel')) {
             impayes++;
           }
@@ -415,14 +349,14 @@ export default function Dashboard() {
       }
       setDocumentsImpayes(impayes);
 
-      // 🆕 Générer les alertes multi-lots complètes
+      // Générer les alertes
       const generateAlertes = () => {
         const alertList = [];
         const today = new Date();
         
         try {
-          // 🆕 Alertes stock traditionnel
-          stockArr.forEach((item) => {
+          // Alertes stock
+          stock.forEach((item) => {
             try {
               const quantite = Number(item.quantite) || 0;
               const seuil = Number(item.seuil) || 5;
@@ -430,11 +364,10 @@ export default function Dashboard() {
 
               if (quantite <= seuil && quantite > 0) {
                 alertList.push({ 
-                  type: "Stock bas (Traditionnel)", 
+                  type: "Stock bas", 
                   message: `${nom} (Qté: ${quantite})`,
                   severity: "warning",
-                  icon: "📦",
-                  category: "stock"
+                  icon: "📦"
                 });
               }
               
@@ -449,82 +382,29 @@ export default function Dashboard() {
                         type: "Produit périmé", 
                         message: `${nom} est périmé !`,
                         severity: "critical",
-                        icon: "🚫",
-                        category: "expiration"
+                        icon: "🚫"
                       });
                     } else if (diffDays <= 30) {
                       alertList.push({ 
                         type: "Péremption proche", 
                         message: `${nom} (${diffDays} j)`,
                         severity: "danger",
-                        icon: "⚠️",
-                        category: "expiration"
+                        icon: "⚠️"
                       });
                     }
                   }
                 } catch (dateError) {
-                  console.warn("Erreur date péremption stock:", item.id, dateError);
+                  console.warn("Erreur date péremption:", item.id, dateError);
                 }
               }
             } catch (itemError) {
-              console.warn("Erreur traitement item stock:", item.id, itemError);
+              console.warn("Erreur traitement item:", item.id, itemError);
             }
           });
 
-          // 🆕 Alertes stock multi-lots (spécifiques aux lots)
-          stockEntriesArr.forEach((entry) => {
-            try {
-              const quantite = Number(entry.quantite) || 0;
-              const nom = entry.nom || "Produit sans nom";
-              const numeroLot = entry.numeroLot || 'N/A';
-              const fournisseur = entry.fournisseur || 'N/A';
-
-              if (quantite <= 5 && quantite > 0) {
-                alertList.push({ 
-                  type: "Stock bas (Lot)", 
-                  message: `${nom} - Lot ${numeroLot} de ${fournisseur} (Qté: ${quantite})`,
-                  severity: "warning",
-                  icon: "📦🏷️",
-                  category: "stock-multilots"
-                });
-              }
-              
-              if (entry.datePeremption) {
-                try {
-                  const expDate = new Date(entry.datePeremption);
-                  if (!isNaN(expDate.getTime())) {
-                    const diffDays = Math.ceil((expDate - today) / (1000 * 3600 * 24));
-                    
-                    if (diffDays <= 0) {
-                      alertList.push({ 
-                        type: "Lot périmé", 
-                        message: `${nom} - Lot ${numeroLot} de ${fournisseur} est périmé !`,
-                        severity: "critical",
-                        icon: "🚫🏷️",
-                        category: "expiration-multilots"
-                      });
-                    } else if (diffDays <= 30) {
-                      alertList.push({ 
-                        type: "Lot bientôt périmé", 
-                        message: `${nom} - Lot ${numeroLot} de ${fournisseur} (${diffDays} j)`,
-                        severity: "danger",
-                        icon: "⚠️🏷️",
-                        category: "expiration-multilots"
-                      });
-                    }
-                  }
-                } catch (dateError) {
-                  console.warn("Erreur date péremption entrée:", entry.id, dateError);
-                }
-              }
-            } catch (entryError) {
-              console.warn("Erreur traitement entrée:", entry.id, entryError);
-            }
-          });
-
-          // 🆕 Alertes retours récents (dernières 24h)
+          // Alertes retours récents
           const recent24h = new Date(Date.now() - 24*60*60*1000);
-          const retoursRecents = retoursArr.filter(r => {
+          const retoursRecents = retours.filter(r => {
             try {
               const retourDate = r.date?.seconds ? new Date(r.date.seconds * 1000) : null;
               return retourDate && retourDate >= recent24h;
@@ -539,8 +419,7 @@ export default function Dashboard() {
               type: "Retours récents",
               message: `${retoursRecents.length} retours (${totalQuantiteRetours} unités) dans les 24h`,
               severity: "info",
-              icon: "↩️",
-              category: "retours"
+              icon: "↩️"
             });
           }
 
@@ -552,18 +431,17 @@ export default function Dashboard() {
       };
       
       setAlertes(generateAlertes());
-      console.log("✅ Données multi-lots chargées avec succès !");
-      showNotification("Données multi-lots actualisées avec succès !", "success");
+      console.log("✅ Statistiques calculées avec succès !");
+      
     } catch (error) {
-      console.error("Erreur lors du chargement des données:", error);
-      showNotification("Erreur lors du chargement des données", "error");
-    } finally {
-      setIsLoading(false);
+      console.error("Erreur lors du calcul des statistiques:", error);
     }
-  };
+  }, [ventes, achats, stock, paiements, retours, periode, dateMin, dateMax, dataLoading]);
 
-  // Filtrer par période - OPTIMISÉ
+  // Filtrer par période
   const filterByPeriodeOuDates = (data, period, min, max) => {
+    if (!data) return [];
+    
     const now = new Date();
     return data.filter((item) => {
       try {
@@ -602,70 +480,21 @@ export default function Dashboard() {
     });
   };
 
-  // Effect principal pour charger les données
-  useEffect(() => {
-    if (societeId && !loading) {
-      fetchData();
-      fetchActivities();
+  // Fonction de refresh manual
+  const handleRefresh = async () => {
+    setIsRefreshing(true);
+    try {
+      await fetchAllData();
+      showNotification("Données actualisées avec succès !", "success");
+    } catch (error) {
+      console.error("Erreur lors de l'actualisation:", error);
+      showNotification("Erreur lors de l'actualisation", "error");
+    } finally {
+      setIsRefreshing(false);
     }
-  }, [societeId, loading, periode, dateMin, dateMax]);
-
-  // 🆕 FONCTION AMÉLIORÉE : Styles et labels pour les activités multi-lots
-  const getActivityStyle = (type, action) => {
-    const baseStyles = {
-      vente: { icon: '💰', color: '#667eea', label: 'Vente' },
-      achat: { icon: '🛒', color: '#48bb78', label: 'Achat' },
-      paiement: { icon: '💳', color: '#4299e1', label: 'Paiement' },
-      stock: { icon: '📦', color: '#ed8936', label: 'Stock' },
-      retour: { icon: '↩️', color: '#ab47bc', label: 'Retour' },
-      facture: { icon: '📄', color: '#5c6bc0', label: 'Facture' },
-      devis: { icon: '📋', color: '#42a5f5', label: 'Devis' }
-    };
-    
-    const style = baseStyles[type] || { icon: '📌', color: '#667eea', label: 'Activité' };
-    
-    if (action) {
-      switch (action) {
-        case 'modification':
-          style.label = `Modification ${style.label.toLowerCase()}`;
-          style.icon = '✏️ ' + style.icon;
-          break;
-        case 'suppression':
-          style.label = `Suppression ${style.label.toLowerCase()}`;
-          style.icon = '🗑️ ' + style.icon;
-          break;
-        case 'création':
-          style.label = `Nouvelle ${style.label.toLowerCase()}`;
-          style.icon = '✨ ' + style.icon;
-          break;
-        case 'annulation_retour':
-          style.label = `Annulation de retour`;
-          style.icon = '🔄 ' + style.icon;
-          break;
-        default:
-          break;
-      }
-    }
-    
-    return style;
   };
 
-  // 🆕 Filtrer les activités avec support multi-lots
-  const filteredActivities = activities.filter(activity => {
-    if (activityFilter === "all") return true;
-    
-    if (activityFilter === "stock") {
-      return ['stock', 'retour'].includes(activity.type);
-    }
-    
-    if (activityFilter === "multilots") {
-      return activity.details?.numeroLot || activity.details?.fournisseur;
-    }
-    
-    return activity.type === activityFilter;
-  }).slice(0, 20);
-
-  // 📱 STYLES CSS RESPONSIFS
+  // Styles responsifs
   const getResponsiveStyles = () => ({
     container: {
       background: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
@@ -722,23 +551,6 @@ export default function Dashboard() {
       position: "relative",
       overflow: "hidden"
     },
-    statIcon: {
-      fontSize: isMobile ? "2.5em" : "3em",
-      marginBottom: "15px"
-    },
-    statValue: {
-      fontSize: isMobile ? "1.8em" : "2.3em",
-      fontWeight: 800,
-      color: "#2d3748",
-      marginBottom: "8px"
-    },
-    statLabel: {
-      fontSize: isMobile ? "0.9em" : "1em",
-      fontWeight: 600,
-      color: "#4a5568",
-      textTransform: "uppercase",
-      letterSpacing: "1px"
-    },
     button: {
       background: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
       border: "none",
@@ -752,41 +564,6 @@ export default function Dashboard() {
       transition: "all 0.3s ease",
       textTransform: "uppercase",
       letterSpacing: "1px"
-    },
-    successButton: {
-      background: "linear-gradient(135deg, #48bb78 0%, #38a169 100%)",
-      boxShadow: "0 8px 25px rgba(72, 187, 120, 0.4)"
-    },
-    warningButton: {
-      background: "linear-gradient(135deg, #ed8936 0%, #dd6b20 100%)",
-      boxShadow: "0 8px 25px rgba(237, 137, 54, 0.4)"
-    },
-    dangerButton: {
-      background: "linear-gradient(135deg, #f56565 0%, #e53e3e 100%)",
-      boxShadow: "0 8px 25px rgba(245, 101, 101, 0.4)"
-    },
-    infoButton: {
-      background: "linear-gradient(135deg, #4299e1 0%, #3182ce 100%)",
-      boxShadow: "0 8px 25px rgba(66, 153, 225, 0.4)"
-    },
-    table: {
-      width: "100%",
-      borderCollapse: "collapse",
-      borderRadius: isMobile ? "10px" : "20px",
-      overflow: "hidden",
-      boxShadow: "0 15px 40px rgba(0,0,0,0.1)",
-      marginTop: isMobile ? "15px" : "25px"
-    },
-    tableHeader: {
-      background: "linear-gradient(135deg, #2d3748 0%, #1a202c 100%)",
-      color: "white"
-    },
-    tableCell: {
-      padding: isMobile ? "10px 8px" : "18px 15px",
-      textAlign: "center",
-      borderBottom: "1px solid #e2e8f0",
-      fontWeight: 600,
-      fontSize: isMobile ? "0.8em" : "1em"
     },
     notification: {
       position: "fixed",
@@ -802,67 +579,6 @@ export default function Dashboard() {
       border: "1px solid rgba(255,255,255,0.2)",
       fontSize: isMobile ? "0.85em" : "1em",
       maxWidth: isMobile ? "calc(100vw - 30px)" : "auto"
-    },
-    filtersCard: {
-      background: "linear-gradient(135deg, #edf2f7 0%, #e2e8f0 100%)",
-      borderRadius: isMobile ? "15px" : "20px",
-      padding: isMobile ? "20px 15px" : "25px",
-      marginBottom: isMobile ? "20px" : "30px",
-      border: "2px solid #cbd5e0"
-    },
-    inputGroup: {
-      marginBottom: isMobile ? "15px" : "20px"
-    },
-    label: {
-      display: "block",
-      marginBottom: "8px",
-      fontWeight: 700,
-      color: "#4a5568",
-      fontSize: isMobile ? "0.8em" : "0.9em",
-      textTransform: "uppercase",
-      letterSpacing: "1px"
-    },
-    input: {
-      width: "100%",
-      padding: isMobile ? "12px 15px" : "15px 20px",
-      border: "2px solid #e2e8f0",
-      borderRadius: isMobile ? "8px" : "12px",
-      fontSize: isMobile ? "0.9em" : "1em",
-      fontWeight: 600,
-      transition: "all 0.3s ease",
-      background: "white"
-    },
-    alertCard: {
-      background: "linear-gradient(135deg, #fed7d7 0%, #feb2b2 100%)",
-      borderRadius: isMobile ? "15px" : "20px",
-      padding: isMobile ? "20px 15px" : "25px",
-      marginBottom: isMobile ? "20px" : "30px",
-      border: "2px solid #fc8181"
-    },
-    activitiesCard: {
-      background: "linear-gradient(135deg, #e6fffa 0%, #b2f5ea 100%)",
-      borderRadius: isMobile ? "15px" : "20px",
-      padding: isMobile ? "20px 15px" : "25px",
-      marginBottom: isMobile ? "20px" : "30px",
-      border: "2px solid #81e6d9"
-    },
-    loadingOverlay: {
-      position: "fixed",
-      top: 0,
-      left: 0,
-      width: "100%",
-      height: "100%",
-      background: "rgba(0,0,0,0.6)",
-      display: "flex",
-      alignItems: "center",
-      justifyContent: "center",
-      zIndex: 2000,
-      color: "white",
-      fontSize: isMobile ? "1.3em" : "1.8em",
-      fontWeight: 700,
-      backdropFilter: "blur(5px)",
-      padding: "20px",
-      textAlign: "center"
     }
   });
 
@@ -892,13 +608,13 @@ export default function Dashboard() {
             color: "#667eea",
             fontSize: "1.3em",
             fontWeight: 600
-          }}>Chargement du tableau de bord multi-lots...</div>
+          }}>Chargement du tableau de bord...</div>
         </div>
       </div>
     );
   }
 
-  if (!user || !societeId) {
+  if (!user) {
     return (
       <div style={{ 
         background: "linear-gradient(135deg, #f56565 0%, #e53e3e 100%)",
@@ -923,7 +639,112 @@ export default function Dashboard() {
             color: "#e53e3e",
             fontSize: "1.3em",
             fontWeight: 600
-          }}>Non connecté ou société non configurée.</div>
+          }}>Utilisateur non connecté</div>
+          <button
+            onClick={handleLogout}
+            style={{
+              marginTop: "20px",
+              background: "#e53e3e",
+              color: "white",
+              border: "none",
+              borderRadius: "10px",
+              padding: "12px 24px",
+              cursor: "pointer",
+              fontWeight: 600
+            }}
+          >
+            Se déconnecter
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (!societeId) {
+    return (
+      <div style={{ 
+        background: "linear-gradient(135deg, #f59e0b 0%, #d97706 100%)",
+        minHeight: "100vh",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        fontFamily: "'Inter', Arial, sans-serif"
+      }}>
+        <div style={{
+          background: "white",
+          borderRadius: "25px",
+          padding: "40px",
+          textAlign: "center",
+          boxShadow: "0 30px 60px rgba(0,0,0,0.15)"
+        }}>
+          <div style={{ 
+            fontSize: "2em",
+            marginBottom: "20px"
+          }}>🏢</div>
+          <div style={{ 
+            color: "#d97706",
+            fontSize: "1.3em",
+            fontWeight: 600
+          }}>Aucune société assignée</div>
+          <div style={{ 
+            color: "#6b7280",
+            fontSize: "1em",
+            marginTop: "10px"
+          }}>Veuillez contacter l'administrateur</div>
+        </div>
+      </div>
+    );
+  }
+
+  // Affichage des erreurs de chargement
+  if (dataError) {
+    return (
+      <div style={{ 
+        background: "linear-gradient(135deg, #f56565 0%, #e53e3e 100%)",
+        minHeight: "100vh",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        fontFamily: "'Inter', Arial, sans-serif"
+      }}>
+        <div style={{
+          background: "white",
+          borderRadius: "25px",
+          padding: "40px",
+          textAlign: "center",
+          boxShadow: "0 30px 60px rgba(0,0,0,0.15)"
+        }}>
+          <div style={{ 
+            fontSize: "2em",
+            marginBottom: "20px"
+          }}>⚠️</div>
+          <div style={{ 
+            color: "#e53e3e",
+            fontSize: "1.3em",
+            fontWeight: 600
+          }}>Erreur de chargement des données</div>
+          <div style={{ 
+            color: "#6b7280",
+            fontSize: "0.9em",
+            marginTop: "10px"
+          }}>
+            {dataError.message}
+          </div>
+          <button
+            onClick={handleRefresh}
+            style={{
+              marginTop: "20px",
+              background: "#3b82f6",
+              color: "white",
+              border: "none",
+              borderRadius: "10px",
+              padding: "12px 24px",
+              cursor: "pointer",
+              fontWeight: 600
+            }}
+          >
+            Réessayer
+          </button>
         </div>
       </div>
     );
@@ -935,17 +756,34 @@ export default function Dashboard() {
     <div style={styles.container}>
       <div style={styles.mainCard}>
         {/* Loading Overlay */}
-        {isLoading && (
-          <div style={styles.loadingOverlay}>
-            🔄 Actualisation des données multi-lots en cours...
+        {(isRefreshing || dataLoading) && (
+          <div style={{
+            position: "fixed",
+            top: 0,
+            left: 0,
+            width: "100%",
+            height: "100%",
+            background: "rgba(0,0,0,0.6)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 2000,
+            color: "white",
+            fontSize: isMobile ? "1.3em" : "1.8em",
+            fontWeight: 700,
+            backdropFilter: "blur(5px)",
+            padding: "20px",
+            textAlign: "center"
+          }}>
+            🔄 {dataLoading ? "Chargement des données..." : "Actualisation en cours..."}
           </div>
         )}
 
         {/* En-tête moderne */}
         <div style={styles.header}>
-          <h1 style={styles.title}>📊 Tableau de Bord Multi-Lots</h1>
+          <h1 style={styles.title}>📊 Tableau de Bord</h1>
           <p style={styles.subtitle}>
-            Interface de gestion avec traçabilité complète - 
+            Interface de gestion multi-société - 
             👩‍💼 {role === 'docteur' ? 'Pharmacien' : 'Vendeuse'}
           </p>
         </div>
@@ -957,19 +795,20 @@ export default function Dashboard() {
               ...styles.notification,
               background: notification.type === 'success' ? 'linear-gradient(135deg, #48bb78 0%, #38a169 100%)' :
                          notification.type === 'error' ? 'linear-gradient(135deg, #f56565 0%, #e53e3e 100%)' :
+                         notification.type === 'warning' ? 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)' :
                          'linear-gradient(135deg, #4299e1 0%, #3182ce 100%)'
             }}>
               {notification.message}
             </div>
           )}
 
-          {/* 🆕 Indicateur Multi-Lots Amélioré */}
+          {/* Indicateur Structure Multi-Société */}
           <div style={{
-            background: "linear-gradient(135deg, #e6fffa 0%, #b2f5ea 100%)",
+            background: "linear-gradient(135deg, #d4edda 0%, #c3e6cb 100%)",
             padding: "15px",
             borderRadius: "15px",
             marginBottom: "25px",
-            border: "2px solid #81e6d9",
+            border: "2px solid #48bb78",
             textAlign: "center"
           }}>
             <p style={{ 
@@ -978,14 +817,14 @@ export default function Dashboard() {
               fontWeight: 700,
               margin: "0 0 5px 0"
             }}>
-              🏷️ <strong>Système Multi-Lots Activé</strong> - Traçabilité complète en temps réel
+              🏢 Structure Multi-Société Active
             </p>
             <p style={{ 
               color: "#4a5568", 
               fontSize: "0.9em", 
               margin: 0
             }}>
-              📦 {produitsStock} produits • 🏷️ {lotsActifs} lots actifs • 🏭 {fournisseursActifs} fournisseurs • 🚨 {alertes.length} alertes • 📊 {activities.length} activités aujourd'hui • 💵 {soldeCaisse.toFixed(2)} DH en caisse
+              🏢 Société: {societeId} • 👤 {user?.email} • 📦 {produitsStock} produits • 🚨 {alertes.length} alertes • 💵 {soldeCaisse.toFixed(2)} DH en caisse
             </p>
           </div>
 
@@ -1015,21 +854,27 @@ export default function Dashboard() {
             <button
               style={{
                 ...styles.button,
-                ...styles.successButton,
+                background: "linear-gradient(135deg, #48bb78 0%, #38a169 100%)",
                 display: "flex",
                 alignItems: "center",
                 gap: "8px"
               }}
-              onClick={() => { fetchData(); fetchActivities(); }}
-              disabled={isLoading}
+              onClick={handleRefresh}
+              disabled={isRefreshing || dataLoading}
             >
-              🔄 {isLoading ? "Actualisation..." : "Actualiser Données"}
+              🔄 {isRefreshing ? "Actualisation..." : "Actualiser"}
             </button>
           </div>
 
           {/* Filtres */}
           {showFilters && (
-            <div style={styles.filtersCard}>
+            <div style={{
+              background: "linear-gradient(135deg, #edf2f7 0%, #e2e8f0 100%)",
+              borderRadius: isMobile ? "15px" : "20px",
+              padding: isMobile ? "20px 15px" : "25px",
+              marginBottom: isMobile ? "20px" : "30px",
+              border: "2px solid #cbd5e0"
+            }}>
               <h3 style={{
                 color: "#2d3748",
                 fontSize: isMobile ? "1.2em" : "1.4em",
@@ -1039,7 +884,7 @@ export default function Dashboard() {
                 textTransform: "uppercase",
                 letterSpacing: "1px"
               }}>
-                🔍 Filtres de Période Multi-Lots
+                🔍 Filtres de Période
               </h3>
 
               <div style={{
@@ -1047,12 +892,29 @@ export default function Dashboard() {
                 gridTemplateColumns: isMobile ? "1fr" : "repeat(auto-fit, minmax(200px, 1fr))",
                 gap: isMobile ? "15px" : "20px"
               }}>
-                <div style={styles.inputGroup}>
-                  <label style={styles.label}>Période</label>
+                <div>
+                  <label style={{
+                    display: "block",
+                    marginBottom: "8px",
+                    fontWeight: 700,
+                    color: "#4a5568",
+                    fontSize: isMobile ? "0.8em" : "0.9em",
+                    textTransform: "uppercase",
+                    letterSpacing: "1px"
+                  }}>Période</label>
                   <select 
                     value={periode} 
                     onChange={e => setPeriode(e.target.value)}
-                    style={styles.input}
+                    style={{
+                      width: "100%",
+                      padding: isMobile ? "12px 15px" : "15px 20px",
+                      border: "2px solid #e2e8f0",
+                      borderRadius: isMobile ? "8px" : "12px",
+                      fontSize: isMobile ? "0.9em" : "1em",
+                      fontWeight: 600,
+                      transition: "all 0.3s ease",
+                      background: "white"
+                    }}
                   >
                     <option value="jour">Aujourd'hui</option>
                     <option value="semaine">Cette semaine</option>
@@ -1061,23 +923,57 @@ export default function Dashboard() {
                   </select>
                 </div>
                 
-                <div style={styles.inputGroup}>
-                  <label style={styles.label}>Date début</label>
+                <div>
+                  <label style={{
+                    display: "block",
+                    marginBottom: "8px",
+                    fontWeight: 700,
+                    color: "#4a5568",
+                    fontSize: isMobile ? "0.8em" : "0.9em",
+                    textTransform: "uppercase",
+                    letterSpacing: "1px"
+                  }}>Date début</label>
                   <input 
                     type="date" 
                     value={dateMin} 
                     onChange={e => setDateMin(e.target.value)}
-                    style={styles.input}
+                    style={{
+                      width: "100%",
+                      padding: isMobile ? "12px 15px" : "15px 20px",
+                      border: "2px solid #e2e8f0",
+                      borderRadius: isMobile ? "8px" : "12px",
+                      fontSize: isMobile ? "0.9em" : "1em",
+                      fontWeight: 600,
+                      transition: "all 0.3s ease",
+                      background: "white"
+                    }}
                   />
                 </div>
                 
-                <div style={styles.inputGroup}>
-                  <label style={styles.label}>Date fin</label>
+                <div>
+                  <label style={{
+                    display: "block",
+                    marginBottom: "8px",
+                    fontWeight: 700,
+                    color: "#4a5568",
+                    fontSize: isMobile ? "0.8em" : "0.9em",
+                    textTransform: "uppercase",
+                    letterSpacing: "1px"
+                  }}>Date fin</label>
                   <input 
                     type="date" 
                     value={dateMax} 
                     onChange={e => setDateMax(e.target.value)}
-                    style={styles.input}
+                    style={{
+                      width: "100%",
+                      padding: isMobile ? "12px 15px" : "15px 20px",
+                      border: "2px solid #e2e8f0",
+                      borderRadius: isMobile ? "8px" : "12px",
+                      fontSize: isMobile ? "0.9em" : "1em",
+                      fontWeight: 600,
+                      transition: "all 0.3s ease",
+                      background: "white"
+                    }}
                   />
                 </div>
               </div>
@@ -1085,7 +981,10 @@ export default function Dashboard() {
               {(dateMin || dateMax) && (
                 <div style={{ textAlign: "center", marginTop: "20px" }}>
                   <button 
-                    style={{...styles.button, ...styles.warningButton}}
+                    style={{
+                      ...styles.button,
+                      background: "linear-gradient(135deg, #ed8936 0%, #dd6b20 100%)"
+                    }}
                     onClick={() => { setDateMin(""); setDateMax(""); }}
                   >
                     🔄 Réinitialiser Dates
@@ -1095,7 +994,7 @@ export default function Dashboard() {
             </div>
           )}
 
-          {/* 🆕 Cartes statistiques multi-lots étendues */}
+          {/* Cartes statistiques */}
           <div style={styles.statsGrid}>
             <div 
               style={{
@@ -1105,11 +1004,22 @@ export default function Dashboard() {
               onMouseEnter={e => e.currentTarget.style.transform = "translateY(-5px)"}
               onMouseLeave={e => e.currentTarget.style.transform = "translateY(0)"}
             >
-              <div style={styles.statIcon}>💰</div>
-              <div style={{...styles.statValue, color: "#667eea"}}>
+              <div style={{ fontSize: isMobile ? "2.5em" : "3em", marginBottom: "15px" }}>💰</div>
+              <div style={{
+                fontSize: isMobile ? "1.8em" : "2.3em",
+                fontWeight: 800,
+                color: "#667eea",
+                marginBottom: "8px"
+              }}>
                 {totalVentes.toFixed(2)} DH
               </div>
-              <div style={styles.statLabel}>Total Ventes Multi-Lots</div>
+              <div style={{
+                fontSize: isMobile ? "0.9em" : "1em",
+                fontWeight: 600,
+                color: "#4a5568",
+                textTransform: "uppercase",
+                letterSpacing: "1px"
+              }}>Total Ventes</div>
             </div>
             
             <div 
@@ -1120,11 +1030,22 @@ export default function Dashboard() {
               onMouseEnter={e => e.currentTarget.style.transform = "translateY(-5px)"}
               onMouseLeave={e => e.currentTarget.style.transform = "translateY(0)"}
             >
-              <div style={styles.statIcon}>🛒</div>
-              <div style={{...styles.statValue, color: "#48bb78"}}>
+              <div style={{ fontSize: isMobile ? "2.5em" : "3em", marginBottom: "15px" }}>🛒</div>
+              <div style={{
+                fontSize: isMobile ? "1.8em" : "2.3em",
+                fontWeight: 800,
+                color: "#48bb78",
+                marginBottom: "8px"
+              }}>
                 {totalAchats.toFixed(2)} DH
               </div>
-              <div style={styles.statLabel}>Total Achats Multi-Lots</div>
+              <div style={{
+                fontSize: isMobile ? "0.9em" : "1em",
+                fontWeight: 600,
+                color: "#4a5568",
+                textTransform: "uppercase",
+                letterSpacing: "1px"
+              }}>Total Achats</div>
             </div>
             
             <div 
@@ -1135,11 +1056,22 @@ export default function Dashboard() {
               onMouseEnter={e => e.currentTarget.style.transform = "translateY(-5px)"}
               onMouseLeave={e => e.currentTarget.style.transform = "translateY(0)"}
             >
-              <div style={styles.statIcon}>💳</div>
-              <div style={{...styles.statValue, color: "#4299e1"}}>
+              <div style={{ fontSize: isMobile ? "2.5em" : "3em", marginBottom: "15px" }}>💳</div>
+              <div style={{
+                fontSize: isMobile ? "1.8em" : "2.3em",
+                fontWeight: 800,
+                color: "#4299e1",
+                marginBottom: "8px"
+              }}>
                 {totalPaiements.toFixed(2)} DH
               </div>
-              <div style={styles.statLabel}>Total Paiements</div>
+              <div style={{
+                fontSize: isMobile ? "0.9em" : "1em",
+                fontWeight: 600,
+                color: "#4a5568",
+                textTransform: "uppercase",
+                letterSpacing: "1px"
+              }}>Total Paiements</div>
             </div>
             
             <div 
@@ -1150,45 +1082,22 @@ export default function Dashboard() {
               onMouseEnter={e => e.currentTarget.style.transform = "translateY(-5px)"}
               onMouseLeave={e => e.currentTarget.style.transform = "translateY(0)"}
             >
-              <div style={styles.statIcon}>📦</div>
-              <div style={{...styles.statValue, color: "#ed8936"}}>
+              <div style={{ fontSize: isMobile ? "2.5em" : "3em", marginBottom: "15px" }}>📦</div>
+              <div style={{
+                fontSize: isMobile ? "1.8em" : "2.3em",
+                fontWeight: 800,
+                color: "#ed8936",
+                marginBottom: "8px"
+              }}>
                 {produitsStock}
               </div>
-              <div style={styles.statLabel}>Produits & Lots</div>
-            </div>
-
-            {/* 🆕 Carte spécifique aux lots actifs */}
-            <div 
-              style={{
-                ...styles.statCard,
-                borderLeft: "5px solid #805ad5",
-                background: "linear-gradient(135deg, #f7fafc 0%, #e9d8fd 100%)"
-              }}
-              onMouseEnter={e => e.currentTarget.style.transform = "translateY(-5px)"}
-              onMouseLeave={e => e.currentTarget.style.transform = "translateY(0)"}
-            >
-              <div style={{...styles.statIcon, color: "#805ad5"}}>🏷️</div>
-              <div style={{...styles.statValue, color: "#805ad5"}}>
-                {lotsActifs}
-              </div>
-              <div style={styles.statLabel}>Lots Actifs</div>
-            </div>
-
-            {/* 🆕 Carte fournisseurs actifs */}
-            <div 
-              style={{
-                ...styles.statCard,
-                borderLeft: "5px solid #38a169",
-                background: "linear-gradient(135deg, #f7fafc 0%, #c6f6d5 100%)"
-              }}
-              onMouseEnter={e => e.currentTarget.style.transform = "translateY(-5px)"}
-              onMouseLeave={e => e.currentTarget.style.transform = "translateY(0)"}
-            >
-              <div style={{...styles.statIcon, color: "#38a169"}}>🏭</div>
-              <div style={{...styles.statValue, color: "#38a169"}}>
-                {fournisseursActifs}
-              </div>
-              <div style={styles.statLabel}>Fournisseurs Actifs</div>
+              <div style={{
+                fontSize: isMobile ? "0.9em" : "1em",
+                fontWeight: 600,
+                color: "#4a5568",
+                textTransform: "uppercase",
+                letterSpacing: "1px"
+              }}>Produits en Stock</div>
             </div>
             
             <div 
@@ -1199,11 +1108,22 @@ export default function Dashboard() {
               onMouseEnter={e => e.currentTarget.style.transform = "translateY(-5px)"}
               onMouseLeave={e => e.currentTarget.style.transform = "translateY(0)"}
             >
-              <div style={styles.statIcon}>⚠️</div>
-              <div style={{...styles.statValue, color: "#f56565"}}>
+              <div style={{ fontSize: isMobile ? "2.5em" : "3em", marginBottom: "15px" }}>⚠️</div>
+              <div style={{
+                fontSize: isMobile ? "1.8em" : "2.3em",
+                fontWeight: 800,
+                color: "#f56565",
+                marginBottom: "8px"
+              }}>
                 {documentsImpayes}
               </div>
-              <div style={styles.statLabel}>Documents Impayés</div>
+              <div style={{
+                fontSize: isMobile ? "0.9em" : "1em",
+                fontWeight: 600,
+                color: "#4a5568",
+                textTransform: "uppercase",
+                letterSpacing: "1px"
+              }}>Documents Impayés</div>
             </div>
             
             <div 
@@ -1214,14 +1134,25 @@ export default function Dashboard() {
               onMouseEnter={e => e.currentTarget.style.transform = "translateY(-5px)"}
               onMouseLeave={e => e.currentTarget.style.transform = "translateY(0)"}
             >
-              <div style={styles.statIcon}>🚨</div>
-              <div style={{...styles.statValue, color: "#ab47bc"}}>
+              <div style={{ fontSize: isMobile ? "2.5em" : "3em", marginBottom: "15px" }}>🚨</div>
+              <div style={{
+                fontSize: isMobile ? "1.8em" : "2.3em",
+                fontWeight: 800,
+                color: "#ab47bc",
+                marginBottom: "8px"
+              }}>
                 {alertes.length}
               </div>
-              <div style={styles.statLabel}>Alertes Multi-Lots</div>
+              <div style={{
+                fontSize: isMobile ? "0.9em" : "1em",
+                fontWeight: 600,
+                color: "#4a5568",
+                textTransform: "uppercase",
+                letterSpacing: "1px"
+              }}>Alertes</div>
             </div>
 
-            {/* 🆕 SOLDE CAISSE JOURNÉE - DESIGN PREMIUM */}
+            {/* SOLDE CAISSE JOURNÉE */}
             <div 
               style={{
                 ...styles.statCard,
@@ -1233,11 +1164,26 @@ export default function Dashboard() {
               onMouseEnter={e => e.currentTarget.style.transform = "translateY(-8px)"}
               onMouseLeave={e => e.currentTarget.style.transform = "translateY(0)"}
             >
-              <div style={{...styles.statIcon, color: "#f6ad55", fontSize: isMobile ? "3em" : "3.5em"}}>💵</div>
-              <div style={{...styles.statValue, color: "#d69e2e", fontSize: isMobile ? "1.6em" : "2.1em"}}>
+              <div style={{
+                fontSize: isMobile ? "3em" : "3.5em",
+                color: "#f6ad55",
+                marginBottom: "15px"
+              }}>💵</div>
+              <div style={{
+                fontSize: isMobile ? "1.6em" : "2.1em",
+                fontWeight: 800,
+                color: "#d69e2e",
+                marginBottom: "8px"
+              }}>
                 {soldeCaisse.toFixed(2)} DH
               </div>
-              <div style={{...styles.statLabel, color: "#744210", fontWeight: 800}}>
+              <div style={{
+                fontSize: isMobile ? "0.9em" : "1em",
+                fontWeight: 800,
+                color: "#744210",
+                textTransform: "uppercase",
+                letterSpacing: "1px"
+              }}>
                 💰 Solde Caisse Aujourd'hui
               </div>
               <div style={{
@@ -1252,9 +1198,15 @@ export default function Dashboard() {
             </div>
           </div>
 
-          {/* 🆕 Section Alertes Multi-Lots Améliorée */}
+          {/* Section Alertes */}
           {alertes.length > 0 && (
-            <div style={styles.alertCard}>
+            <div style={{
+              background: "linear-gradient(135deg, #fed7d7 0%, #feb2b2 100%)",
+              borderRadius: isMobile ? "15px" : "20px",
+              padding: isMobile ? "20px 15px" : "25px",
+              marginBottom: isMobile ? "20px" : "30px",
+              border: "2px solid #fc8181"
+            }}>
               <h3 style={{
                 color: "#e53e3e",
                 fontSize: isMobile ? "1.2em" : "1.4em",
@@ -1264,7 +1216,7 @@ export default function Dashboard() {
                 textTransform: "uppercase",
                 letterSpacing: "1px"
               }}>
-                🚨 Alertes Multi-Lots ({alertes.length})
+                🚨 Alertes ({alertes.length})
               </h3>
               
               <div style={{
@@ -1272,13 +1224,40 @@ export default function Dashboard() {
                 WebkitOverflowScrolling: "touch",
                 borderRadius: "10px"
               }}>
-                <table style={styles.table}>
-                  <thead style={styles.tableHeader}>
+                <table style={{
+                  width: "100%",
+                  borderCollapse: "collapse",
+                  borderRadius: isMobile ? "10px" : "20px",
+                  overflow: "hidden",
+                  boxShadow: "0 15px 40px rgba(0,0,0,0.1)",
+                  marginTop: isMobile ? "15px" : "25px"
+                }}>
+                  <thead style={{
+                    background: "linear-gradient(135deg, #2d3748 0%, #1a202c 100%)",
+                    color: "white"
+                  }}>
                     <tr>
-                      <th style={styles.tableCell}>Type d'alerte</th>
-                      <th style={styles.tableCell}>Détail du problème</th>
-                      <th style={styles.tableCell}>Catégorie</th>
-                      <th style={styles.tableCell}>Gravité</th>
+                      <th style={{
+                        padding: isMobile ? "10px 8px" : "18px 15px",
+                        textAlign: "center",
+                        borderBottom: "1px solid #e2e8f0",
+                        fontWeight: 600,
+                        fontSize: isMobile ? "0.8em" : "1em"
+                      }}>Type d'alerte</th>
+                      <th style={{
+                        padding: isMobile ? "10px 8px" : "18px 15px",
+                        textAlign: "center",
+                        borderBottom: "1px solid #e2e8f0",
+                        fontWeight: 600,
+                        fontSize: isMobile ? "0.8em" : "1em"
+                      }}>Détail du problème</th>
+                      <th style={{
+                        padding: isMobile ? "10px 8px" : "18px 15px",
+                        textAlign: "center",
+                        borderBottom: "1px solid #e2e8f0",
+                        fontWeight: 600,
+                        fontSize: isMobile ? "0.8em" : "1em"
+                      }}>Gravité</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -1286,36 +1265,34 @@ export default function Dashboard() {
                       <tr key={i} style={{ 
                         background: i % 2 === 0 ? "#f8fafc" : "white"
                       }}>
-                        <td style={{...styles.tableCell, textAlign: "left", fontWeight: 700}}>
+                        <td style={{
+                          padding: isMobile ? "10px 8px" : "18px 15px",
+                          textAlign: "left",
+                          borderBottom: "1px solid #e2e8f0",
+                          fontWeight: 600,
+                          fontSize: isMobile ? "0.8em" : "1em",
+                          color: "#2d3748"
+                        }}>
                           <span style={{ marginRight: "8px" }}>{alerte.icon}</span>
                           {alerte.type}
                         </td>
-                        <td style={{...styles.tableCell, textAlign: "left", color: "#4a5568"}}>
+                        <td style={{
+                          padding: isMobile ? "10px 8px" : "18px 15px",
+                          textAlign: "left",
+                          borderBottom: "1px solid #e2e8f0",
+                          fontWeight: 600,
+                          fontSize: isMobile ? "0.8em" : "1em",
+                          color: "#4a5568"
+                        }}>
                           {alerte.message}
                         </td>
-                        <td style={{...styles.tableCell, textAlign: "center"}}>
-                          <span style={{
-                            padding: "4px 8px",
-                            borderRadius: "12px",
-                            fontSize: "0.7em",
-                            fontWeight: 600,
-                            background: alerte.category?.includes("multilots") ? "#667eea20" : 
-                                       alerte.category === "stock" ? "#ed893620" :
-                                       alerte.category === "expiration" ? "#f5656520" : "#4299e120",
-                            color: alerte.category?.includes("multilots") ? "#667eea" : 
-                                   alerte.category === "stock" ? "#ed8936" :
-                                   alerte.category === "expiration" ? "#f56565" : "#4299e1",
-                            border: `1px solid ${alerte.category?.includes("multilots") ? "#667eea" : 
-                                   alerte.category === "stock" ? "#ed8936" :
-                                   alerte.category === "expiration" ? "#f56565" : "#4299e1"}`
-                          }}>
-                            {alerte.category?.includes("multilots") ? "MULTI-LOTS" :
-                             alerte.category === "stock" ? "STOCK" :
-                             alerte.category === "expiration" ? "EXPIRATION" :
-                             alerte.category === "retours" ? "RETOURS" : "GÉNÉRAL"}
-                          </span>
-                        </td>
-                        <td style={styles.tableCell}>
+                        <td style={{
+                          padding: isMobile ? "10px 8px" : "18px 15px",
+                          textAlign: "center",
+                          borderBottom: "1px solid #e2e8f0",
+                          fontWeight: 600,
+                          fontSize: isMobile ? "0.8em" : "1em"
+                        }}>
                           <span style={{
                             padding: "4px 12px",
                             borderRadius: "20px",
@@ -1339,263 +1316,73 @@ export default function Dashboard() {
             </div>
           )}
 
-          {/* 🆕 Section Activités Multi-Lots Récentes */}
-          <div style={styles.activitiesCard}>
+          {/* Message si aucune donnée */}
+          {ventes.length === 0 && achats.length === 0 && stock.length === 0 && (
             <div style={{
-              display: "flex",
-              justifyContent: "space-between",
-              alignItems: "center",
-              marginBottom: "20px",
-              flexWrap: "wrap",
-              gap: "10px"
+              background: "linear-gradient(135deg, #e6fffa 0%, #b2f5ea 100%)",
+              borderRadius: isMobile ? "15px" : "20px",
+              padding: isMobile ? "30px 20px" : "40px",
+              marginBottom: isMobile ? "20px" : "30px",
+              border: "2px solid #81e6d9",
+              textAlign: "center"
             }}>
+              <div style={{ 
+                fontSize: "3em", 
+                marginBottom: "20px" 
+              }}>📝</div>
               <h3 style={{
                 color: "#2d3748",
-                fontSize: isMobile ? "1.2em" : "1.4em",
+                fontSize: isMobile ? "1.3em" : "1.6em",
                 fontWeight: 800,
-                margin: 0,
-                textTransform: "uppercase",
-                letterSpacing: "1px"
+                marginBottom: "15px"
               }}>
-                📊 Activités Multi-Lots d'Aujourd'hui
+                Aucune donnée trouvée
               </h3>
-              <button
-                style={{
-                  ...styles.button,
-                  background: showActivities 
-                    ? "linear-gradient(135deg, #f56565 0%, #e53e3e 100%)"
-                    : "linear-gradient(135deg, #48bb78 0%, #38a169 100%)",
-                  padding: isMobile ? "8px 15px" : "10px 20px",
-                  fontSize: "0.9em"
-                }}
-                onClick={() => setShowActivities(!showActivities)}
-              >
-                {showActivities ? "➖ Masquer" : "➕ Afficher"}
-              </button>
+              <p style={{
+                color: "#4a5568",
+                fontSize: isMobile ? "1em" : "1.1em",
+                marginBottom: "25px"
+              }}>
+                Commencez par ajouter des ventes, achats ou du stock pour voir vos statistiques apparaître ici.
+              </p>
+              <div style={{
+                display: "flex",
+                gap: "15px",
+                justifyContent: "center",
+                flexWrap: "wrap"
+              }}>
+                <button
+                  onClick={() => navigate('/ventes')}
+                  style={{
+                    ...styles.button,
+                    background: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)"
+                  }}
+                >
+                  💰 Ajouter une Vente
+                </button>
+                <button
+                  onClick={() => navigate('/stock')}
+                  style={{
+                    ...styles.button,
+                    background: "linear-gradient(135deg, #48bb78 0%, #38a169 100%)"
+                  }}
+                >
+                  📦 Gérer le Stock
+                </button>
+                {role === 'docteur' && (
+                  <button
+                    onClick={() => navigate('/achats')}
+                    style={{
+                      ...styles.button,
+                      background: "linear-gradient(135deg, #4299e1 0%, #3182ce 100%)"
+                    }}
+                  >
+                    🛒 Ajouter un Achat
+                  </button>
+                )}
+              </div>
             </div>
-
-            {showActivities && (
-              <>
-                {/* 🆕 Filtres d'activités multi-lots */}
-                <div style={{
-                  display: "flex",
-                  flexWrap: "wrap",
-                  gap: "10px",
-                  marginBottom: "20px",
-                  justifyContent: "center"
-                }}>
-                  <button
-                    onClick={() => setActivityFilter("all")}
-                    style={{
-                      ...styles.button,
-                      background: activityFilter === "all" ? 
-                        "linear-gradient(135deg, #667eea 0%, #764ba2 100%)" :
-                        "linear-gradient(135deg, #a0aec0 0%, #718096 100%)",
-                      padding: "8px 16px",
-                      fontSize: "0.8em"
-                    }}
-                  >
-                    📋 Tout
-                  </button>
-                  {['vente', 'achat', 'paiement', 'stock', 'retour'].map(type => {
-                    const style = getActivityStyle(type);
-                    return (
-                      <button
-                        key={type}
-                        onClick={() => setActivityFilter(type)}
-                        style={{
-                          ...styles.button,
-                          background: activityFilter === type ? 
-                            `linear-gradient(135deg, ${style.color} 0%, ${style.color}dd 100%)` :
-                            "linear-gradient(135deg, #a0aec0 0%, #718096 100%)",
-                          padding: "8px 16px",
-                          fontSize: "0.8em"
-                        }}
-                      >
-                        {style.icon} {style.label}
-                      </button>
-                    );
-                  })}
-                  <button
-                    onClick={() => setActivityFilter("multilots")}
-                    style={{
-                      ...styles.button,
-                      background: activityFilter === "multilots" ? 
-                        "linear-gradient(135deg, #805ad5 0%, #6b46c1 100%)" :
-                        "linear-gradient(135deg, #a0aec0 0%, #718096 100%)",
-                      padding: "8px 16px",
-                      fontSize: "0.8em"
-                    }}
-                  >
-                    🏷️ Multi-Lots
-                  </button>
-                </div>
-
-                {/* 🆕 Liste des activités multi-lots */}
-                <div style={{
-                  maxHeight: "400px",
-                  overflowY: "auto",
-                  backgroundColor: "rgba(255,255,255,0.5)",
-                  borderRadius: "15px",
-                  padding: "15px"
-                }}>
-                  {filteredActivities.length === 0 ? (
-                    <div style={{
-                      padding: "40px",
-                      textAlign: "center",
-                      color: "#4a5568",
-                      fontSize: isMobile ? "1em" : "1.2em"
-                    }}>
-                      📅 Aucune activité aujourd'hui
-                      <div style={{
-                        fontSize: "0.9em",
-                        marginTop: "10px",
-                        color: "#6b7280"
-                      }}>
-                        Les nouvelles activités multi-lots apparaîtront ici
-                      </div>
-                    </div>
-                  ) : (
-                    filteredActivities.map((activity) => {
-                      const style = getActivityStyle(activity.type, activity.details?.action);
-                      const details = activity.details || {};
-                      
-                      return (
-                        <div 
-                          key={activity.id}
-                          style={{
-                            padding: "15px",
-                            marginBottom: "10px",
-                            borderRadius: "12px",
-                            background: "white",
-                            boxShadow: "0 4px 12px rgba(0,0,0,0.05)",
-                            display: "flex",
-                            alignItems: "center",
-                            justifyContent: "space-between",
-                            transition: "all 0.3s ease",
-                            cursor: "pointer",
-                            border: `2px solid ${style.color}20`
-                          }}
-                          onMouseEnter={(e) => e.currentTarget.style.transform = "translateY(-2px)"}
-                          onMouseLeave={(e) => e.currentTarget.style.transform = "translateY(0)"}
-                        >
-                          <div style={{ display: "flex", alignItems: "center", gap: 15 }}>
-                            {/* Icône */}
-                            <div style={{
-                              width: 45,
-                              height: 45,
-                              borderRadius: "50%",
-                              display: "flex",
-                              alignItems: "center",
-                              justifyContent: "center",
-                              background: `linear-gradient(135deg, ${style.color}20 0%, ${style.color}40 100%)`,
-                              border: `2px solid ${style.color}`,
-                              fontSize: "1.2rem"
-                            }}>
-                              {style.icon}
-                            </div>
-                            
-                            {/* Détails */}
-                            <div>
-                              <div style={{ fontWeight: 700, color: "#2d3748", fontSize: isMobile ? "0.9em" : "1em" }}>
-                                {style.label}
-                                <span style={{ fontSize: "0.8em", color: style.color, marginLeft: 8 }}>
-                                  par {activity.userEmail?.split('@')[0] || 'utilisateur'}
-                                </span>
-                                {/* 🆕 Badge pour l'action */}
-                                {details.action && (
-                                  <span style={{
-                                    marginLeft: 10,
-                                    padding: "2px 8px",
-                                    borderRadius: 12,
-                                    fontSize: "0.7em",
-                                    background: details.action === 'suppression' ? "#f56565" :
-                                                details.action === 'modification' ? "#ed8936" :
-                                                details.action === 'création' || details.action === 'annulation_retour' ? "#48bb78" : "#4299e1",
-                                    color: "#fff",
-                                    fontWeight: 600
-                                  }}>
-                                    {details.action.toUpperCase()}
-                                  </span>
-                                )}
-                                {/* 🆕 Badge multi-lots */}
-                                {(details.numeroLot || details.fournisseur) && (
-                                  <span style={{
-                                    marginLeft: 8,
-                                    padding: "2px 6px",
-                                    borderRadius: 8,
-                                    fontSize: "0.6em",
-                                    background: "#805ad5",
-                                    color: "#fff",
-                                    fontWeight: 600
-                                  }}>
-                                    🏷️ MULTI-LOTS
-                                  </span>
-                                )}
-                              </div>
-                              <div style={{ fontSize: "0.85em", color: "#6b7280", marginTop: 2 }}>
-                                {activity.type === 'vente' && `Client: ${details.client || 'N/A'}`}
-                                {activity.type === 'achat' && `Fournisseur: ${details.fournisseur || 'N/A'}`}
-                                {activity.type === 'paiement' && `${details.mode || 'Espèces'} - ${details.type || ''}`}
-                                {activity.type === 'stock' && `Produit: ${details.produit || 'N/A'} (Qté: ${details.quantite || 'N/A'})`}
-                                {activity.type === 'retour' && `${details.produit || 'N/A'} - ${details.motif || ''}`}
-                                {details.articles && ` (${details.articles} articles)`}
-                                {/* 🆕 Informations lot spécifiques */}
-                                {details.numeroLot && (
-                                  <span style={{ marginLeft: 10, color: "#805ad5", fontWeight: 600 }}>
-                                    Lot: {details.numeroLot}
-                                  </span>
-                                )}
-                                {details.fournisseur && activity.type !== 'achat' && (
-                                  <span style={{ marginLeft: 10, color: "#38a169", fontWeight: 600 }}>
-                                    {details.fournisseur}
-                                  </span>
-                                )}
-                                {details.statutPaiement && (
-                                  <span style={{
-                                    marginLeft: 10,
-                                    padding: "2px 6px",
-                                    borderRadius: 6,
-                                    fontSize: "0.75em",
-                                    background: details.statutPaiement === 'payé' ? "#48bb7820" :
-                                                details.statutPaiement === 'impayé' ? "#f5656520" : "#ed893620",
-                                    color: details.statutPaiement === 'payé' ? "#48bb78" :
-                                           details.statutPaiement === 'impayé' ? "#f56565" : "#ed8936",
-                                    border: `1px solid ${details.statutPaiement === 'payé' ? "#48bb78" :
-                                                        details.statutPaiement === 'impayé' ? "#f56565" : "#ed8936"}`
-                                  }}>
-                                    {details.statutPaiement}
-                                  </span>
-                                )}
-                              </div>
-                              <div style={{ fontSize: "0.75em", color: style.color, marginTop: 4, fontWeight: 600 }}>
-                                {formatActivityDate(activity.timestamp)}
-                              </div>
-                            </div>
-                          </div>
-                          
-                          {/* Montant */}
-                          {details.montant && (
-                            <div style={{
-                              fontWeight: 800,
-                              fontSize: isMobile ? "1em" : "1.2em",
-                              color: style.color,
-                              background: `${style.color}15`,
-                              padding: "8px 15px",
-                              borderRadius: "20px",
-                              border: `2px solid ${style.color}30`
-                            }}>
-                              {details.montant} DH
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })
-                  )}
-                </div>
-              </>
-            )}
-          </div>
+          )}
         </div>
       </div>
     </div>

@@ -1,269 +1,299 @@
-import React, { useState, useEffect } from "react";
+// src/components/auth/Register.js
+import React, { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { createUserWithEmailAndPassword } from "firebase/auth";
+import { createUserWithEmailAndPassword, updateProfile } from "firebase/auth";
 import { auth, db } from "../../firebase/config";
-import { 
-  doc, 
-  setDoc, 
-  getDocs, 
-  collection, 
-  query, 
-  where, 
+import {
+  doc,
+  setDoc,
   updateDoc,
-  Timestamp 
+  collection,
+  query,
+  where,
+  getDocs,
+  arrayUnion,
+  serverTimestamp,
 } from "firebase/firestore";
 
 export default function Register() {
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [confirmPassword, setConfirmPassword] = useState("");
-  const [invitationCode, setInvitationCode] = useState("");
-  const [error, setError] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [invitation, setInvitation] = useState(null);
-  const [codeVerified, setCodeVerified] = useState(false);
-  
-  // États pour création de société
-  const [registrationType, setRegistrationType] = useState(""); // "new_company" ou "invitation"
-  const [societeId, setSocieteId] = useState("");
-  const [societeName, setSocieteName] = useState("");
-  const [societeAddress, setSocieteAddress] = useState("");
-  const [societePhone, setSocietePhone] = useState("");
-  
   const navigate = useNavigate();
 
-  // Générer un ID de société unique
-  const generateSocieteId = (name) => {
-    return name
-      .toLowerCase()
-      .replace(/[^a-z0-9]/g, '-')
-      .replace(/-+/g, '-')
-      .replace(/^-|-$/g, '')
-      + '-' + Date.now().toString().slice(-6);
+  // Choix du type d’inscription
+  const [registrationType, setRegistrationType] = useState(""); // "new_company" | "invitation"
+
+  // Champs compte
+  const [email, setEmail] = useState("");
+  const [displayName, setDisplayName] = useState("");
+  const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+
+  // Champs invitation
+  const [invitationCode, setInvitationCode] = useState("");
+
+  // Champs nouvelle société
+  const [pharmaName, setPharmaName] = useState("");
+  const [pharmaAddress, setPharmaAddress] = useState("");
+  const [pharmaPhone, setPharmaPhone] = useState("");
+
+  // UI state
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
+
+  // -------- Helpers --------
+  const generateCode = () => {
+    const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+    let code = "";
+    for (let i = 0; i < 6; i++) code += chars.charAt(Math.floor(Math.random() * chars.length));
+    return code;
   };
 
-  // Vérifier le code d'invitation
-  const verifyInvitationCode = async () => {
-    if (!invitationCode.trim()) {
-      setError("Veuillez saisir un code d'invitation.");
+  const generateUniqueInviteCode = async (maxTry = 8) => {
+    for (let i = 0; i < maxTry; i++) {
+      const c = generateCode();
+      const q = query(collection(db, "societe"), where("invitationCode", "==", c));
+      const snap = await getDocs(q);
+      if (snap.empty) return c;
+    }
+    throw new Error("Impossible de générer un code unique. Réessayez.");
+  };
+
+  const newSocieteIdFor = (uid) => `societe_${uid}_${Date.now()}`;
+
+  const clearErrors = () => {
+    setError("");
+    setSuccess("");
+  };
+
+  // -------- Flows --------
+  const handleCreateCompany = async () => {
+    // Validation
+    const emailTrim = email.trim();
+    const dnameTrim = displayName.trim();
+    const pharmaNameTrim = pharmaName.trim();
+    const pharmaAddressTrim = pharmaAddress.trim();
+    const pharmaPhoneTrim = pharmaPhone.trim();
+
+    if (!emailTrim || !password || !confirmPassword) {
+      setError("Veuillez remplir vos informations de compte.");
+      return;
+    }
+    if (password !== confirmPassword) {
+      setError("Les mots de passe ne correspondent pas.");
+      return;
+    }
+    if (!pharmaNameTrim || !pharmaAddressTrim) {
+      setError("Veuillez renseigner le nom et l’adresse de la pharmacie.");
       return;
     }
 
     setLoading(true);
-    setError("");
+    clearErrors();
 
     try {
-      // Chercher l'invitation avec ce code
-      const q = query(
-        collection(db, "invitations"), 
-        where("code", "==", invitationCode.trim().toUpperCase()),
-        where("status", "==", "pending")
+      // 1) Créer le compte
+      const cred = await createUserWithEmailAndPassword(auth, emailTrim, password);
+      const uid = cred.user.uid;
+
+      // Affichage nom si fourni (facultatif)
+      if (dnameTrim) {
+        try {
+          await updateProfile(cred.user, { displayName: dnameTrim });
+        } catch {}
+      }
+
+      // 2) Générer code d’invitation unique
+      const invite = await generateUniqueInviteCode();
+
+      // 3) Créer la société
+      const societeId = newSocieteIdFor(uid);
+      await setDoc(doc(db, "societe", societeId), {
+        nom: pharmaNameTrim,                // <- Nom humain utilisé par l'UI
+        adresse: pharmaAddressTrim,
+        telephone: pharmaPhoneTrim || "",
+        invitationCode: invite,            // <- Code partagé aux collaborateurs
+        membres: [uid],                    // <- Le créateur est membre
+        createdBy: uid,
+        createdAt: serverTimestamp(),
+        active: true,
+        plan: "basic",
+      });
+
+      // 4) Créer/compléter le doc utilisateur
+      await setDoc(
+        doc(db, "users", uid),
+        {
+          email: emailTrim,
+          displayName: dnameTrim || null,
+          role: "docteur",                 // <- Admin
+          societeId,                       // <- Lien vers la société
+          locked: false,
+          active: true,
+          adminPopup: null,
+          paymentWarning: null,
+          createdAt: serverTimestamp(),
+        },
+        { merge: true }
       );
-      const snap = await getDocs(q);
+
+      setSuccess("Pharmacie créée avec succès.");
+      navigate("/dashboard");
+    } catch (e) {
+      console.error(e);
+      if (e?.code === "auth/email-already-in-use") {
+        setError("Un compte existe déjà avec cet email.");
+      } else if (e?.code === "auth/weak-password") {
+        setError("Le mot de passe doit contenir au moins 6 caractères.");
+      } else {
+        setError("Erreur lors de la création de la pharmacie.");
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleJoinWithCode = async () => {
+    // Validation
+    const emailTrim = email.trim();
+    const dnameTrim = displayName.trim();
+    const code = (invitationCode || "").toUpperCase().trim();
+
+    if (!emailTrim || !password || !confirmPassword) {
+      setError("Veuillez remplir vos informations de compte.");
+      return;
+    }
+    if (password !== confirmPassword) {
+      setError("Les mots de passe ne correspondent pas.");
+      return;
+    }
+    if (!/^[A-Z0-9]{6}$/.test(code)) {
+      setError("Code d'invitation invalide (format ABC123).");
+      return;
+    }
+
+    setLoading(true);
+    clearErrors();
+
+    try {
+      // 1) Créer le compte
+      const cred = await createUserWithEmailAndPassword(auth, emailTrim, password);
+      const uid = cred.user.uid;
+
+      if (dnameTrim) {
+        try {
+          await updateProfile(cred.user, { displayName: dnameTrim });
+        } catch {}
+      }
+
+      // 2) Chercher la société par code — (APRES AUTH !)
+      const qSoc = query(collection(db, "societe"), where("invitationCode", "==", code));
+      const snap = await getDocs(qSoc);
+
+      // 3) Créer le doc user par défaut (même si le code est invalide)
+      await setDoc(
+        doc(db, "users", uid),
+        {
+          email: emailTrim,
+          displayName: dnameTrim || null,
+          role: "vendeuse",                // <- rôle par défaut pour un invité
+          societeId: null,
+          locked: false,
+          active: true,
+          adminPopup: null,
+          paymentWarning: null,
+          createdAt: serverTimestamp(),
+        },
+        { merge: true }
+      );
 
       if (snap.empty) {
-        setError("Code d'invitation invalide ou déjà utilisé.");
-        setLoading(false);
+        // Code invalide → laisser rejoindre plus tard sur /invitations
+        setSuccess(
+          "Compte créé. Le code saisi est invalide — vous pourrez rejoindre depuis la page Invitations."
+        );
+        navigate("/invitations");
         return;
       }
 
-      const invitationDoc = snap.docs[0];
-      const invitationData = invitationDoc.data();
+      const sDoc = snap.docs[0];
+      const societeId = sDoc.id;
 
-      // Vérifier si l'invitation n'est pas expirée
-      const expiresAt = invitationData.expiresAt.toDate();
-      if (expiresAt < new Date()) {
-        setError("Ce code d'invitation a expiré.");
-        setLoading(false);
-        return;
+      // 4) Lier l’utilisateur et ajouter aux membres
+      await setDoc(doc(db, "users", uid), { societeId }, { merge: true });
+      await updateDoc(doc(db, "societe", societeId), { membres: arrayUnion(uid) });
+
+      setSuccess("Compte créé et rattaché à la pharmacie avec succès.");
+      navigate("/dashboard");
+    } catch (e) {
+      console.error(e);
+      if (e?.code === "auth/email-already-in-use") {
+        setError("Un compte existe déjà avec cet email.");
+      } else if (e?.code === "auth/weak-password") {
+        setError("Le mot de passe doit contenir au moins 6 caractères.");
+      } else {
+        setError("Erreur lors de l'inscription.");
       }
-
-      // Pré-remplir l'email si il correspond
-      if (invitationData.emailInvite && invitationData.emailInvite !== email) {
-        setEmail(invitationData.emailInvite);
-      }
-
-      setInvitation({ id: invitationDoc.id, ...invitationData });
-      setCodeVerified(true);
-      setError("");
-      
-    } catch (err) {
-      console.error("Erreur lors de la vérification du code:", err);
-      setError("Erreur lors de la vérification du code d'invitation.");
     } finally {
       setLoading(false);
     }
   };
 
-  // Auto-générer l'ID société quand le nom change
-  useEffect(() => {
-    if (societeName && registrationType === "new_company") {
-      setSocieteId(generateSocieteId(societeName));
-    }
-  }, [societeName, registrationType]);
-
-  // Réinitialiser la vérification si le code change
-  useEffect(() => {
-    if (codeVerified && invitationCode !== invitation?.code) {
-      setCodeVerified(false);
-      setInvitation(null);
-    }
-  }, [invitationCode, invitation?.code, codeVerified]);
-
-  const handleRegister = async (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
-    setError("");
-
-    if (password !== confirmPassword) {
-      setError("Les mots de passe ne correspondent pas !");
-      return;
-    }
-
+    clearErrors();
     if (registrationType === "new_company") {
-      // ===== CRÉATION D'UNE NOUVELLE SOCIÉTÉ =====
-      if (!societeName.trim() || !societeAddress.trim()) {
-        setError("Veuillez remplir au moins le nom et l'adresse de votre pharmacie.");
-        return;
-      }
-
-      // Vérifier que l'ID de société n'existe pas déjà
-      const existingCompanyCheck = query(
-        collection(db, "users"), 
-        where("societeId", "==", societeId)
-      );
-      const existingSnap = await getDocs(existingCompanyCheck);
-      
-      if (!existingSnap.empty) {
-        // Régénérer un ID unique
-        setSocieteId(generateSocieteId(societeName));
-        setError("ID de société déjà pris, nouvel ID généré. Veuillez réessayer.");
-        return;
-      }
-
+      await handleCreateCompany();
     } else if (registrationType === "invitation") {
-      // ===== INSCRIPTION VIA INVITATION =====
-      if (!codeVerified || !invitation) {
-        setError("Veuillez d'abord vérifier votre code d'invitation.");
-        return;
-      }
-
-      if (invitation.emailInvite && invitation.emailInvite !== email) {
-        setError("L'email doit correspondre à celui de l'invitation.");
-        return;
-      }
+      await handleJoinWithCode();
     } else {
       setError("Veuillez choisir un type d'inscription.");
-      return;
-    }
-
-    setLoading(true);
-
-    try {
-      if (registrationType === "new_company") {
-        // ===== CRÉATION D'UNE NOUVELLE SOCIÉTÉ =====
-        
-        // Créer le compte du docteur/pharmacien
-        const userCred = await createUserWithEmailAndPassword(auth, email, password);
-        
-        await setDoc(doc(db, "users", userCred.user.uid), {
-          email,
-          role: "docteur",
-          societeId: societeId,
-          active: true,
-          createdAt: Timestamp.now(),
-          isCompanyOwner: true // Marquer comme propriétaire de la société
-        });
-
-        // Créer le document de la société
-        await setDoc(doc(db, "societes", societeId), {
-          name: societeName.trim(),
-          address: societeAddress.trim(),
-          phone: societePhone.trim() || "",
-          ownerId: userCred.user.uid,
-          ownerEmail: email,
-          createdAt: Timestamp.now(),
-          active: true,
-          plan: "basic" // Plan par défaut pour SaaS
-        });
-
-        navigate("/dashboard");
-        
-      } else {
-        // ===== INSCRIPTION VIA INVITATION =====
-        
-        // Vérifier une dernière fois que l'invitation est toujours valide
-        const invitationSnap = await getDocs(query(
-          collection(db, "invitations"), 
-          where("code", "==", invitation.code),
-          where("status", "==", "pending")
-        ));
-
-        if (invitationSnap.empty) {
-          setError("L'invitation n'est plus valide. Veuillez demander un nouveau code.");
-          setLoading(false);
-          return;
-        }
-
-        // Créer le compte utilisateur
-        const userCred = await createUserWithEmailAndPassword(auth, email, password);
-        
-        // Créer le document utilisateur avec les infos de l'invitation
-        await setDoc(doc(db, "users", userCred.user.uid), {
-          email,
-          role: invitation.roleInvite,
-          societeId: invitation.societeId,
-          active: true,
-          createdAt: Timestamp.now(),
-          invitedBy: invitation.createdBy,
-          invitationCode: invitation.code
-        });
-
-        // Marquer l'invitation comme utilisée
-        await updateDoc(doc(db, "invitations", invitation.id), {
-          status: "used",
-          usedAt: Timestamp.now(),
-          usedBy: email,
-          registeredUserId: userCred.user.uid
-        });
-
-        navigate("/dashboard");
-      }
-      
-    } catch (err) {
-      console.error("Erreur lors de la création du compte:", err);
-      if (err.code === 'auth/email-already-in-use') {
-        setError("Un compte existe déjà avec cet email !");
-      } else if (err.code === 'auth/weak-password') {
-        setError("Le mot de passe doit contenir au moins 6 caractères !");
-      } else {
-        setError("Erreur lors de la création du compte !");
-      }
-    } finally {
-      setLoading(false);
     }
   };
 
+  const resetAll = () => {
+    setRegistrationType("");
+    setEmail("");
+    setDisplayName("");
+    setPassword("");
+    setConfirmPassword("");
+    setInvitationCode("");
+    setPharmaName("");
+    setPharmaAddress("");
+    setPharmaPhone("");
+    clearErrors();
+  };
+
+  // -------- UI --------
   return (
-    <div className="fullscreen-table-wrap" style={{
-      minHeight: "100vh", 
-      justifyContent: "center", 
-      alignItems: "center", 
-      display: "flex",
-      background: "linear-gradient(120deg, #19392a 0%, #1e6939 100%)"
-    }}>
-      <div className="paper-card" style={{
-        maxWidth: 520,
-        width: "96%",
-        margin: "0 auto",
-        borderRadius: 18,
-        padding: "30px 28px 26px 28px"
-      }}>
-        <div className="fullscreen-table-title" style={{
-          background: "#224d32",
-          color: "#f1f5fb",
-          fontSize: "1.38rem",
-          textAlign: "center"
-        }}>
+    <div
+      className="fullscreen-table-wrap"
+      style={{
+        minHeight: "100vh",
+        justifyContent: "center",
+        alignItems: "center",
+        display: "flex",
+        background: "linear-gradient(120deg, #19392a 0%, #1e6939 100%)",
+      }}
+    >
+      <div
+        className="paper-card"
+        style={{
+          maxWidth: 560,
+          width: "96%",
+          margin: "0 auto",
+          borderRadius: 18,
+          padding: "30px 28px 26px 28px",
+        }}
+      >
+        <div
+          className="fullscreen-table-title"
+          style={{
+            background: "#224d32",
+            color: "#f1f5fb",
+            fontSize: "1.38rem",
+            textAlign: "center",
+          }}
+        >
           Créer un compte
         </div>
 
@@ -272,182 +302,131 @@ export default function Register() {
             {error}
           </div>
         )}
+        {success && (
+          <div className="status-chip success" style={{ margin: "18px auto" }}>
+            {success}
+          </div>
+        )}
 
-        {/* Choix du type d'inscription */}
+        {/* Choix type d'inscription */}
         {!registrationType && (
           <div style={{ marginTop: 22 }}>
             <h3 style={{ color: "#e4edfa", textAlign: "center", marginBottom: 20 }}>
               Comment souhaitez-vous vous inscrire ?
             </h3>
-            
+
             <div style={{ display: "flex", flexDirection: "column", gap: 15 }}>
-              {/* Option 1: Nouvelle société */}
-              <div 
+              <button
+                type="button"
+                className="btn"
                 onClick={() => setRegistrationType("new_company")}
                 style={{
                   background: "#e8f5e8",
                   border: "2px solid #4caf50",
-                  borderRadius: 12,
-                  padding: 20,
-                  cursor: "pointer",
-                  transition: "all 0.2s",
-                  textAlign: "center"
+                  color: "#2e7d32",
                 }}
-                onMouseOver={(e) => e.target.style.transform = "scale(1.02)"}
-                onMouseOut={(e) => e.target.style.transform = "scale(1)"}
               >
-                <h4 style={{ color: "#2e7d32", marginTop: 0, marginBottom: 8 }}>
-                  🏪 Créer une nouvelle pharmacie
-                </h4>
-                <p style={{ color: "#1b5e20", margin: 0, fontSize: "0.95em" }}>
-                  Vous êtes pharmacien/docteur et voulez créer l'espace de votre pharmacie
-                </p>
-              </div>
+                🏪 Créer une nouvelle pharmacie (administrateur)
+              </button>
 
-              {/* Option 2: Code d'invitation */}
-              <div 
+              <button
+                type="button"
+                className="btn"
                 onClick={() => setRegistrationType("invitation")}
                 style={{
                   background: "#e3f2fd",
                   border: "2px solid #2196f3",
-                  borderRadius: 12,
-                  padding: 20,
-                  cursor: "pointer",
-                  transition: "all 0.2s",
-                  textAlign: "center"
+                  color: "#1565c0",
                 }}
-                onMouseOver={(e) => e.target.style.transform = "scale(1.02)"}
-                onMouseOut={(e) => e.target.style.transform = "scale(1)"}
               >
-                <h4 style={{ color: "#1565c0", marginTop: 0, marginBottom: 8 }}>
-                  🎯 J'ai un code d'invitation
-                </h4>
-                <p style={{ color: "#0d47a1", margin: 0, fontSize: "0.95em" }}>
-                  Vous avez été invité(e) par votre pharmacien/employeur
-                </p>
-              </div>
+                🎯 Rejoindre avec un code d'invitation
+              </button>
             </div>
           </div>
         )}
 
-        {/* Formulaire de création de nouvelle société */}
+        {/* Formulaire : Nouvelle société */}
         {registrationType === "new_company" && (
-          <div style={{ marginTop: 22 }}>
-            <div style={{ 
-              background: "#e8f5e8", 
-              padding: 15, 
-              borderRadius: 8, 
-              marginBottom: 20,
-              border: "1px solid #4caf50"
-            }}>
-              <h4 style={{ color: "#2e7d32", marginTop: 0, marginBottom: 8 }}>
-                🏪 Création d'une nouvelle pharmacie
-              </h4>
-              <p style={{ color: "#1b5e20", margin: 0, fontSize: "0.9em" }}>
-                Vous allez créer un espace dédié pour votre pharmacie avec un compte administrateur
+          <form onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: 14, marginTop: 22 }}>
+            <div
+              style={{
+                background: "#e8f5e8",
+                padding: 15,
+                borderRadius: 8,
+                border: "1px solid #4caf50",
+              }}
+            >
+              <h4 style={{ color: "#2e7d32", margin: 0 }}>🏪 Création d'une nouvelle pharmacie</h4>
+              <p style={{ color: "#1b5e20", margin: "6px 0 0 0", fontSize: "0.9em" }}>
+                Vous serez créé en tant que <strong>docteur</strong> (administrateur).
               </p>
             </div>
 
-            <form onSubmit={handleRegister} style={{ display: "flex", flexDirection: "column", gap: 13 }}>
-              {/* Infos du compte */}
-              <div style={{ marginBottom: 15 }}>
-                <h4 style={{ color: "#e4edfa", marginBottom: 10, fontSize: "1.1em" }}>
-                  👨‍⚕️ Votre compte administrateur
-                </h4>
-                <input
-                  className="input"
-                  type="email"
-                  placeholder="Votre adresse e-mail"
-                  autoComplete="email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  required
-                />
-                
-                <input
-                  className="input"
-                  type="password"
-                  placeholder="Mot de passe (min. 6 caractères)"
-                  autoComplete="new-password"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  required
-                  minLength={6}
-                />
-                
-                <input
-                  className="input"
-                  type="password"
-                  placeholder="Confirmer le mot de passe"
-                  autoComplete="new-password"
-                  value={confirmPassword}
-                  onChange={(e) => setConfirmPassword(e.target.value)}
-                  required
-                />
-              </div>
+            {/* Compte */}
+            <input
+              className="input"
+              type="text"
+              placeholder="Nom (facultatif)"
+              value={displayName}
+              onChange={(e) => setDisplayName(e.target.value)}
+            />
+            <input
+              className="input"
+              type="email"
+              placeholder="Email *"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              required
+              autoComplete="email"
+            />
+            <input
+              className="input"
+              type="password"
+              placeholder="Mot de passe (min. 6 caractères) *"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              required
+              minLength={6}
+              autoComplete="new-password"
+            />
+            <input
+              className="input"
+              type="password"
+              placeholder="Confirmer le mot de passe *"
+              value={confirmPassword}
+              onChange={(e) => setConfirmPassword(e.target.value)}
+              required
+              autoComplete="new-password"
+            />
 
-              {/* Infos de la société */}
-              <div style={{ marginBottom: 15 }}>
-                <h4 style={{ color: "#e4edfa", marginBottom: 10, fontSize: "1.1em" }}>
-                  🏢 Informations de votre pharmacie
-                </h4>
-                <input
-                  className="input"
-                  type="text"
-                  placeholder="Nom de votre pharmacie *"
-                  value={societeName}
-                  onChange={(e) => setSocieteName(e.target.value)}
-                  required
-                />
-                
-                <input
-                  className="input"
-                  type="text"
-                  placeholder="Adresse complète *"
-                  value={societeAddress}
-                  onChange={(e) => setSocieteAddress(e.target.value)}
-                  required
-                />
-                
-                <input
-                  className="input"
-                  type="tel"
-                  placeholder="Téléphone (optionnel)"
-                  value={societePhone}
-                  onChange={(e) => setSocietePhone(e.target.value)}
-                />
+            {/* Pharmacie */}
+            <input
+              className="input"
+              type="text"
+              placeholder="Nom de la pharmacie *"
+              value={pharmaName}
+              onChange={(e) => setPharmaName(e.target.value)}
+              required
+            />
+            <input
+              className="input"
+              type="text"
+              placeholder="Adresse *"
+              value={pharmaAddress}
+              onChange={(e) => setPharmaAddress(e.target.value)}
+              required
+            />
+            <input
+              className="input"
+              type="tel"
+              placeholder="Téléphone (optionnel)"
+              value={pharmaPhone}
+              onChange={(e) => setPharmaPhone(e.target.value)}
+            />
 
-                {/* ID généré automatiquement */}
-                {societeId && (
-                  <div style={{ 
-                    background: "#1a2535", 
-                    padding: 10, 
-                    borderRadius: 8, 
-                    marginTop: 10,
-                    border: "1px solid #34518b"
-                  }}>
-                    <div style={{ color: "#7ee4e6", fontSize: "0.85em", marginBottom: 5 }}>
-                      ID unique de votre société (généré automatiquement) :
-                    </div>
-                    <code style={{ 
-                      color: "#fff", 
-                      fontWeight: "bold",
-                      fontSize: "0.9em"
-                    }}>
-                      {societeId}
-                    </code>
-                  </div>
-                )}
-              </div>
-              
-              <button 
-                className="btn" 
-                style={{ width: "100%", fontSize: "1.1rem", padding: "12px" }}
-                disabled={loading}
-              >
-                {loading ? "Création en cours..." : "🎉 Créer ma pharmacie"}
-              </button>
-            </form>
+            <button className="btn" disabled={loading} style={{ fontSize: "1.05rem" }}>
+              {loading ? "Création…" : "🎉 Créer ma pharmacie"}
+            </button>
 
             <button
               type="button"
@@ -458,64 +437,82 @@ export default function Register() {
                 padding: "8px 16px",
                 borderRadius: 8,
                 cursor: "pointer",
-                marginTop: 15,
-                width: "100%"
+                width: "100%",
               }}
-              onClick={() => {
-                setRegistrationType("");
-                setSocieteName("");
-                setSocieteAddress("");
-                setSocietePhone("");
-                setSocieteId("");
-                setEmail("");
-                setPassword("");
-                setConfirmPassword("");
-                setError("");
-              }}
+              onClick={resetAll}
             >
               ← Retour au choix d'inscription
             </button>
-          </div>
+          </form>
         )}
 
-        {/* Système d'invitation */}
-        {registrationType === "invitation" && !codeVerified && (
-          <div style={{ marginTop: 22 }}>
-            <div style={{ 
-              background: "#e3f2fd", 
-              padding: 15, 
-              borderRadius: 8, 
-              marginBottom: 20,
-              border: "1px solid #90caf9"
-            }}>
-              <h4 style={{ color: "#1565c0", marginTop: 0, marginBottom: 10 }}>
-                🎯 Code d'invitation requis
-              </h4>
-              <p style={{ color: "#0d47a1", margin: 0, fontSize: "0.95em" }}>
-                Saisissez le code d'invitation que vous a fourni votre pharmacien/employeur.
+        {/* Formulaire : Rejoindre avec code */}
+        {registrationType === "invitation" && (
+          <form onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: 14, marginTop: 22 }}>
+            <div
+              style={{
+                background: "#e3f2fd",
+                padding: 15,
+                borderRadius: 8,
+                border: "1px solid #90caf9",
+              }}
+            >
+              <h4 style={{ color: "#1565c0", margin: 0 }}>🎯 Rejoindre avec un code</h4>
+              <p style={{ color: "#0d47a1", margin: "6px 0 0 0", fontSize: "0.9em" }}>
+                Le code doit être fourni par votre pharmacien/employeur.
               </p>
             </div>
 
-            <div style={{ display: "flex", flexDirection: "column", gap: 13 }}>
-              <input
-                className="input"
-                type="text"
-                placeholder="Code d'invitation (ex: ABC123DE)"
-                value={invitationCode}
-                onChange={(e) => setInvitationCode(e.target.value.toUpperCase())}
-                required
-                style={{ letterSpacing: "2px", fontWeight: "bold" }}
-                maxLength={8}
-              />
-              <button 
-                className="btn" 
-                style={{ width: "100%", fontSize: "1.1rem" }}
-                onClick={verifyInvitationCode}
-                disabled={loading || !invitationCode.trim()}
-              >
-                {loading ? "Vérification..." : "🔍 Vérifier le code"}
-              </button>
-            </div>
+            <input
+              className="input"
+              type="text"
+              placeholder="Code (ex: ABC123)"
+              value={invitationCode}
+              onChange={(e) => setInvitationCode(e.target.value.toUpperCase())}
+              maxLength={6}
+              style={{ letterSpacing: "0.2em", textTransform: "uppercase", textAlign: "center" }}
+              required
+            />
+
+            <input
+              className="input"
+              type="text"
+              placeholder="Nom (facultatif)"
+              value={displayName}
+              onChange={(e) => setDisplayName(e.target.value)}
+            />
+            <input
+              className="input"
+              type="email"
+              placeholder="Email *"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              required
+              autoComplete="email"
+            />
+            <input
+              className="input"
+              type="password"
+              placeholder="Mot de passe (min. 6 caractères) *"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              required
+              minLength={6}
+              autoComplete="new-password"
+            />
+            <input
+              className="input"
+              type="password"
+              placeholder="Confirmer le mot de passe *"
+              value={confirmPassword}
+              onChange={(e) => setConfirmPassword(e.target.value)}
+              required
+              autoComplete="new-password"
+            />
+
+            <button className="btn" disabled={loading} style={{ fontSize: "1.05rem" }}>
+              {loading ? "Inscription…" : "✅ Créer mon compte et rejoindre"}
+            </button>
 
             <button
               type="button"
@@ -526,129 +523,37 @@ export default function Register() {
                 padding: "8px 16px",
                 borderRadius: 8,
                 cursor: "pointer",
-                marginTop: 15,
-                width: "100%"
+                width: "100%",
               }}
-              onClick={() => {
-                setRegistrationType("");
-                setInvitationCode("");
-                setError("");
-              }}
+              onClick={resetAll}
             >
               ← Retour au choix d'inscription
             </button>
-          </div>
+          </form>
         )}
 
-        {/* Formulaire d'inscription via invitation */}
-        {codeVerified && invitation && (
-          <div style={{ marginTop: 22 }}>
-            {/* Confirmation de l'invitation */}
-            <div style={{ 
-              background: "#e8f5e8", 
-              padding: 15, 
-              borderRadius: 8, 
-              marginBottom: 20,
-              border: "1px solid #4caf50"
-            }}>
-              <h4 style={{ color: "#2e7d32", marginTop: 0, marginBottom: 8 }}>
-                ✅ Code d'invitation valide
-              </h4>
-              <div style={{ color: "#1b5e20", fontSize: "0.9em" }}>
-                <div><strong>Rôle attribué :</strong> {invitation.roleInvite === "docteur" ? "👨‍⚕️ Docteur" : "👩‍💼 Vendeuse"}</div>
-                {invitation.emailInvite && (
-                  <div><strong>Email requis :</strong> {invitation.emailInvite}</div>
-                )}
-                {invitation.noteInvite && (
-                  <div><strong>Note :</strong> {invitation.noteInvite}</div>
-                )}
-                <div><strong>Invité par :</strong> {invitation.createdBy}</div>
-              </div>
-            </div>
-
-            <form onSubmit={handleRegister} style={{ display: "flex", flexDirection: "column", gap: 13 }}>
-              <input
-                className="input"
-                type="email"
-                placeholder="Adresse e-mail"
-                autoComplete="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                required
-                disabled={invitation.emailInvite} // Désactivé si email imposé par l'invitation
-              />
-              
-              <input
-                className="input"
-                type="password"
-                placeholder="Mot de passe (min. 6 caractères)"
-                autoComplete="new-password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                required
-                minLength={6}
-              />
-              
-              <input
-                className="input"
-                type="password"
-                placeholder="Confirmer le mot de passe"
-                autoComplete="new-password"
-                value={confirmPassword}
-                onChange={(e) => setConfirmPassword(e.target.value)}
-                required
-              />
-              
-              <button 
-                className="btn" 
-                style={{ width: "100%", fontSize: "1.1rem" }}
-                disabled={loading}
-              >
-                {loading ? "Création du compte..." : "🎉 Créer mon compte"}
-              </button>
-            </form>
-
-            <button
-              type="button"
-              style={{
-                background: "transparent",
-                border: "1px solid #7ee4e6",
-                color: "#7ee4e6",
-                padding: "8px 16px",
-                borderRadius: 8,
-                cursor: "pointer",
-                marginTop: 15,
-                width: "100%"
-              }}
-              onClick={() => {
-                setCodeVerified(false);
-                setInvitation(null);
-                setInvitationCode("");
-                setEmail("");
-                setPassword("");
-                setConfirmPassword("");
-                setError("");
-              }}
-            >
-              ← Changer de code d'invitation
-            </button>
-          </div>
-        )}
-
-        <div style={{ marginTop: 20, color: "#e1e6ef", textAlign: "center", fontSize: "1.04rem" }}>
-          Vous avez déjà un compte ?
-          <button className="btn-neumorph" style={{
-            background: "transparent", 
-            color: "#5bed98", 
-            border: "none", 
-            marginLeft: 9, 
-            fontWeight: 700, 
-            boxShadow: "none", 
-            padding: 0
+        {/* Lien connexion */}
+        <div
+          style={{
+            marginTop: 20,
+            color: "#e1e6ef",
+            textAlign: "center",
+            fontSize: "1.04rem",
           }}
+        >
+          Vous avez déjà un compte ?
+          <button
+            className="btn-neumorph"
+            style={{
+              background: "transparent",
+              color: "#5bed98",
+              border: "none",
+              marginLeft: 9,
+              fontWeight: 700,
+              boxShadow: "none",
+              padding: 0,
+            }}
             onClick={() => navigate("/login")}
-            onMouseOver={e => (e.target.style.textDecoration = "underline")}
-            onMouseOut={e => (e.target.style.textDecoration = "none")}
             type="button"
           >
             Connectez-vous

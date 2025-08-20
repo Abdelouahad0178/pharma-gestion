@@ -1,6 +1,7 @@
+// src/contexts/UserRoleContext.js
 import React, { createContext, useContext, useState, useEffect } from "react";
-import { getAuth, onAuthStateChanged, signOut } from "firebase/auth";
-import { doc, getDoc } from "firebase/firestore";
+import { getAuth, onAuthStateChanged } from "firebase/auth";
+import { doc, getDoc, onSnapshot } from "firebase/firestore";
 import { db } from "../firebase/config";
 
 // Création du contexte
@@ -13,108 +14,198 @@ export function useUserRole() {
 
 // Provider du contexte
 export function UserRoleProvider({ children }) {
-  const [role, setRole] = useState(null);         // ex: "docteur", "vendeuse"
-  const [user, setUser] = useState(null);         // Utilisateur Firebase enrichi (avec societeId)
+  const [role, setRole] = useState(null);           // ex: "docteur", "vendeuse"
+  const [user, setUser] = useState(null);           // Utilisateur Firebase enrichi
   const [societeId, setSocieteId] = useState(null); // Id de la société partagée
-  const [societeInfo, setSocieteInfo] = useState(null); // Infos de la société
-  const [loading, setLoading] = useState(true);   // Etat de chargement
-  const [userActive, setUserActive] = useState(true); // Statut actif de l'utilisateur
+  const [societeName, setSocieteName] = useState(null); // ✅ Nom lisible de la société
+  const [loading, setLoading] = useState(true);     // Etat de chargement
+  const [isLocked, setIsLocked] = useState(false);  // Compte verrouillé
+  const [adminPopup, setAdminPopup] = useState(null); // Popup admin
+  const [paymentWarning, setPaymentWarning] = useState(null); // Avertissement paiement
+  const [isActive, setIsActive] = useState(true);   // Compte actif
 
   useEffect(() => {
     const auth = getAuth();
-    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+    let unsubscribeUser = null;
+
+    const unsubscribeAuth = onAuthStateChanged(auth, async (firebaseUser) => {
       setLoading(true);
+
+      // Nettoyer l'ancien listener s'il existe
+      if (unsubscribeUser) {
+        unsubscribeUser();
+        unsubscribeUser = null;
+      }
+
       if (firebaseUser) {
         try {
-          // Va chercher le document user (avec role + societeId + active)
+          // Écouter les changements du document utilisateur en temps réel
           const userRef = doc(db, "users", firebaseUser.uid);
-          const snap = await getDoc(userRef);
-          
-          if (snap.exists()) {
-            const userData = snap.data();
-            
-            // Vérifier si l'utilisateur est actif
-            const isActive = userData.active !== false; // Par défaut true si le champ n'existe pas
-            
-            if (!isActive) {
-              // L'utilisateur est désactivé, le déconnecter immédiatement
-              await signOut(auth);
-              setRole(null);
-              setSocieteId(null);
-              setSocieteInfo(null);
-              setUser(null);
-              setUserActive(false);
-              setLoading(false);
-              return;
-            }
-            
-            setRole(userData.role || "vendeuse");
-            setSocieteId(userData.societeId || null);
-            setUserActive(isActive);
-            
-            // Charger les informations de la société si disponible
-            if (userData.societeId) {
-              try {
-                const societeRef = doc(db, "societes", userData.societeId);
-                const societeSnap = await getDoc(societeRef);
-                if (societeSnap.exists()) {
-                  setSocieteInfo(societeSnap.data());
-                } else {
-                  setSocieteInfo(null);
-                }
-              } catch (societeError) {
-                console.error("Erreur lors du chargement des infos société:", societeError);
-                setSocieteInfo(null);
+
+          unsubscribeUser = onSnapshot(
+            userRef,
+            (snap) => {
+              if (snap.exists()) {
+                const data = snap.data();
+
+                // Mise à jour des états
+                setRole(data.role || "vendeuse");
+                setSocieteId(data.societeId || null);
+                setIsLocked(data.locked === true);
+                setIsActive(data.active !== false);
+                setAdminPopup(data.adminPopup || null);
+                setPaymentWarning(data.paymentWarning || null);
+
+                setUser({
+                  ...firebaseUser,
+                  ...data,
+                  societeId: data.societeId || null,
+                  role: data.role || "vendeuse",
+                  locked: data.locked === true,
+                  active: data.active !== false,
+                  adminPopup: data.adminPopup || null,
+                  paymentWarning: data.paymentWarning || null,
+                });
+              } else {
+                // Document n'existe pas, valeurs par défaut
+                const defaultData = {
+                  role: "vendeuse",
+                  societeId: null,
+                  locked: false,
+                  active: true,
+                  adminPopup: null,
+                  paymentWarning: null,
+                };
+
+                setRole(defaultData.role);
+                setSocieteId(defaultData.societeId);
+                setIsLocked(defaultData.locked);
+                setIsActive(defaultData.active);
+                setAdminPopup(defaultData.adminPopup);
+                setPaymentWarning(defaultData.paymentWarning);
+
+                setUser({
+                  ...firebaseUser,
+                  ...defaultData,
+                });
               }
-            } else {
-              setSocieteInfo(null);
+              setLoading(false);
+            },
+            (error) => {
+              console.error("Erreur lors de l'écoute du document utilisateur:", error);
+              // En cas d'erreur, définir des valeurs par défaut
+              setRole("vendeuse");
+              setSocieteId(null);
+              setIsLocked(false);
+              setIsActive(true);
+              setAdminPopup(null);
+              setPaymentWarning(null);
+              setUser({
+                ...firebaseUser,
+                societeId: null,
+                role: "vendeuse",
+                locked: false,
+                active: true,
+                adminPopup: null,
+                paymentWarning: null,
+              });
+              setLoading(false);
             }
-            
-            setUser({
-              ...firebaseUser,
-              societeId: userData.societeId || null,
-              role: userData.role || "vendeuse",
-              active: isActive,
-              isCompanyOwner: userData.isCompanyOwner || false,
-              invitedBy: userData.invitedBy || null
-            });
-          } else {
-            // Utilisateur sans document = problème, déconnecter
-            console.warn("Utilisateur sans document user associé");
-            await signOut(auth);
-            setRole(null);
-            setSocieteId(null);
-            setSocieteInfo(null);
-            setUser(null);
-            setUserActive(false);
-          }
+          );
         } catch (e) {
-          console.error("Erreur lors de la vérification du statut utilisateur:", e);
-          // En cas d'erreur, déconnecter par sécurité
-          await signOut(auth);
-          setRole(null);
+          console.error("Erreur lors de l'initialisation de l'écoute utilisateur:", e);
+          setRole("vendeuse");
           setSocieteId(null);
-          setSocieteInfo(null);
-          setUser(null);
-          setUserActive(false);
+          setIsLocked(false);
+          setIsActive(true);
+          setAdminPopup(null);
+          setPaymentWarning(null);
+          setUser({
+            ...firebaseUser,
+            societeId: null,
+            role: "vendeuse",
+            locked: false,
+            active: true,
+            adminPopup: null,
+            paymentWarning: null,
+          });
+          setLoading(false);
         }
       } else {
+        // Utilisateur déconnecté
         setRole(null);
         setSocieteId(null);
-        setSocieteInfo(null);
         setUser(null);
-        setUserActive(true);
+        setIsLocked(false);
+        setIsActive(true);
+        setAdminPopup(null);
+        setPaymentWarning(null);
+        setSocieteName(null);
+        setLoading(false);
       }
-      setLoading(false);
     });
-    return () => unsubscribe();
+
+    // Cleanup function
+    return () => {
+      unsubscribeAuth();
+      if (unsubscribeUser) {
+        unsubscribeUser();
+      }
+    };
   }, []);
 
-  // Gestion des permissions
+  // ✅ Résoudre le nom lisible de la société à partir de societeId
+  useEffect(() => {
+    let unsubscribeSociete = null;
+    setSocieteName(null);
+
+    if (!user || !societeId) {
+      return () => {
+        if (unsubscribeSociete) unsubscribeSociete();
+      };
+    }
+
+    try {
+      const ref = doc(db, "societe", societeId);
+      unsubscribeSociete = onSnapshot(
+        ref,
+        async (snap) => {
+          if (snap.exists()) {
+            const data = snap.data();
+            // Priorité au champ 'nom', fallback 'name'
+            setSocieteName(data?.nom || data?.name || null);
+          } else {
+            // Fallback pour anciens projets utilisant la collection 'societes'
+            try {
+              const oldRef = doc(db, "societes", societeId);
+              const oldSnap = await getDoc(oldRef);
+              if (oldSnap.exists()) {
+                const d = oldSnap.data();
+                setSocieteName(d?.nom || d?.name || null);
+              } else {
+                setSocieteName(null);
+              }
+            } catch {
+              setSocieteName(null);
+            }
+          }
+        },
+        (err) => {
+          console.warn("Erreur écoute société:", err);
+          setSocieteName(null);
+        }
+      );
+    } catch (e) {
+      console.warn("Erreur init écoute société:", e);
+      setSocieteName(null);
+    }
+
+    return () => {
+      if (unsubscribeSociete) unsubscribeSociete();
+    };
+  }, [user, societeId]);
+
   const can = (permission) => {
-    // Si l'utilisateur n'est pas actif, aucune permission
-    if (!userActive) return false;
-    
     const rolePermissions = {
       docteur: [
         "voir_achats",
@@ -126,46 +217,46 @@ export function UserRoleProvider({ children }) {
         "voir_devis_factures",
         "voir_paiements",
         "voir_dashboard",
-        "gerer_utilisateurs", // Gestion des utilisateurs
-        "gerer_invitations",  // Gestion des invitations
-        "gerer_societe",      // Gestion des paramètres de société
+        "gerer_utilisateurs",
+        "voir_invitations",
       ],
-      vendeuse: [
-        "voir_ventes",
-        "ajouter_vente",
-        "voir_stock",
-        "voir_dashboard",
-        "voir_devis_factures",
-        "voir_paiements",
-      ],
+      vendeuse: ["voir_ventes", "ajouter_vente", "voir_stock", "voir_invitations"],
     };
     if (!role) return false;
     if (role === "docteur") return true;
     return (rolePermissions[role] || []).includes(permission);
   };
 
-  // Fonction utilitaire pour vérifier si l'utilisateur est propriétaire de la société
-  const isCompanyOwner = () => {
-    return user?.isCompanyOwner === true;
+  // Vérifier si l'utilisateur peut accéder à l'application
+  const canAccessApp = () => {
+    return user && isActive && !isLocked;
   };
 
-  // Fonction utilitaire pour obtenir le nom de la société
-  const getSocieteName = () => {
-    return societeInfo?.name || societeId || "Société inconnue";
+  // Obtenir le message de blocage approprié
+  const getBlockMessage = () => {
+    if (!user) return "Non connecté";
+    if (!isActive) return "Compte désactivé par l'administrateur";
+    if (isLocked) return "Compte verrouillé par l'administrateur";
+    return null;
+  };
+
+  const contextValue = {
+    role,
+    user,
+    societeId,
+    societeName,   // ✅ Utilise ceci dans l'UI au lieu de societeId
+    loading,
+    isLocked,
+    isActive,
+    adminPopup,
+    paymentWarning,
+    can,
+    canAccessApp,
+    getBlockMessage,
   };
 
   return (
-    <UserRoleContext.Provider value={{ 
-      role, 
-      user, 
-      societeId, 
-      societeInfo,
-      loading, 
-      userActive, 
-      can,
-      isCompanyOwner,
-      getSocieteName
-    }}>
+    <UserRoleContext.Provider value={contextValue}>
       {children}
     </UserRoleContext.Provider>
   );

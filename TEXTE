@@ -1,0 +1,15 @@
+src/
+├── components/
+│   ├── AdminPopup.js                 ✅ NOUVEAU
+│   ├── AccountLocked.js              ✅ NOUVEAU
+│   └── PaymentWarningBanner.js       ✅ NOUVEAU
+├── hooks/
+│   └── useFirestore.js               ✅ NOUVEAU
+└── contexts/
+    └── UserRoleContext.js            🔄 MODIFIÉ
+Fichiers à Modifier
+src/
+├── App.js                            🔄 MODIFIÉ
+├── components/
+│   ├── Protected.js                  🔄 MODIFIÉ
+│   └── dashboard/Dashboard.js        🔄 MODIFIÉ 

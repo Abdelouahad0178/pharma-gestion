@@ -188,32 +188,64 @@ export default function Ventes() {
     }
   }, [societeId]);
 
-  // 🆕 Obtient tous les médicaments disponibles (combinaison stock traditionnel + multi-lots)
+  // 🔧 CORRECTION: Obtient tous les médicaments disponibles SANS DOUBLONS
   const getAllAvailableMedicaments = useMemo(() => {
-    const traditionalMeds = medicaments.filter(m => m.quantite > 0);
+    const medicamentMap = new Map();
+    
+    // D'abord, ajouter les médicaments avec lots (priorité aux lots)
     const lotMeds = stockEntries.filter(e => e.quantite > 0);
+    const lotGroups = {};
     
-    // Créer une liste unique des noms
-    const allNames = new Set([
-      ...traditionalMeds.map(m => m.nom),
-      ...lotMeds.map(e => e.nom)
-    ]);
+    // Grouper les lots par nom de médicament
+    lotMeds.forEach(entry => {
+      if (!lotGroups[entry.nom]) {
+        lotGroups[entry.nom] = [];
+      }
+      lotGroups[entry.nom].push(entry);
+    });
     
-    return Array.from(allNames).map(nom => {
-      const traditionalStock = traditionalMeds.filter(m => m.nom === nom);
-      const lotStock = lotMeds.filter(e => e.nom === nom);
-      const totalQuantity = traditionalStock.reduce((sum, m) => sum + m.quantite, 0) +
-                           lotStock.reduce((sum, e) => sum + e.quantite, 0);
+    // Ajouter les médicaments avec lots
+    Object.keys(lotGroups).forEach(nom => {
+      const lots = lotGroups[nom];
+      const totalQuantity = lots.reduce((sum, lot) => sum + lot.quantite, 0);
+      const lastPrice = lots[0].prixVente || 0;
       
-      return {
+      medicamentMap.set(nom, {
         nom,
         quantiteTotal: totalQuantity,
-        hasLots: lotStock.length > 0,
-        hasTraditional: traditionalStock.length > 0,
-        lastPrice: lotStock.length > 0 ? lotStock[0].prixVente : 
-                  traditionalStock.length > 0 ? traditionalStock[0].prixVente : 0
-      };
-    }).filter(m => m.quantiteTotal > 0);
+        hasLots: true,
+        hasTraditional: false,
+        lastPrice,
+        source: 'lots'
+      });
+    });
+    
+    // Ensuite, ajouter les médicaments traditionnels SEULEMENT s'ils n'ont pas de lots
+    const traditionalMeds = medicaments.filter(m => m.quantite > 0);
+    traditionalMeds.forEach(med => {
+      if (!medicamentMap.has(med.nom)) {
+        // Ce médicament n'a pas de lots, on l'ajoute depuis le stock traditionnel
+        medicamentMap.set(med.nom, {
+          nom: med.nom,
+          quantiteTotal: med.quantite,
+          hasLots: false,
+          hasTraditional: true,
+          lastPrice: med.prixVente || 0,
+          source: 'traditional'
+        });
+      } else {
+        // Le médicament a déjà des lots, on ne fait rien pour éviter le doublon
+        // On peut éventuellement marquer qu'il existe aussi en traditionnel
+        const existing = medicamentMap.get(med.nom);
+        existing.hasTraditional = true;
+        // On ne modifie PAS la quantité pour éviter le doublon
+      }
+    });
+    
+    // Convertir en tableau et trier par nom
+    return Array.from(medicamentMap.values())
+      .filter(m => m.quantiteTotal > 0)
+      .sort((a, b) => a.nom.localeCompare(b.nom));
   }, [medicaments, stockEntries]);
 
   // ============ GESTION DU FORMULAIRE ============
@@ -697,35 +729,35 @@ export default function Ventes() {
               derniereVente: Timestamp.now()
             });
           }
-        }
-        
-        // Toujours mettre à jour le stock traditionnel pour compatibilité
-        const stockRef = collection(db, "societe", societeId, "stock");
-        const q = query(stockRef, where("nom", "==", art.produit || ""));
-        const stockSnap = await getDocs(q);
-        
-        if (!stockSnap.empty) {
-          const docId = stockSnap.docs[0].id;
-          const current = stockSnap.docs[0].data();
-          const newQuantity = Math.max(0, Number(current.quantite || 0) - Number(art.quantite || 0));
+        } else if (art.stockSource?.type === "traditional") {
+          // Décrémenter du stock traditionnel SEULEMENT si c'est vraiment traditionnel
+          const stockRef = collection(db, "societe", societeId, "stock");
+          const q = query(stockRef, where("nom", "==", art.produit || ""));
+          const stockSnap = await getDocs(q);
           
-          await updateDoc(doc(db, "societe", societeId, "stock", docId), {
-            quantite: newQuantity,
-            modifiePar: user.uid,
-            modifieParEmail: user.email,
-            modifieLe: Timestamp.now(),
-            derniereVente: Timestamp.now()
-          });
-
-          // Alerte stock faible
-          if (newQuantity < (current.seuilAlerte || 10)) {
-            await addDoc(collection(db, "societe", societeId, "alertes"), {
-              type: "stock_faible",
-              produit: art.produit,
-              quantiteRestante: newQuantity,
-              date: Timestamp.now(),
-              lu: false
+          if (!stockSnap.empty) {
+            const docId = stockSnap.docs[0].id;
+            const current = stockSnap.docs[0].data();
+            const newQuantity = Math.max(0, Number(current.quantite || 0) - Number(art.quantite || 0));
+            
+            await updateDoc(doc(db, "societe", societeId, "stock", docId), {
+              quantite: newQuantity,
+              modifiePar: user.uid,
+              modifieParEmail: user.email,
+              modifieLe: Timestamp.now(),
+              derniereVente: Timestamp.now()
             });
+
+            // Alerte stock faible
+            if (newQuantity < (current.seuilAlerte || 10)) {
+              await addDoc(collection(db, "societe", societeId, "alertes"), {
+                type: "stock_faible",
+                produit: art.produit,
+                quantiteRestante: newQuantity,
+                date: Timestamp.now(),
+                lu: false
+              });
+            }
           }
         }
       } catch (error) {
@@ -756,23 +788,23 @@ export default function Ventes() {
               modifieLe: Timestamp.now()
             });
           }
-        }
-        
-        // Restaurer dans le stock traditionnel
-        const stockRef = collection(db, "societe", societeId, "stock");
-        const q = query(stockRef, where("nom", "==", art.produit || ""));
-        const stockSnap = await getDocs(q);
-        
-        if (!stockSnap.empty) {
-          const docId = stockSnap.docs[0].id;
-          const current = stockSnap.docs[0].data();
+        } else if (art.stockSourceType === "traditional" || !art.stockEntryId) {
+          // Restaurer dans le stock traditionnel SEULEMENT si c'était vraiment du stock traditionnel
+          const stockRef = collection(db, "societe", societeId, "stock");
+          const q = query(stockRef, where("nom", "==", art.produit || ""));
+          const stockSnap = await getDocs(q);
           
-          await updateDoc(doc(db, "societe", societeId, "stock", docId), {
-            quantite: Number(current.quantite || 0) + Number(art.quantite || 0),
-            modifiePar: user.uid,
-            modifieParEmail: user.email,
-            modifieLe: Timestamp.now()
-          });
+          if (!stockSnap.empty) {
+            const docId = stockSnap.docs[0].id;
+            const current = stockSnap.docs[0].data();
+            
+            await updateDoc(doc(db, "societe", societeId, "stock", docId), {
+              quantite: Number(current.quantite || 0) + Number(art.quantite || 0),
+              modifiePar: user.uid,
+              modifieParEmail: user.email,
+              modifieLe: Timestamp.now()
+            });
+          }
         }
       } catch (error) {
         console.error(`Erreur lors de la restauration du stock pour ${art.produit}:`, error);
@@ -1436,8 +1468,6 @@ export default function Ventes() {
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <span>📊 Gestion des Ventes Multi-Lots</span>
           <div style={{ display: "flex", gap: "10px" }}>
-
-           
             <button 
               className="btn success"
               onClick={handleExportCSV}
@@ -1640,7 +1670,7 @@ export default function Ventes() {
                 <option value="">-- Sélectionner --</option>
                 {getAllAvailableMedicaments.map(m => (
                   <option key={m.nom} value={m.nom}>
-                    {m.nom} (Stock: {m.quantiteTotal})
+                    {m.nom} ({m.hasLots ? "Lots" : "Stock"}: {m.quantiteTotal})
                     {m.hasLots ? " 🏷️" : ""}
                   </option>
                 ))}
@@ -2059,6 +2089,25 @@ export default function Ventes() {
               <select 
                 value={filterClient} 
                 onChange={e => setFilterClient(e.target.value)}
+                style={{ 
+                  padding: "8px", 
+                  borderRadius: "4px", 
+                  border: "1px solid #d1d5db",
+                  width: "100%"
+                }}
+              >
+                <option value="">Tous les clients</option>
+                {clients.map(c => <option key={c} value={c}>{c}</option>)}
+              </select>
+            </div>
+
+            <div>
+              <label style={{ fontSize: "14px", color: "#4b5563", marginBottom: "4px", display: "block" }}>
+                Statut
+              </label>
+              <select 
+                value={filterStatut} 
+                onChange={e => setFilterStatut(e.target.value)}
                 style={{ 
                   padding: "8px", 
                   borderRadius: "4px", 

@@ -10,22 +10,76 @@ import Navbar from './components/Navbar';
 import Parametres from './components/parametres/Parametres';
 import DevisFactures from './components/devisFactures/DevisFactures';
 import Paiements from './components/paiements/Paiements';
-import GestionUtilisateurs from './components/admin/GestionUtilisateurs'; // NOUVEAU
-import GestionInvitations from './components/admin/GestionInvitations'; // NOUVEAU  
-import MigrationUtilisateurs from './components/admin/MigrationUtilisateurs'; // NOUVEAU
-import MigrationVersSocietes from './components/admin/MigrationVersSocietes'; // NOUVEAU SAAS
+import Invitations from './components/invitations/Invitations'; // NOUVEAU IMPORT
 import { UserRoleProvider } from './contexts/UserRoleContext';
 import Protected from './components/Protected';
 import AddSocieteIdToAllUsers from './components/admin/AddSocieteIdToAllUsers';
+import GestionUtilisateurs from './components/admin/GestionUtilisateurs';
+import AdminPopup from './components/AdminPopup';
+import AccountLocked from './components/AccountLocked';
+import PaymentWarningBanner from './components/PaymentWarningBanner';
+import { useUserRole } from './contexts/UserRoleContext';
 import './styles/main.css';
 
-// Wrapper pour masquer la Navbar sur Login/Register
-function AppWrapper() {
-  const location = useLocation();
-  const hideNavbar = location.pathname === "/login" || location.pathname === "/register";
 
+// Composant pour vérifier l'état du compte
+function AccountChecker({ children }) {
+  const { loading, user, canAccessApp, isLocked, isActive } = useUserRole();
+
+  // Affichage pendant le chargement
+  if (loading) {
+    return (
+      <div style={{
+        minHeight: '100vh',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        background: 'linear-gradient(120deg, #223049 0%, #344060 100%)',
+        color: '#f1f5fb',
+        fontSize: '18px'
+      }}>
+        <div style={{
+          textAlign: 'center',
+          padding: '40px',
+          background: '#2b3951',
+          borderRadius: '15px',
+          boxShadow: '0 8px 32px rgba(0,0,0,0.3)'
+        }}>
+          <div style={{ fontSize: '48px', marginBottom: '20px' }}>⏳</div>
+          <div>Chargement...</div>
+        </div>
+      </div>
+    );
+  }
+
+  // Si l'utilisateur est connecté mais ne peut pas accéder (verrouillé/désactivé)
+  if (user && !canAccessApp()) {
+    return <AccountLocked />;
+  }
+
+  // Sinon, afficher le contenu normal
   return (
     <>
+      {children}
+      {/* Afficher les popups admin si l'utilisateur est connecté et peut accéder */}
+      {user && canAccessApp() && <AdminPopup />}
+      {/* Afficher la bannière d'avertissement si nécessaire */}
+      {user && canAccessApp() && <PaymentWarningBanner />}
+    </>
+  );
+}
+
+// Wrapper pour masquer la Navbar sur Login/Register et pages de blocage
+function AppWrapper() {
+  const location = useLocation();
+  const { user, canAccessApp } = useUserRole();
+  
+  const hideNavbar = location.pathname === "/login" || 
+                    location.pathname === "/register" ||
+                    (user && !canAccessApp());
+
+  return (
+    <AccountChecker>
       {!hideNavbar && <Navbar />}
       <div style={{ minHeight: "100vh", background: "#f6f8fa" }}>
         <Routes>
@@ -34,7 +88,11 @@ function AppWrapper() {
           <Route path="/register" element={<Register />} />
 
           {/* Dashboard */}
-          <Route path="/dashboard" element={<Dashboard />} />
+          <Route path="/dashboard" element={
+            <Protected>
+              <Dashboard />
+            </Protected>
+          } />
 
           {/* Routes protégées (avec permissions) */}
           <Route
@@ -79,6 +137,17 @@ function AppWrapper() {
               </Protected>
             }
           />
+          
+          {/* NOUVELLE ROUTE - Invitations */}
+          <Route
+            path="/invitations"
+            element={
+              <Protected permission="voir_invitations">
+                <Invitations />
+              </Protected>
+            }
+          />
+          
           <Route
             path="/parametres"
             element={
@@ -88,7 +157,7 @@ function AppWrapper() {
             }
           />
 
-          {/* NOUVELLE ROUTE : Gestion des utilisateurs (Docteur uniquement) */}
+          {/* ROUTE - Gestion des utilisateurs */}
           <Route
             path="/gestion-utilisateurs"
             element={
@@ -98,26 +167,14 @@ function AppWrapper() {
             }
           />
 
-          {/* NOUVELLE ROUTE : Gestion des invitations (Docteur uniquement) */}
-          <Route
-            path="/gestion-invitations"
-            element={
-              <Protected permission="gerer_utilisateurs">
-                <GestionInvitations />
-              </Protected>
-            }
-          />
-
           {/* ROUTE ADMIN TEMPORAIRE */}
           <Route path="/admin-update-societe" element={<AddSocieteIdToAllUsers />} />
-          <Route path="/migration-utilisateurs" element={<MigrationUtilisateurs />} />
-          <Route path="/migration-societes" element={<MigrationVersSocietes />} />
 
           {/* Redirection par défaut */}
           <Route path="*" element={<Navigate to="/login" />} />
         </Routes>
       </div>
-    </>
+    </AccountChecker>
   );
 }
 

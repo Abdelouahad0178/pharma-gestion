@@ -1,156 +1,218 @@
+// src/components/admin/GestionUtilisateurs.js
 import React, { useState, useEffect } from "react";
 import { db } from "../../firebase/config";
+import { useUserRole } from "../../contexts/UserRoleContext";
 import {
   collection,
   getDocs,
+  addDoc,
   updateDoc,
+  deleteDoc,
   doc,
   query,
   where,
   Timestamp
 } from "firebase/firestore";
-import { useUserRole } from "../../contexts/UserRoleContext";
 
 export default function GestionUtilisateurs() {
-  const { role, loading, societeId, user } = useUserRole();
+  const { user, societeId, role, loading } = useUserRole();
+  
+  // États
   const [utilisateurs, setUtilisateurs] = useState([]);
-  const [loadingUsers, setLoadingUsers] = useState(true);
-  const [updating, setUpdating] = useState(false);
+  const [invitations, setInvitations] = useState([]);
+  const [loadingData, setLoadingData] = useState(true);
+  const [error, setError] = useState(null);
+  
+  // Formulaire d'invitation
+  const [emailInvite, setEmailInvite] = useState("");
+  const [roleInvite, setRoleInvite] = useState("vendeuse");
+  const [showForm, setShowForm] = useState(false);
 
-  // Chargement des utilisateurs de la même société
-  const fetchUtilisateurs = async () => {
-    if (!societeId) {
-      setUtilisateurs([]);
-      setLoadingUsers(false);
+  // Vérification des permissions
+  const canManageUsers = role === "docteur" || role === "pharmacien";
+
+  // Charger les données
+  useEffect(() => {
+    if (!canManageUsers || !societeId) {
+      setLoadingData(false);
       return;
     }
     
+    fetchUtilisateurs();
+    fetchInvitations();
+  }, [canManageUsers, societeId]);
+
+  const fetchUtilisateurs = async () => {
     try {
-      setLoadingUsers(true);
-      const q = query(collection(db, "users"), where("societeId", "==", societeId));
-      const snap = await getDocs(q);
-      let arr = [];
-      snap.forEach((doc) => {
-        const data = doc.data();
-        arr.push({ 
-          id: doc.id, 
-          ...data,
-          active: data.active !== false // Par défaut true si le champ n'existe pas
+      setLoadingData(true);
+      
+      // Récupérer tous les utilisateurs de la société
+      const q = query(
+        collection(db, "users"),
+        where("societeId", "==", societeId)
+      );
+      
+      const snapshot = await getDocs(q);
+      const users = [];
+      
+      snapshot.forEach((doc) => {
+        users.push({
+          id: doc.id,
+          ...doc.data()
         });
       });
       
-      // Trier par rôle (docteur en premier) puis par email
-      arr.sort((a, b) => {
-        if (a.role === "docteur" && b.role !== "docteur") return -1;
-        if (a.role !== "docteur" && b.role === "docteur") return 1;
-        return (a.email || "").localeCompare(b.email || "");
-      });
+      setUtilisateurs(users);
       
-      setUtilisateurs(arr);
-    } catch (error) {
-      console.error("Erreur lors du chargement des utilisateurs:", error);
-      setUtilisateurs([]);
+    } catch (err) {
+      console.error("Erreur chargement utilisateurs:", err);
+      setError("Erreur lors du chargement des utilisateurs");
     } finally {
-      setLoadingUsers(false);
+      setLoadingData(false);
     }
   };
 
-  useEffect(() => {
-    fetchUtilisateurs();
-  }, [societeId]);
-
-  // Activer/Désactiver un utilisateur
-  const toggleUserStatus = async (utilisateurId, currentStatus) => {
-    if (utilisateurId === user?.uid) {
-      alert("Vous ne pouvez pas désactiver votre propre compte !");
-      return;
+  const fetchInvitations = async () => {
+    try {
+      // Récupérer les invitations en attente pour cette société
+      const q = query(
+        collection(db, "invitations"),
+        where("societeId", "==", societeId),
+        where("status", "==", "pending")
+      );
+      
+      const snapshot = await getDocs(q);
+      const invites = [];
+      
+      snapshot.forEach((doc) => {
+        invites.push({
+          id: doc.id,
+          ...doc.data()
+        });
+      });
+      
+      setInvitations(invites);
+      
+    } catch (err) {
+      console.error("Erreur chargement invitations:", err);
     }
+  };
 
-    const confirmMessage = currentStatus 
-      ? "Êtes-vous sûr de vouloir désactiver cet utilisateur ? Il ne pourra plus se connecter."
-      : "Êtes-vous sûr de vouloir réactiver cet utilisateur ?";
+  const handleInviteUser = async (e) => {
+    e.preventDefault();
     
-    if (!window.confirm(confirmMessage)) return;
-
+    if (!emailInvite || !roleInvite) return;
+    
     try {
-      setUpdating(true);
-      await updateDoc(doc(db, "users", utilisateurId), {
-        active: !currentStatus,
-        lastModified: Timestamp.now(),
-        modifiedBy: user?.email || "Inconnu"
+      // Vérifier si l'utilisateur existe déjà
+      const existingUserQuery = query(
+        collection(db, "users"),
+        where("email", "==", emailInvite)
+      );
+      
+      const existingUserSnap = await getDocs(existingUserQuery);
+      
+      if (!existingUserSnap.empty) {
+        alert("Cet utilisateur existe déjà dans le système");
+        return;
+      }
+
+      // Vérifier si une invitation existe déjà
+      const existingInviteQuery = query(
+        collection(db, "invitations"),
+        where("email", "==", emailInvite),
+        where("societeId", "==", societeId),
+        where("status", "==", "pending")
+      );
+      
+      const existingInviteSnap = await getDocs(existingInviteQuery);
+      
+      if (!existingInviteSnap.empty) {
+        alert("Une invitation est déjà en attente pour cet email");
+        return;
+      }
+
+      // Créer l'invitation
+      await addDoc(collection(db, "invitations"), {
+        email: emailInvite,
+        role: roleInvite,
+        societeId: societeId,
+        invitedBy: user.email,
+        invitedAt: Timestamp.now(),
+        status: "pending"
       });
+
+      alert("Invitation envoyée avec succès !");
       
-      // Recharger la liste
-      await fetchUtilisateurs();
+      // Réinitialiser le formulaire
+      setEmailInvite("");
+      setRoleInvite("vendeuse");
+      setShowForm(false);
       
-      const action = currentStatus ? "désactivé" : "réactivé";
-      alert(`Utilisateur ${action} avec succès !`);
-    } catch (error) {
-      console.error("Erreur lors de la modification du statut:", error);
-      alert("Erreur lors de la modification du statut de l'utilisateur.");
-    } finally {
-      setUpdating(false);
+      // Recharger les invitations
+      fetchInvitations();
+      
+    } catch (err) {
+      console.error("Erreur envoi invitation:", err);
+      alert("Erreur lors de l'envoi de l'invitation");
     }
   };
 
-  // Changer le rôle d'un utilisateur
-  const changeUserRole = async (utilisateurId, newRole) => {
-    if (utilisateurId === user?.uid) {
-      alert("Vous ne pouvez pas modifier votre propre rôle !");
-      return;
-    }
-
-    if (!window.confirm(`Êtes-vous sûr de vouloir changer le rôle de cet utilisateur en "${newRole}" ?`)) {
-      return;
-    }
-
+  const handleDeleteInvitation = async (invitationId) => {
+    if (!window.confirm("Supprimer cette invitation ?")) return;
+    
     try {
-      setUpdating(true);
-      await updateDoc(doc(db, "users", utilisateurId), {
-        role: newRole,
-        lastModified: Timestamp.now(),
-        modifiedBy: user?.email || "Inconnu"
-      });
-      
-      await fetchUtilisateurs();
-      alert("Rôle modifié avec succès !");
-    } catch (error) {
-      console.error("Erreur lors de la modification du rôle:", error);
-      alert("Erreur lors de la modification du rôle.");
-    } finally {
-      setUpdating(false);
+      await deleteDoc(doc(db, "invitations", invitationId));
+      alert("Invitation supprimée");
+      fetchInvitations();
+    } catch (err) {
+      console.error("Erreur suppression invitation:", err);
+      alert("Erreur lors de la suppression");
     }
   };
 
-  // Vérifications d'accès
+  const handleUpdateUserRole = async (userId, newRole) => {
+    try {
+      await updateDoc(doc(db, "users", userId), {
+        role: newRole
+      });
+      
+      alert("Rôle mis à jour avec succès");
+      fetchUtilisateurs();
+      
+    } catch (err) {
+      console.error("Erreur mise à jour rôle:", err);
+      alert("Erreur lors de la mise à jour du rôle");
+    }
+  };
+
+  // Écrans d'état
   if (loading) {
     return (
-      <div style={{ padding: 30, textAlign: "center", color: "#1c355e" }}>
-        Chargement...
+      <div className="fullscreen-table-wrap">
+        <div className="fullscreen-table-title">Chargement...</div>
       </div>
     );
   }
 
-  if (!user) {
+  if (!canManageUsers) {
     return (
-      <div style={{ padding: 30, textAlign: "center", color: "#a32" }}>
-        Non connecté.
-      </div>
-    );
-  }
-
-  if (role !== "docteur") {
-    return (
-      <div style={{ padding: 30, textAlign: "center", color: "#bc3453" }}>
-        Accès refusé : Seuls les docteurs peuvent gérer les utilisateurs.
+      <div className="fullscreen-table-wrap">
+        <div className="fullscreen-table-title">Accès Refusé</div>
+        <div style={{ padding: 40, textAlign: "center", color: "#e53e3e" }}>
+          Vous n'avez pas les permissions pour accéder à cette page.
+        </div>
       </div>
     );
   }
 
   if (!societeId) {
     return (
-      <div style={{ padding: 30, textAlign: "center", color: "#bc3453" }}>
-        Aucune société associée. Contactez l'administrateur.
+      <div className="fullscreen-table-wrap">
+        <div className="fullscreen-table-title">Erreur</div>
+        <div style={{ padding: 40, textAlign: "center", color: "#f59e0b" }}>
+          Aucune société assignée. Contactez l'administrateur.
+        </div>
       </div>
     );
   }
@@ -159,140 +221,190 @@ export default function GestionUtilisateurs() {
     <div className="fullscreen-table-wrap">
       <div className="fullscreen-table-title">Gestion des Utilisateurs</div>
       
-      <div className="paper-card" style={{ marginBottom: 10 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 15, flexWrap: "wrap" }}>
-          <span style={{ fontWeight: 700, color: "#98c4f9" }}>
-            Société ID: <code style={{ background: "#1a2535", padding: "2px 8px", borderRadius: 5 }}>
-              {societeId}
-            </code>
-          </span>
-          <span style={{ color: "#7ee4e6" }}>
-            {utilisateurs.length} utilisateur(s) trouvé(s)
-          </span>
-          <button 
-            className="btn info" 
-            onClick={fetchUtilisateurs}
-            disabled={loadingUsers}
-            style={{ marginLeft: "auto" }}
-          >
-            {loadingUsers ? "Chargement..." : "🔄 Actualiser"}
-          </button>
-        </div>
-      </div>
-
-      {loadingUsers ? (
-        <div style={{ padding: 40, textAlign: "center", color: "#7ee4e6" }}>
-          Chargement des utilisateurs...
-        </div>
-      ) : utilisateurs.length === 0 ? (
-        <div style={{ padding: 40, textAlign: "center", color: "#bc3453" }}>
-          Aucun utilisateur trouvé pour cette société.
-        </div>
-      ) : (
-        <div className="table-pro-full">
-          <table>
-            <thead>
-              <tr>
-                <th>Email</th>
-                <th>Rôle</th>
-                <th>Statut</th>
-                <th>Dernière Modif.</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {utilisateurs.map((utilisateur) => (
-                <tr key={utilisateur.id}>
-                  <td>
-                    {utilisateur.email || "Email non disponible"}
-                    {utilisateur.id === user?.uid && (
-                      <div style={{ fontSize: "0.8em", color: "#7ee4e6", fontWeight: 600 }}>
-                        (Vous)
-                      </div>
-                    )}
-                  </td>
-                  <td>
-                    <div style={{ display: "flex", alignItems: "center", gap: 8, justifyContent: "center" }}>
-                      <span style={{ 
-                        background: utilisateur.role === "docteur" ? "#2bd2a6" : "#61c7ef",
-                        color: "#fff",
-                        padding: "3px 10px",
-                        borderRadius: 12,
-                        fontSize: "0.9em",
-                        fontWeight: 600
-                      }}>
-                        {utilisateur.role === "docteur" ? "👨‍⚕️ Docteur" : "👩‍💼 Vendeuse"}
-                      </span>
-                      {utilisateur.id !== user?.uid && (
-                        <select
-                          value={utilisateur.role}
-                          onChange={(e) => changeUserRole(utilisateur.id, e.target.value)}
-                          disabled={updating}
-                          style={{ 
-                            fontSize: "0.8em", 
-                            padding: "2px 5px",
-                            background: "#27385d",
-                            border: "1px solid #34518b",
-                            color: "#e5eeff",
-                            borderRadius: 5
-                          }}
-                        >
-                          <option value="docteur">Docteur</option>
-                          <option value="vendeuse">Vendeuse</option>
-                        </select>
-                      )}
-                    </div>
-                  </td>
-                  <td>
-                    <span className={`status-chip ${utilisateur.active ? "success" : "danger"}`}>
-                      {utilisateur.active ? "✅ Actif" : "❌ Désactivé"}
-                    </span>
-                  </td>
-                  <td>
-                    {utilisateur.lastModified ? (
-                      <div>
-                        <div style={{ fontSize: "0.9em" }}>
-                          {utilisateur.lastModified.toDate().toLocaleDateString()}
-                        </div>
-                        <div style={{ fontSize: "0.8em", color: "#7ee4e6" }}>
-                          par {utilisateur.modifiedBy || "Inconnu"}
-                        </div>
-                      </div>
-                    ) : (
-                      <span style={{ color: "#999" }}>Jamais modifié</span>
-                    )}
-                  </td>
-                  <td>
-                    {utilisateur.id === user?.uid ? (
-                      <span style={{ color: "#999", fontSize: "0.9em" }}>
-                        Actions non disponibles
-                      </span>
-                    ) : (
-                      <button
-                        className={`btn ${utilisateur.active ? "danger" : "success"}`}
-                        onClick={() => toggleUserStatus(utilisateur.id, utilisateur.active)}
-                        disabled={updating}
-                        style={{ minWidth: 120 }}
-                      >
-                        {updating ? "..." : utilisateur.active ? "🚫 Désactiver" : "✅ Activer"}
-                      </button>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+      {error && (
+        <div style={{ 
+          padding: 20, 
+          background: "#fef2f2", 
+          color: "#dc2626", 
+          margin: "20px", 
+          borderRadius: 8 
+        }}>
+          {error}
         </div>
       )}
 
-      <div className="paper-card" style={{ marginTop: 20 }}>
-        <h3 style={{ color: "#e4edfa", marginBottom: 15 }}>ℹ️ Informations importantes</h3>
-        <ul style={{ color: "#99b2d4", lineHeight: 1.6 }}>
-          <li><strong>Désactiver un utilisateur :</strong> L'utilisateur sera immédiatement déconnecté et ne pourra plus se reconnecter.</li>
-          <li><strong>Réactiver un utilisateur :</strong> L'utilisateur pourra se reconnecter normalement.</li>
-          <li><strong>Changer le rôle :</strong> Modifie les permissions de l'utilisateur (Docteur = tous droits, Vendeuse = droits limités).</li>
-          <li><strong>Votre compte :</strong> Vous ne pouvez pas modifier votre propre statut ou rôle.</li>
-        </ul>
+      {/* Informations société */}
+      <div style={{ 
+        padding: 20, 
+        background: "#f0f9ff", 
+        margin: "20px", 
+        borderRadius: 8,
+        border: "1px solid #0ea5e9"
+      }}>
+        <strong>Société :</strong> {societeId}<br/>
+        <strong>Votre rôle :</strong> {role}<br/>
+        <strong>Email :</strong> {user?.email}
+      </div>
+
+      {/* Toggle formulaire invitation */}
+      <div style={{ display: "flex", alignItems: "center", gap: 11, marginTop: 12, marginBottom: 0 }}>
+        <button
+          className="btn"
+          type="button"
+          style={{
+            fontSize: "1.32em",
+            padding: "2px 13px",
+            minWidth: 35,
+            background: showForm
+              ? "linear-gradient(90deg,#ee4e61 60%,#fddada 100%)"
+              : "linear-gradient(90deg,#3272e0 50%,#61c7ef 100%)"
+          }}
+          onClick={() => setShowForm(v => !v)}
+        >
+          {showForm ? "➖" : "➕"}
+        </button>
+        <span style={{ fontWeight: 700, fontSize: 17 }}>
+          Inviter un nouvel utilisateur
+        </span>
+      </div>
+
+      {/* Formulaire d'invitation */}
+      {showForm && (
+        <form onSubmit={handleInviteUser} className="paper-card" style={{ display: "flex", gap: 15, alignItems: "end", flexWrap: "wrap" }}>
+          <div>
+            <label>Email de l'utilisateur</label>
+            <input
+              type="email"
+              className="w-full"
+              value={emailInvite}
+              onChange={(e) => setEmailInvite(e.target.value)}
+              required
+              placeholder="utilisateur@exemple.com"
+            />
+          </div>
+          
+          <div>
+            <label>Rôle</label>
+            <select
+              className="w-full"
+              value={roleInvite}
+              onChange={(e) => setRoleInvite(e.target.value)}
+            >
+              <option value="vendeuse">Vendeuse</option>
+              <option value="docteur">Pharmacien</option>
+            </select>
+          </div>
+          
+          <button type="submit" className="btn">
+            Envoyer l'invitation
+          </button>
+        </form>
+      )}
+
+      {/* Liste des utilisateurs actuels */}
+      <div className="fullscreen-table-title" style={{ fontSize: "1.3rem", marginTop: 30 }}>
+        Utilisateurs Actuels ({utilisateurs.length})
+      </div>
+      
+      <div className="table-pro-full" style={{ marginBottom: 30 }}>
+        <table>
+          <thead>
+            <tr>
+              <th>Email</th>
+              <th>Rôle</th>
+              <th>Inscrit le</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {utilisateurs.map((utilisateur) => (
+              <tr key={utilisateur.id}>
+                <td>{utilisateur.email}</td>
+                <td>
+                  <select
+                    value={utilisateur.role || "vendeuse"}
+                    onChange={(e) => handleUpdateUserRole(utilisateur.id, e.target.value)}
+                    style={{ padding: 5, borderRadius: 4 }}
+                  >
+                    <option value="vendeuse">Vendeuse</option>
+                    <option value="docteur">Pharmacien</option>
+                  </select>
+                </td>
+                <td>
+                  {utilisateur.createdAt?.toDate ? 
+                    utilisateur.createdAt.toDate().toLocaleDateString() : 
+                    "Non spécifié"
+                  }
+                </td>
+                <td>
+                  {utilisateur.id !== user.uid && (
+                    <button 
+                      className="btn danger"
+                      onClick={() => {
+                        if (window.confirm("Supprimer cet utilisateur ?")) {
+                          // Ici vous pouvez implémenter la suppression d'utilisateur
+                          alert("Fonctionnalité à implémenter");
+                        }
+                      }}
+                    >
+                      Supprimer
+                    </button>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {/* Liste des invitations en attente */}
+      <div className="fullscreen-table-title" style={{ fontSize: "1.3rem" }}>
+        Invitations en Attente ({invitations.length})
+      </div>
+      
+      <div className="table-pro-full">
+        <table>
+          <thead>
+            <tr>
+              <th>Email</th>
+              <th>Rôle</th>
+              <th>Invité par</th>
+              <th>Date d'invitation</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {invitations.length === 0 ? (
+              <tr>
+                <td colSpan={5} style={{ textAlign: "center", color: "#6b7280" }}>
+                  Aucune invitation en attente
+                </td>
+              </tr>
+            ) : (
+              invitations.map((invitation) => (
+                <tr key={invitation.id}>
+                  <td>{invitation.email}</td>
+                  <td>{invitation.role}</td>
+                  <td>{invitation.invitedBy}</td>
+                  <td>
+                    {invitation.invitedAt?.toDate ? 
+                      invitation.invitedAt.toDate().toLocaleDateString() : 
+                      "Non spécifié"
+                    }
+                  </td>
+                  <td>
+                    <button 
+                      className="btn danger"
+                      onClick={() => handleDeleteInvitation(invitation.id)}
+                    >
+                      Annuler
+                    </button>
+                  </td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
       </div>
     </div>
   );
