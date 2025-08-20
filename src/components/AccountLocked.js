@@ -154,7 +154,7 @@ export default function AccountLocked() {
             <br /><br />
             <strong>Email:</strong> support@anapharmo.com
             <br />
-            <strong>Téléphone:</strong> +212 XX XX XX XX
+            <strong>Téléphone:</strong> +212 66 11 12 540
           </div>
         </div>
         

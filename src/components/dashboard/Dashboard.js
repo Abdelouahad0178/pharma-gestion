@@ -3,6 +3,8 @@ import { db } from "../../firebase/config";
 import { 
   collection, 
   getDocs, 
+  doc,
+  getDoc,
   Timestamp 
 } from "firebase/firestore";
 import { useUserRole } from "../../contexts/UserRoleContext";
@@ -102,6 +104,10 @@ export default function Dashboard() {
   const [notification, setNotification] = useState(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
 
+  // NOUVEL ÉTAT POUR LES INFORMATIONS DE LA SOCIÉTÉ
+  const [societeInfo, setSocieteInfo] = useState(null);
+  const [societeLoading, setSocieteLoading] = useState(false);
+
   // États pour les données
   const [ventes, setVentes] = useState([]);
   const [achats, setAchats] = useState([]);
@@ -143,6 +149,36 @@ export default function Dashboard() {
     } catch (error) {
       console.error("Erreur lors de la déconnexion:", error);
       showNotification("Erreur lors de la déconnexion", "error");
+    }
+  };
+
+  // NOUVELLE FONCTION POUR CHARGER LES INFORMATIONS DE LA SOCIÉTÉ
+  const fetchSocieteInfo = async () => {
+    if (!societeId) {
+      setSocieteInfo(null);
+      return;
+    }
+
+    try {
+      setSocieteLoading(true);
+      console.log("🔄 Chargement des informations de la société:", societeId);
+
+      const societeDocRef = doc(db, "societe", societeId);
+      const societeDocSnap = await getDoc(societeDocRef);
+
+      if (societeDocSnap.exists()) {
+        const societeData = societeDocSnap.data();
+        setSocieteInfo(societeData);
+        console.log("✅ Informations société chargées:", societeData);
+      } else {
+        console.warn("❌ Document société introuvable:", societeId);
+        setSocieteInfo({ nom: "Société inconnue" });
+      }
+    } catch (error) {
+      console.error("❌ Erreur lors du chargement des informations société:", error);
+      setSocieteInfo({ nom: "Erreur de chargement" });
+    } finally {
+      setSocieteLoading(false);
     }
   };
 
@@ -205,6 +241,13 @@ export default function Dashboard() {
       setDataLoading(false);
     }
   };
+
+  // CHARGER LES INFORMATIONS DE LA SOCIÉTÉ À L'INITIALISATION
+  useEffect(() => {
+    if (!loading && user && societeId) {
+      fetchSocieteInfo();
+    }
+  }, [loading, user, societeId]);
 
   // Charger les données à l'initialisation
   useEffect(() => {
@@ -484,7 +527,10 @@ export default function Dashboard() {
   const handleRefresh = async () => {
     setIsRefreshing(true);
     try {
-      await fetchAllData();
+      await Promise.all([
+        fetchSocieteInfo(),
+        fetchAllData()
+      ]);
       showNotification("Données actualisées avec succès !", "success");
     } catch (error) {
       console.error("Erreur lors de l'actualisation:", error);
@@ -492,6 +538,20 @@ export default function Dashboard() {
     } finally {
       setIsRefreshing(false);
     }
+  };
+
+  // FONCTION POUR OBTENIR LE NOM D'AFFICHAGE DE LA SOCIÉTÉ
+  const getSocieteDisplayName = () => {
+    if (societeLoading) return "Chargement...";
+    if (!societeInfo) return "Société inconnue";
+    
+    // Essayer différents champs possibles pour le nom
+    return societeInfo.nom || 
+           societeInfo.nomSociete || 
+           societeInfo.name || 
+           societeInfo.raison_sociale ||
+           societeInfo.denomination ||
+           "Société sans nom";
   };
 
   // Styles responsifs
@@ -802,7 +862,7 @@ export default function Dashboard() {
             </div>
           )}
 
-          {/* Indicateur Structure Multi-Société */}
+          {/* INDICATEUR STRUCTURE MULTI-SOCIÉTÉ AVEC LE VRAI NOM */}
           <div style={{
             background: "linear-gradient(135deg, #d4edda 0%, #c3e6cb 100%)",
             padding: "15px",
@@ -824,8 +884,18 @@ export default function Dashboard() {
               fontSize: "0.9em", 
               margin: 0
             }}>
-              🏢 Société: {societeId} • 👤 {user?.email} • 📦 {produitsStock} produits • 🚨 {alertes.length} alertes • 💵 {soldeCaisse.toFixed(2)} DH en caisse
+              🏢 Société: <strong>{getSocieteDisplayName()}</strong> • 👤 {user?.email} • 📦 {produitsStock} produits • 🚨 {alertes.length} alertes • 💵 {soldeCaisse.toFixed(2)} DH en caisse
             </p>
+            {societeLoading && (
+              <p style={{ 
+                color: "#6b7280", 
+                fontSize: "0.8em", 
+                margin: "5px 0 0 0",
+                fontStyle: "italic"
+              }}>
+                Chargement des informations société...
+              </p>
+            )}
           </div>
 
           {/* Boutons de contrôle */}

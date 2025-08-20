@@ -23,6 +23,111 @@ function generateNumero(docs, type) {
   return `${prefix}${String(nextNum).padStart(4, "0")}`;
 }
 
+// ✨ FONCTION CONVERSION NOMBRE EN LETTRES ✨
+const convertirNombreEnLettres = (nombre) => {
+  if (nombre === 0) return "zéro";
+  
+  const unites = ["", "un", "deux", "trois", "quatre", "cinq", "six", "sept", "huit", "neuf"];
+  const dizaines = ["", "", "vingt", "trente", "quarante", "cinquante", "soixante", "soixante", "quatre-vingt", "quatre-vingt"];
+  const nombres11a19 = ["dix", "onze", "douze", "treize", "quatorze", "quinze", "seize", "dix-sept", "dix-huit", "dix-neuf"];
+  
+  const convertirCentaines = (n) => {
+    let resultat = "";
+    const c = Math.floor(n / 100);
+    const d = Math.floor((n % 100) / 10);
+    const u = n % 10;
+    
+    // Centaines
+    if (c > 0) {
+      if (c === 1) {
+        resultat += "cent";
+      } else {
+        resultat += unites[c] + " cent";
+      }
+      if (c > 1 && d === 0 && u === 0) resultat += "s";
+    }
+    
+    // Dizaines et unités
+    if (d === 1) {
+      if (resultat) resultat += " ";
+      resultat += nombres11a19[u];
+    } else {
+      if (d > 0) {
+        if (resultat) resultat += " ";
+        if (d === 7) {
+          resultat += "soixante";
+          if (u === 0) {
+            resultat += "-dix";
+          } else {
+            resultat += "-" + nombres11a19[u];
+          }
+        } else if (d === 9) {
+          resultat += "quatre-vingt";
+          if (u === 0) {
+            resultat += "-dix";
+          } else {
+            resultat += "-" + nombres11a19[u];
+          }
+        } else {
+          resultat += dizaines[d];
+          if (u === 1 && d === 8) {
+            resultat += "-un";
+          } else if (u > 0) {
+            resultat += "-" + unites[u];
+          }
+        }
+      } else if (u > 0) {
+        if (resultat) resultat += " ";
+        resultat += unites[u];
+      }
+    }
+    
+    return resultat;
+  };
+  
+  const parties = [];
+  let n = Math.floor(nombre);
+  
+  // Millions
+  if (n >= 1000000) {
+    const millions = Math.floor(n / 1000000);
+    if (millions === 1) {
+      parties.push("un million");
+    } else {
+      parties.push(convertirCentaines(millions) + " millions");
+    }
+    n %= 1000000;
+  }
+  
+  // Milliers
+  if (n >= 1000) {
+    const milliers = Math.floor(n / 1000);
+    if (milliers === 1) {
+      parties.push("mille");
+    } else {
+      parties.push(convertirCentaines(milliers) + " mille");
+    }
+    n %= 1000;
+  }
+  
+  // Centaines, dizaines, unités
+  if (n > 0) {
+    parties.push(convertirCentaines(n));
+  }
+  
+  let resultat = parties.join(" ");
+  
+  // Gestion des décimales (centimes)
+  const decimales = Math.round((nombre - Math.floor(nombre)) * 100);
+  if (decimales > 0) {
+    resultat += " dirhams et " + convertirCentaines(decimales) + " centime" + (decimales > 1 ? "s" : "");
+  } else {
+    resultat += " dirhams";
+  }
+  
+  return resultat;
+};
+
 export default function DevisFactures() {
   const { user, societeId, loading } = useUserRole();
 
@@ -446,7 +551,7 @@ export default function DevisFactures() {
     }
   };
 
-  // ✨ Fonction helper pour générer le HTML d'impression CORRIGÉE ✨
+  // ✨ Fonction helper pour générer le HTML d'impression AVEC MONTANT EN LETTRES ✨
   const generatePrintHTML = (docData, articles, total, cachetHtml, isFacture, titleDocument, isMobileDevice = false) => {
     const primaryColor = isFacture ? "#667eea" : "#10b981";
     const secondaryColor = isFacture ? "#764ba2" : "#059669";
@@ -582,10 +687,8 @@ export default function DevisFactures() {
               print-color-adjust: exact !important;
             }
             
-            /* ✅ CORRECTION: Section articles avec hauteur normale */
             .articles-section {
               margin: 20px 0;
-              /* Suppression de flex: 1 qui causait l'expansion */
             }
             
             .section-title {
@@ -611,7 +714,6 @@ export default function DevisFactures() {
               border-radius: 2px;
             }
             
-            /* ✅ CORRECTION: Tableau articles avec hauteur contrôlée */
             .articles-table {
               width: 100%;
               border-collapse: collapse;
@@ -619,7 +721,6 @@ export default function DevisFactures() {
               overflow: hidden;
               margin: 15px 0;
               font-size: 0.9em;
-              /* Hauteur automatique basée sur le contenu */
               height: auto;
             }
             
@@ -652,7 +753,6 @@ export default function DevisFactures() {
               background: #f8fafc;
             }
             
-            /* ✅ CORRECTION: Padding normal pour les cellules */
             .articles-table td {
               padding: 10px 8px;
               text-align: center;
@@ -660,7 +760,6 @@ export default function DevisFactures() {
               font-weight: 600;
               word-wrap: break-word;
               font-size: 0.9em;
-              /* Hauteur automatique */
               height: auto;
               vertical-align: middle;
             }
@@ -741,6 +840,41 @@ export default function DevisFactures() {
               font-style: italic;
               padding-top: 15px;
               border-top: 2px solid rgba(255,255,255,0.3);
+            }
+
+            /* ✨ STYLES POUR LA MENTION MONTANT EN LETTRES ✨ */
+            .amount-in-words-section {
+              margin: 25px 0;
+              padding: 20px;
+              background: linear-gradient(135deg, #f8fafc 0%, #edf2f7 100%);
+              border-radius: 12px;
+              border: 2px solid ${primaryColor};
+              box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+            }
+            
+            .amount-words-content {
+              text-align: center;
+            }
+            
+            .amount-words-label {
+              font-size: 1em;
+              font-weight: 700;
+              color: #2d3748;
+              margin-bottom: 10px;
+              text-transform: uppercase;
+              letter-spacing: 1px;
+            }
+            
+            .amount-words-text {
+              font-size: 1.2em;
+              font-weight: 800;
+              color: ${primaryColor};
+              text-transform: capitalize;
+              line-height: 1.4;
+              border: 2px dashed ${primaryColor};
+              padding: 15px;
+              border-radius: 8px;
+              background: rgba(102, 126, 234, 0.05);
             }
             
             .signature-section {
@@ -868,7 +1002,6 @@ export default function DevisFactures() {
                 border-radius: 4px !important;
               }
               
-              /* ✅ CORRECTION: Articles normalisés pour impression */
               .articles-section {
                 margin: 15px 0 !important;
               }
@@ -896,6 +1029,20 @@ export default function DevisFactures() {
               
               .total-amount {
                 font-size: 1.8em !important;
+              }
+
+              .amount-in-words-section {
+                margin: 15px 0 !important;
+                padding: 12px !important;
+              }
+              
+              .amount-words-label {
+                font-size: 0.8em !important;
+              }
+              
+              .amount-words-text {
+                font-size: 0.9em !important;
+                padding: 10px !important;
               }
               
               .signature-section {
@@ -926,7 +1073,8 @@ export default function DevisFactures() {
               .articles-table thead,
               .status-badge,
               .quantity-cell,
-              .total-cell {
+              .total-cell,
+              .amount-in-words-section {
                 -webkit-print-color-adjust: exact !important;
                 print-color-adjust: exact !important;
               }
@@ -936,6 +1084,7 @@ export default function DevisFactures() {
               .info-section,
               .articles-section,
               .grand-total-section,
+              .amount-in-words-section,
               .signature-section,
               .footer-section {
                 page-break-inside: avoid !important;
@@ -975,6 +1124,10 @@ export default function DevisFactures() {
               
               .total-amount {
                 font-size: 1.8em !important;
+              }
+
+              .amount-words-text {
+                font-size: 1em !important;
               }
               
               .signature-section {
@@ -1067,6 +1220,18 @@ export default function DevisFactures() {
                     ${isFacture ? 
                       "📋 Facture à conserver • 💳 Merci de régler dans les délais convenus" : 
                       "📋 Devis valable 30 jours • 💼 N'hésitez pas à nous contacter"}
+                  </div>
+                </div>
+              </div>
+              
+              <!-- ✨ SECTION MONTANT EN LETTRES ✨ -->
+              <div class="amount-in-words-section">
+                <div class="amount-words-content">
+                  <div class="amount-words-label">
+                    ${isFacture ? "Arrêté la présente facture" : "Arrêté le présent devis"} à la somme de :
+                  </div>
+                  <div class="amount-words-text">
+                    ${convertirNombreEnLettres(total).toUpperCase()}
                   </div>
                 </div>
               </div>
@@ -1493,7 +1658,7 @@ export default function DevisFactures() {
 
   const styles = getResponsiveStyles();
 
-  // RENDU PRINCIPAL
+  // RENDU PRINCIPAL (reste du code inchangé...)
   return (
     <div style={styles.container}>
       <div style={styles.mainCard}>
@@ -1526,14 +1691,14 @@ export default function DevisFactures() {
               fontWeight: 700,
               margin: "0 0 5px 0"
             }}>
-              📋 <strong>Documents Multi-Lots Professionnels</strong> - Cachet personnalisé inclus
+              📋 <strong>Documents Multi-Lots Professionnels</strong> - Cachet personnalisé inclus + Montant en lettres
             </p>
             <p style={{ 
               color: "#4a5568", 
               fontSize: "0.9em", 
               margin: 0
             }}>
-              📊 {documents.length} documents • Impression optimisée • Signature numérique
+              📊 {documents.length} documents • Impression optimisée • Signature numérique • Conversion automatique en lettres
             </p>
           </div>
 
@@ -1576,7 +1741,7 @@ export default function DevisFactures() {
             </div>
           )}
 
-          {/* Formulaire principal */}
+           {/* Formulaire principal */}
           <div style={styles.formCard}>
             <h3 style={{ 
               color: "#2d3748", 
