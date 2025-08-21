@@ -10,7 +10,7 @@ import Navbar from './components/Navbar';
 import Parametres from './components/parametres/Parametres';
 import DevisFactures from './components/devisFactures/DevisFactures';
 import Paiements from './components/paiements/Paiements';
-import Invitations from './components/invitations/Invitations'; // NOUVEAU IMPORT
+import Invitations from './components/invitations/Invitations';
 import { UserRoleProvider } from './contexts/UserRoleContext';
 import Protected from './components/Protected';
 import AddSocieteIdToAllUsers from './components/admin/AddSocieteIdToAllUsers';
@@ -18,9 +18,9 @@ import GestionUtilisateurs from './components/admin/GestionUtilisateurs';
 import AdminPopup from './components/AdminPopup';
 import AccountLocked from './components/AccountLocked';
 import PaymentWarningBanner from './components/PaymentWarningBanner';
+import DashboardFloatingButton from './components/DashboardFloatingButton'; // NOUVEAU IMPORT
 import { useUserRole } from './contexts/UserRoleContext';
 import './styles/main.css';
-
 
 // Composant pour vérifier l'état du compte
 function AccountChecker({ children }) {
@@ -138,7 +138,7 @@ function AppWrapper() {
             }
           />
           
-          {/* NOUVELLE ROUTE - Invitations */}
+          {/* Route Invitations */}
           <Route
             path="/invitations"
             element={
@@ -157,7 +157,7 @@ function AppWrapper() {
             }
           />
 
-          {/* ROUTE - Gestion des utilisateurs */}
+          {/* Route Gestion des utilisateurs */}
           <Route
             path="/gestion-utilisateurs"
             element={
@@ -174,6 +174,9 @@ function AppWrapper() {
           <Route path="*" element={<Navigate to="/login" />} />
         </Routes>
       </div>
+      
+      {/* BOUTON FLOTTANT DASHBOARD - NOUVEAU COMPOSANT */}
+      <DashboardFloatingButton />
     </AccountChecker>
   );
 }

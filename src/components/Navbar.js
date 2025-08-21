@@ -37,11 +37,10 @@ export default function Navbar() {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const navigate = useNavigate();
   const location = useLocation();
-  const { role, loading, societeName } = useUserRole(); // ✅ on récupère le nom lisible
+  const { role, loading, societeName } = useUserRole();
 
-  // Menus visibles selon le rôle
+  // Menus visibles selon le rôle (Dashboard retiré de la liste normale)
   const menuItems = [
-    { text: "Dashboard", icon: <DashboardIcon />, path: "/dashboard", allowed: ["docteur", "vendeuse"] },
     { text: "Achats", icon: <ShoppingCartIcon />, path: "/achats", allowed: ["docteur"] },
     { text: "Ventes", icon: <PointOfSaleIcon />, path: "/ventes", allowed: ["docteur", "vendeuse"] },
     { text: "Stock", icon: <LocalPharmacyIcon />, path: "/stock", allowed: ["docteur", "vendeuse"] },
@@ -57,7 +56,6 @@ export default function Navbar() {
     navigate("/login");
   };
 
-  // Affiche rien tant que rôle non chargé
   if (loading) return null;
 
   const drawer = (
@@ -85,7 +83,7 @@ export default function Navbar() {
         💊 Pharma Gestion
       </Typography>
 
-      {/* ✅ Bandeau nom de la pharmacie */}
+      {/* Bandeau nom de la pharmacie */}
       <Box
         sx={{
           display: "flex",
@@ -114,6 +112,42 @@ export default function Navbar() {
         >
           {societeName || "—"}
         </Typography>
+      </Box>
+
+      {/* DASHBOARD PROÉMINENT EN HAUT */}
+      <Box sx={{ px: 2, mb: 2 }}>
+        <ListItemButton
+          component={Link}
+          to="/dashboard"
+          selected={location.pathname === "/dashboard"}
+          sx={{
+            background: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
+            color: "#fff",
+            borderRadius: 3,
+            mb: 1,
+            py: 1.5,
+            "&:hover": {
+              background: "linear-gradient(135deg, #764ba2 0%, #667eea 100%)",
+            },
+            "&.Mui-selected": {
+              background: "linear-gradient(135deg, #61c7ef 0%, #3272e0 100%)",
+            }
+          }}
+        >
+          <ListItemIcon sx={{ color: "#fff", minWidth: "40px" }}>
+            <DashboardIcon />
+          </ListItemIcon>
+          <ListItemText 
+            primary="📊 DASHBOARD" 
+            sx={{ 
+              "& .MuiTypography-root": { 
+                fontWeight: 800, 
+                fontSize: "1.1em",
+                letterSpacing: "1px"
+              } 
+            }} 
+          />
+        </ListItemButton>
       </Box>
 
       <Divider sx={{ bgcolor: "#fff3", mb: 2 }} />
@@ -191,7 +225,31 @@ export default function Navbar() {
             <MenuIcon />
           </IconButton>
 
-          {/* ✅ Titre + nom de la pharmacie (tronqué si long) */}
+          {/* BOUTON DASHBOARD DANS LA NAVBAR */}
+          <Button
+            component={Link}
+            to="/dashboard"
+            startIcon={<DashboardIcon />}
+            sx={{
+              color: location.pathname === "/dashboard" ? "#61c7ef" : "#fff",
+              fontWeight: 800,
+              fontSize: "1.1em",
+              bgcolor: location.pathname === "/dashboard" ? "#fff2" : "transparent",
+              borderRadius: 2,
+              px: 2,
+              mr: 2,
+              transition: "all 0.2s",
+              "&:hover": { 
+                bgcolor: "#fff3", 
+                color: "#61c7ef",
+                transform: "scale(1.05)"
+              }
+            }}
+          >
+            📊 DASHBOARD
+          </Button>
+
+          {/* Titre + nom de la pharmacie */}
           <Box sx={{ display: "flex", alignItems: "baseline", gap: 2, flexGrow: 1, minWidth: 0 }}>
             <Typography
               variant="h6"

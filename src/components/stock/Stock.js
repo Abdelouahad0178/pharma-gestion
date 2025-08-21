@@ -569,7 +569,7 @@ export default function Stock() {
           </div>
           <div style={{textAlign: 'center', background: 'rgba(255,255,255,0.1)', padding: 10, borderRadius: 8}}>
             <div style={{fontSize: '1.5rem', fontWeight: 'bold', color: stats.medicamentsExpireSoon > 0 ? '#feca57' : 'white'}}>{stats.medicamentsExpireSoon}</div>
-            <div style={{fontSize: '0.9rem', opacity: 0.9}}>Expirent sous 30j</div>
+            <div style={{fontSize: '0.9rem', opacity: 0.9}}>Expirent sous 180j</div>
           </div>
         </div>
       </div>

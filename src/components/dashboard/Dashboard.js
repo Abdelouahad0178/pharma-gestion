@@ -427,7 +427,7 @@ export default function Dashboard() {
                         severity: "critical",
                         icon: "🚫"
                       });
-                    } else if (diffDays <= 30) {
+                    } else if (diffDays <= 180) {
                       alertList.push({ 
                         type: "Péremption proche", 
                         message: `${nom} (${diffDays} j)`,
@@ -898,6 +898,293 @@ export default function Dashboard() {
             )}
           </div>
 
+          {/* SECTION RACCOURCIS RAPIDES DÉPLACÉE EN HAUT */}
+          <div style={{
+            background: "linear-gradient(135deg, #e3f2fd 0%, #bbdefb 100%)",
+            borderRadius: isMobile ? "15px" : "25px",
+            padding: isMobile ? "25px 20px" : "35px 30px",
+            marginBottom: isMobile ? "25px" : "35px",
+            border: "3px solid #42a5f5",
+            boxShadow: "0 20px 50px rgba(66, 165, 245, 0.2)"
+          }}>
+            <h3 style={{
+              color: "#1565c0",
+              fontSize: isMobile ? "1.4em" : "1.8em",
+              fontWeight: 800,
+              marginBottom: isMobile ? "25px" : "30px",
+              textAlign: "center",
+              textTransform: "uppercase",
+              letterSpacing: "2px",
+              textShadow: "2px 2px 4px rgba(21, 101, 192, 0.2)"
+            }}>
+              🚀 Raccourcis Rapides
+            </h3>
+            
+            <div style={{
+              display: "grid",
+              gridTemplateColumns: isMobile ? "1fr" : isTablet ? "1fr 1fr" : "repeat(auto-fit, minmax(280px, 1fr))",
+              gap: isMobile ? "15px" : "20px"
+            }}>
+              {/* VENTE - Raccourci principal */}
+              <button
+                onClick={() => navigate('/ventes')}
+                style={{
+                  background: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
+                  border: "none",
+                  borderRadius: isMobile ? "15px" : "20px",
+                  padding: isMobile ? "20px 15px" : "25px 20px",
+                  color: "white",
+                  fontWeight: 800,
+                  fontSize: isMobile ? "1.1em" : "1.2em",
+                  cursor: "pointer",
+                  boxShadow: "0 15px 40px rgba(102, 126, 234, 0.4)",
+                  transition: "all 0.3s ease",
+                  textTransform: "uppercase",
+                  letterSpacing: "1px",
+                  display: "flex",
+                  flexDirection: "column",
+                  alignItems: "center",
+                  gap: "10px",
+                  position: "relative",
+                  overflow: "hidden"
+                }}
+                onMouseEnter={e => {
+                  e.currentTarget.style.transform = "translateY(-8px)";
+                  e.currentTarget.style.boxShadow = "0 25px 60px rgba(102, 126, 234, 0.6)";
+                }}
+                onMouseLeave={e => {
+                  e.currentTarget.style.transform = "translateY(0)";
+                  e.currentTarget.style.boxShadow = "0 15px 40px rgba(102, 126, 234, 0.4)";
+                }}
+              >
+                <div style={{ fontSize: isMobile ? "2.5em" : "3em" }}>💰</div>
+                <div>Nouvelle Vente</div>
+                <div style={{ 
+                  fontSize: "0.7em", 
+                  opacity: 0.9, 
+                  fontWeight: 600,
+                  textTransform: "none"
+                }}>
+                  Enregistrer une vente rapidement
+                </div>
+              </button>
+
+              {/* STOCK */}
+              <button
+                onClick={() => navigate('/stock')}
+                style={{
+                  background: "linear-gradient(135deg, #48bb78 0%, #38a169 100%)",
+                  border: "none",
+                  borderRadius: isMobile ? "15px" : "20px",
+                  padding: isMobile ? "20px 15px" : "25px 20px",
+                  color: "white",
+                  fontWeight: 800,
+                  fontSize: isMobile ? "1.1em" : "1.2em",
+                  cursor: "pointer",
+                  boxShadow: "0 15px 40px rgba(72, 187, 120, 0.4)",
+                  transition: "all 0.3s ease",
+                  textTransform: "uppercase",
+                  letterSpacing: "1px",
+                  display: "flex",
+                  flexDirection: "column",
+                  alignItems: "center",
+                  gap: "10px"
+                }}
+                onMouseEnter={e => {
+                  e.currentTarget.style.transform = "translateY(-8px)";
+                  e.currentTarget.style.boxShadow = "0 25px 60px rgba(72, 187, 120, 0.6)";
+                }}
+                onMouseLeave={e => {
+                  e.currentTarget.style.transform = "translateY(0)";
+                  e.currentTarget.style.boxShadow = "0 15px 40px rgba(72, 187, 120, 0.4)";
+                }}
+              >
+                <div style={{ fontSize: isMobile ? "2.5em" : "3em" }}>📦</div>
+                <div>Gérer Stock</div>
+                <div style={{ 
+                  fontSize: "0.7em", 
+                  opacity: 0.9, 
+                  fontWeight: 600,
+                  textTransform: "none"
+                }}>
+                  Consulter et modifier l'inventaire
+                </div>
+              </button>
+
+              {/* ACHATS - Seulement pour docteur */}
+              {role === 'docteur' && (
+                <button
+                  onClick={() => navigate('/achats')}
+                  style={{
+                    background: "linear-gradient(135deg, #4299e1 0%, #3182ce 100%)",
+                    border: "none",
+                    borderRadius: isMobile ? "15px" : "20px",
+                    padding: isMobile ? "20px 15px" : "25px 20px",
+                    color: "white",
+                    fontWeight: 800,
+                    fontSize: isMobile ? "1.1em" : "1.2em",
+                    cursor: "pointer",
+                    boxShadow: "0 15px 40px rgba(66, 153, 225, 0.4)",
+                    transition: "all 0.3s ease",
+                    textTransform: "uppercase",
+                    letterSpacing: "1px",
+                    display: "flex",
+                    flexDirection: "column",
+                    alignItems: "center",
+                    gap: "10px"
+                  }}
+                  onMouseEnter={e => {
+                    e.currentTarget.style.transform = "translateY(-8px)";
+                    e.currentTarget.style.boxShadow = "0 25px 60px rgba(66, 153, 225, 0.6)";
+                  }}
+                  onMouseLeave={e => {
+                    e.currentTarget.style.transform = "translateY(0)";
+                    e.currentTarget.style.boxShadow = "0 15px 40px rgba(66, 153, 225, 0.4)";
+                  }}
+                >
+                  <div style={{ fontSize: isMobile ? "2.5em" : "3em" }}>🛒</div>
+                  <div>Nouvel Achat</div>
+                  <div style={{ 
+                    fontSize: "0.7em", 
+                    opacity: 0.9, 
+                    fontWeight: 600,
+                    textTransform: "none"
+                  }}>
+                    Enregistrer un achat fournisseur
+                  </div>
+                </button>
+              )}
+
+              {/* DEVIS & FACTURES */}
+              <button
+                onClick={() => navigate('/devis-factures')}
+                style={{
+                  background: "linear-gradient(135deg, #ed8936 0%, #dd6b20 100%)",
+                  border: "none",
+                  borderRadius: isMobile ? "15px" : "20px",
+                  padding: isMobile ? "20px 15px" : "25px 20px",
+                  color: "white",
+                  fontWeight: 800,
+                  fontSize: isMobile ? "1.1em" : "1.2em",
+                  cursor: "pointer",
+                  boxShadow: "0 15px 40px rgba(237, 137, 54, 0.4)",
+                  transition: "all 0.3s ease",
+                  textTransform: "uppercase",
+                  letterSpacing: "1px",
+                  display: "flex",
+                  flexDirection: "column",
+                  alignItems: "center",
+                  gap: "10px"
+                }}
+                onMouseEnter={e => {
+                  e.currentTarget.style.transform = "translateY(-8px)";
+                  e.currentTarget.style.boxShadow = "0 25px 60px rgba(237, 137, 54, 0.6)";
+                }}
+                onMouseLeave={e => {
+                  e.currentTarget.style.transform = "translateY(0)";
+                  e.currentTarget.style.boxShadow = "0 15px 40px rgba(237, 137, 54, 0.4)";
+                }}
+              >
+                <div style={{ fontSize: isMobile ? "2.5em" : "3em" }}>🧾</div>
+                <div>Devis & Factures</div>
+                <div style={{ 
+                  fontSize: "0.7em", 
+                  opacity: 0.9, 
+                  fontWeight: 600,
+                  textTransform: "none"
+                }}>
+                  Créer devis et factures
+                </div>
+              </button>
+
+              {/* PAIEMENTS */}
+              <button
+                onClick={() => navigate('/paiements')}
+                style={{
+                  background: "linear-gradient(135deg, #ab47bc 0%, #8e24aa 100%)",
+                  border: "none",
+                  borderRadius: isMobile ? "15px" : "20px",
+                  padding: isMobile ? "20px 15px" : "25px 20px",
+                  color: "white",
+                  fontWeight: 800,
+                  fontSize: isMobile ? "1.1em" : "1.2em",
+                  cursor: "pointer",
+                  boxShadow: "0 15px 40px rgba(171, 71, 188, 0.4)",
+                  transition: "all 0.3s ease",
+                  textTransform: "uppercase",
+                  letterSpacing: "1px",
+                  display: "flex",
+                  flexDirection: "column",
+                  alignItems: "center",
+                  gap: "10px"
+                }}
+                onMouseEnter={e => {
+                  e.currentTarget.style.transform = "translateY(-8px)";
+                  e.currentTarget.style.boxShadow = "0 25px 60px rgba(171, 71, 188, 0.6)";
+                }}
+                onMouseLeave={e => {
+                  e.currentTarget.style.transform = "translateY(0)";
+                  e.currentTarget.style.boxShadow = "0 15px 40px rgba(171, 71, 188, 0.4)";
+                }}
+              >
+                <div style={{ fontSize: isMobile ? "2.5em" : "3em" }}>💳</div>
+                <div>Paiements</div>
+                <div style={{ 
+                  fontSize: "0.7em", 
+                  opacity: 0.9, 
+                  fontWeight: 600,
+                  textTransform: "none"
+                }}>
+                  Gérer les paiements clients
+                </div>
+              </button>
+
+              {/* PARAMÈTRES - Seulement pour docteur */}
+              {role === 'docteur' && (
+                <button
+                  onClick={() => navigate('/parametres')}
+                  style={{
+                    background: "linear-gradient(135deg, #718096 0%, #4a5568 100%)",
+                    border: "none",
+                    borderRadius: isMobile ? "15px" : "20px",
+                    padding: isMobile ? "20px 15px" : "25px 20px",
+                    color: "white",
+                    fontWeight: 800,
+                    fontSize: isMobile ? "1.1em" : "1.2em",
+                    cursor: "pointer",
+                    boxShadow: "0 15px 40px rgba(113, 128, 150, 0.4)",
+                    transition: "all 0.3s ease",
+                    textTransform: "uppercase",
+                    letterSpacing: "1px",
+                    display: "flex",
+                    flexDirection: "column",
+                    alignItems: "center",
+                    gap: "10px"
+                  }}
+                  onMouseEnter={e => {
+                    e.currentTarget.style.transform = "translateY(-8px)";
+                    e.currentTarget.style.boxShadow = "0 25px 60px rgba(113, 128, 150, 0.6)";
+                  }}
+                  onMouseLeave={e => {
+                    e.currentTarget.style.transform = "translateY(0)";
+                    e.currentTarget.style.boxShadow = "0 15px 40px rgba(113, 128, 150, 0.4)";
+                  }}
+                >
+                  <div style={{ fontSize: isMobile ? "2.5em" : "3em" }}>⚙️</div>
+                  <div>Paramètres</div>
+                  <div style={{ 
+                    fontSize: "0.7em", 
+                    opacity: 0.9, 
+                    fontWeight: 600,
+                    textTransform: "none"
+                  }}>
+                    Configuration du système
+                  </div>
+                </button>
+              )}
+            </div>
+          </div>
+
           {/* Boutons de contrôle */}
           <div style={{
             display: "flex",
@@ -1267,6 +1554,8 @@ export default function Dashboard() {
               </div>
             </div>
           </div>
+
+
 
           {/* Section Alertes */}
           {alertes.length > 0 && (
