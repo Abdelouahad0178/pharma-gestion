@@ -2207,18 +2207,24 @@ export default function Ventes() {
         </div>
       )}
 
-      {/* TABLEAU DES VENTES MULTI-LOTS */}
+
+      {/* TABLEAU DES VENTES MULTI-LOTS - VERSION MOBILE OPTIMISÉE */}
       <div className="fullscreen-table-title" style={{ 
         marginTop: "20px", 
         fontSize: '1.3rem',
-       
         display: "flex",
         justifyContent: "space-between",
-        alignItems: "center"
+        alignItems: "center",
+        flexWrap: "wrap",
+        gap: "10px"
       }}>
         <span>📋 Historique des ventes multi-lots ({ventesFiltrees.length})</span>
-        <span style={{ fontSize: "14px", color: "#6b7280" }}>
-          Total affiché: {ventesFiltrees.reduce((sum, v) => 
+        <span style={{ 
+          fontSize: "14px", 
+          color: "#6b7280",
+          whiteSpace: "nowrap"
+        }}>
+          Total: {ventesFiltrees.reduce((sum, v) => 
             sum + (v.montantTotal || v.articles?.reduce((s, a) => 
               s + (a.prixUnitaire * a.quantite - a.remise), 0) || 0), 0
           ).toFixed(2)} DH
@@ -2230,106 +2236,339 @@ export default function Ventes() {
         minHeight: '400px',
         maxHeight: 'calc(100vh - 400px)',
         overflowY: 'auto',
+        overflowX: 'auto', // Important pour mobile
         border: '1px solid #e5e7eb',
         borderRadius: '8px',
         background: 'white'
       }}>
-        <table style={{ width: "100%" }}>
-          <thead style={{ 
-            position: 'sticky', 
-            top: 0, 
-            background: 'linear-gradient(90deg, #1e40af 0%, #3b82f6 100%)',
-            color: 'white'
-          }}>
-            <tr>
-              <th style={{ padding: "12px", textAlign: "left" }}>N°</th>
-              <th style={{ padding: "12px", textAlign: "left" }}>Client</th>
-              <th style={{ padding: "12px", textAlign: "center" }}>Date</th>
-              <th style={{ padding: "12px", textAlign: "center" }}>Articles</th>
-              <th style={{ padding: "12px", textAlign: "center" }}>Traçabilité</th>
-              <th style={{ padding: "12px", textAlign: "center" }}>Statut</th>
-              <th style={{ padding: "12px", textAlign: "right" }}>Total</th>
-              <th style={{ padding: "12px", textAlign: "center" }}>Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {ventesFiltrees.length === 0 ? (
+        {/* Version bureau - tableau classique */}
+        <div className="desktop-table" style={{
+          display: window.innerWidth > 768 ? 'block' : 'none'
+        }}>
+          <table style={{ width: "100%", minWidth: "900px" }}>
+            <thead style={{ 
+              position: 'sticky', 
+              top: 0, 
+              background: 'linear-gradient(90deg, #1e40af 0%, #3b82f6 100%)',
+              color: 'white',
+              zIndex: 10
+            }}>
               <tr>
-                <td colSpan={8} style={{ 
-                  padding: "40px", 
-                  textAlign: "center",
-                  color: "#6b7280",
-                  fontSize: "16px"
-                }}>
-                  {ventes.length === 0 
-                    ? "Aucune vente enregistrée pour le moment"
-                    : "Aucune vente ne correspond aux critères de filtrage"}
-                </td>
+                <th style={{ padding: "12px", textAlign: "left", width: "80px" }}>N°</th>
+                <th style={{ padding: "12px", textAlign: "left", width: "150px" }}>Client</th>
+                <th style={{ padding: "12px", textAlign: "center", width: "100px" }}>Date</th>
+                <th style={{ padding: "12px", textAlign: "center", width: "80px" }}>Articles</th>
+                <th style={{ padding: "12px", textAlign: "center", width: "100px" }}>Traçabilité</th>
+                <th style={{ padding: "12px", textAlign: "center", width: "80px" }}>Statut</th>
+                <th style={{ padding: "12px", textAlign: "right", width: "100px" }}>Total</th>
+                <th style={{ padding: "12px", textAlign: "center", width: "200px" }}>Actions</th>
               </tr>
-            ) : (
-              ventesFiltrees.map((v, index) => {
-                const total = v.montantTotal || (Array.isArray(v.articles) ? v.articles : [])
-                  .reduce((sum, a) => sum + (a.prixUnitaire * a.quantite - a.remise), 0);
-                
-                const articlesAvecLots = (v.articles || []).filter(a => a.numeroLot).length;
-                const totalArticles = (v.articles || []).length;
-                
-                return (
-                  <tr key={v.id} style={{ 
-                    borderBottom: "1px solid #e5e7eb",
-                    transition: "background 0.2s",
-                    cursor: "pointer"
-                  }}
-                  onMouseEnter={(e) => e.currentTarget.style.background = "#f9fafb"}
-                  onMouseLeave={(e) => e.currentTarget.style.background = "white"}
-                  >
-                    <td style={{ padding: "10px", fontWeight: "600", color: "#4b5563" }}>
-                      #{v.id.slice(-6).toUpperCase()}
-                    </td>
-                    <td style={{ padding: "10px", fontWeight: "500" }}>{v.client}</td>
-                    <td style={{ padding: "10px", textAlign: "center" }}>
-                      {v.date?.toDate().toLocaleDateString('fr-FR')}
-                    </td>
-                    <td style={{ padding: "10px", textAlign: "center" }}>
+            </thead>
+            <tbody>
+              {ventesFiltrees.length === 0 ? (
+                <tr>
+                  <td colSpan={8} style={{ 
+                    padding: "40px", 
+                    textAlign: "center",
+                    color: "#6b7280",
+                    fontSize: "16px"
+                  }}>
+                    {ventes.length === 0 
+                      ? "Aucune vente enregistrée pour le moment"
+                      : "Aucune vente ne correspond aux critères de filtrage"}
+                  </td>
+                </tr>
+              ) : (
+                ventesFiltrees.map((v) => {
+                  const total = v.montantTotal || (Array.isArray(v.articles) ? v.articles : [])
+                    .reduce((sum, a) => sum + (a.prixUnitaire * a.quantite - a.remise), 0);
+                  
+                  const articlesAvecLots = (v.articles || []).filter(a => a.numeroLot).length;
+                  const totalArticles = (v.articles || []).length;
+                  
+                  return (
+                    <tr key={v.id} style={{ 
+                      borderBottom: "1px solid #e5e7eb",
+                      transition: "background 0.2s"
+                    }}
+                    onMouseEnter={(e) => e.currentTarget.style.background = "#f9fafb"}
+                    onMouseLeave={(e) => e.currentTarget.style.background = "white"}
+                    >
+                      <td style={{ padding: "10px", fontWeight: "600", color: "#4b5563" }}>
+                        #{v.id.slice(-6).toUpperCase()}
+                      </td>
+                      <td style={{ 
+                        padding: "10px", 
+                        fontWeight: "500",
+                        maxWidth: "150px",
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap"
+                      }}>{v.client}</td>
+                      <td style={{ padding: "10px", textAlign: "center", fontSize: "12px" }}>
+                        {v.date?.toDate().toLocaleDateString('fr-FR')}
+                      </td>
+                      <td style={{ padding: "10px", textAlign: "center" }}>
+                        <span style={{ 
+                          background: "#e0e7ff",
+                          color: "#3730a3",
+                          padding: "4px 8px",
+                          borderRadius: "12px",
+                          fontSize: "11px",
+                          whiteSpace: "nowrap"
+                        }}>
+                          {totalArticles}
+                        </span>
+                      </td>
+                      <td style={{ padding: "10px", textAlign: "center" }}>
+                        {articlesAvecLots > 0 ? (
+                          <span style={{ 
+                            background: "#dcfce7",
+                            color: "#16a34a",
+                            padding: "4px 8px",
+                            borderRadius: "12px",
+                            fontSize: "10px",
+                            fontWeight: "600",
+                            whiteSpace: "nowrap"
+                          }}>
+                            {articlesAvecLots}/{totalArticles}
+                          </span>
+                        ) : (
+                          <span style={{ 
+                            background: "#f3f4f6",
+                            color: "#6b7280",
+                            padding: "4px 8px",
+                            borderRadius: "12px",
+                            fontSize: "10px"
+                          }}>
+                            Standard
+                          </span>
+                        )}
+                      </td>
+                      <td style={{ padding: "10px", textAlign: "center" }}>
+                        <span style={{
+                          padding: "3px 6px",
+                          borderRadius: "4px",
+                          fontSize: "10px",
+                          fontWeight: "600",
+                          whiteSpace: "nowrap",
+                          ...(v.statutPaiement === "payé" ? {
+                            background: "#dcfce7",
+                            color: "#16a34a"
+                          } : v.statutPaiement === "partiel" ? {
+                            background: "#fed7aa",
+                            color: "#ea580c"
+                          } : {
+                            background: "#fee2e2",
+                            color: "#dc2626"
+                          })
+                        }}>
+                          {v.statutPaiement === "payé" ? "Payé" : 
+                           v.statutPaiement === "partiel" ? "Partiel" : 
+                           "Impayé"}
+                        </span>
+                      </td>
+                      <td style={{ 
+                        padding: "10px", 
+                        textAlign: "right",
+                        fontSize: "14px",
+                        fontWeight: "bold",
+                        color: "#059669",
+                        whiteSpace: "nowrap"
+                      }}>
+                        {total.toFixed(2)} DH
+                      </td>
+                      <td style={{ padding: "8px" }}>
+                        <div style={{ display: "flex", gap: "3px", justifyContent: "center", flexWrap: "wrap" }}>
+                          <button 
+                            className="btn info" 
+                            onClick={() => {
+                              setSelectedVente(v);
+                              setShowDetails(true);
+                            }}
+                            style={{ padding: "4px 6px", fontSize: "10px", minWidth: "28px" }}
+                            title="Voir les détails"
+                          >
+                            👁
+                          </button>
+                          <button 
+                            className="btn" 
+                            onClick={() => handleEditVente(v)}
+                            style={{ 
+                              padding: "4px 6px", 
+                              fontSize: "10px",
+                              background: "#f59e0b",
+                              minWidth: "28px"
+                            }}
+                            title="Modifier"
+                          >
+                            ✏
+                          </button>
+                          <button 
+                            className="btn success" 
+                            onClick={() => handleDuplicateVente(v)}
+                            style={{ padding: "4px 6px", fontSize: "10px", minWidth: "28px" }}
+                            title="Dupliquer"
+                          >
+                            📋
+                          </button>
+                          <button 
+                            className="btn print" 
+                            onClick={() => handlePrintVente(v)}
+                            style={{ 
+                              padding: "4px 6px", 
+                              fontSize: "10px",
+                              background: "#8b5cf6",
+                              minWidth: "28px"
+                            }}
+                            title="Imprimer"
+                          >
+                            🖨
+                          </button>
+                          <button 
+                            className="btn danger" 
+                            onClick={() => handleDeleteVente(v)}
+                            style={{ padding: "4px 6px", fontSize: "10px", minWidth: "28px" }}
+                            title="Supprimer"
+                          >
+                            🗑
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })
+              )}
+            </tbody>
+          </table>
+        </div>
+
+        {/* Version mobile - cartes empilées */}
+        <div className="mobile-cards" style={{
+          display: window.innerWidth <= 768 ? 'block' : 'none',
+          padding: '10px'
+        }}>
+          {ventesFiltrees.length === 0 ? (
+            <div style={{ 
+              padding: "40px", 
+              textAlign: "center",
+              color: "#6b7280",
+              fontSize: "16px"
+            }}>
+              {ventes.length === 0 
+                ? "Aucune vente enregistrée"
+                : "Aucune vente trouvée"}
+            </div>
+          ) : (
+            ventesFiltrees.map((v) => {
+              const total = v.montantTotal || (Array.isArray(v.articles) ? v.articles : [])
+                .reduce((sum, a) => sum + (a.prixUnitaire * a.quantite - a.remise), 0);
+              
+              const articlesAvecLots = (v.articles || []).filter(a => a.numeroLot).length;
+              const totalArticles = (v.articles || []).length;
+              
+              return (
+                <div key={v.id} style={{
+                  background: 'white',
+                  border: '1px solid #e5e7eb',
+                  borderRadius: '8px',
+                  padding: '15px',
+                  marginBottom: '12px',
+                  boxShadow: '0 1px 3px rgba(0,0,0,0.1)'
+                }}>
+                  {/* En-tête de la carte */}
+                  <div style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'flex-start',
+                    marginBottom: '12px',
+                    flexWrap: 'wrap',
+                    gap: '8px'
+                  }}>
+                    <div>
+                      <div style={{ 
+                        fontWeight: '600', 
+                        fontSize: '16px',
+                        color: '#1f2937',
+                        marginBottom: '4px'
+                      }}>
+                        {v.client}
+                      </div>
+                      <div style={{ 
+                        fontSize: '12px', 
+                        color: '#6b7280'
+                      }}>
+                        #{v.id.slice(-6).toUpperCase()} • {v.date?.toDate().toLocaleDateString('fr-FR')}
+                      </div>
+                    </div>
+                    <div style={{ 
+                      fontSize: '18px',
+                      fontWeight: 'bold',
+                      color: '#059669',
+                      whiteSpace: 'nowrap'
+                    }}>
+                      {total.toFixed(2)} DH
+                    </div>
+                  </div>
+
+                  {/* Informations de la vente */}
+                  <div style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))',
+                    gap: '8px',
+                    marginBottom: '12px'
+                  }}>
+                    <div>
+                      <div style={{ fontSize: '11px', color: '#6b7280', marginBottom: '2px' }}>
+                        Articles
+                      </div>
                       <span style={{ 
                         background: "#e0e7ff",
                         color: "#3730a3",
-                        padding: "6px 12px",
+                        padding: "4px 8px",
                         borderRadius: "12px",
-                        fontSize: "13px"
+                        fontSize: "12px"
                       }}>
                         {totalArticles} article(s)
                       </span>
-                    </td>
-                    <td style={{ padding: "10px", textAlign: "center" }}>
+                    </div>
+
+                    <div>
+                      <div style={{ fontSize: '11px', color: '#6b7280', marginBottom: '2px' }}>
+                        Traçabilité
+                      </div>
                       {articlesAvecLots > 0 ? (
                         <span style={{ 
                           background: "#dcfce7",
                           color: "#16a34a",
-                          padding: "6px 12px",
+                          padding: "4px 8px",
                           borderRadius: "12px",
-                          fontSize: "13px",
+                          fontSize: "12px",
                           fontWeight: "600"
                         }}>
-                          🏷️ {articlesAvecLots}/{totalArticles} tracés
+                          {articlesAvecLots}/{totalArticles} tracés
                         </span>
                       ) : (
                         <span style={{ 
                           background: "#f3f4f6",
                           color: "#6b7280",
-                          padding: "6px 12px",
+                          padding: "4px 8px",
                           borderRadius: "12px",
-                          fontSize: "13px"
+                          fontSize: "12px"
                         }}>
-                          📋 Standard
+                          Standard
                         </span>
                       )}
-                    </td>
-                    <td style={{ padding: "10px", textAlign: "center" }}>
+                    </div>
+
+                    <div>
+                      <div style={{ fontSize: '11px', color: '#6b7280', marginBottom: '2px' }}>
+                        Statut
+                      </div>
                       <span style={{
-                        padding: "4px 10px",
+                        padding: "4px 8px",
                         borderRadius: "4px",
-                        fontSize: "13px",
+                        fontSize: "12px",
                         fontWeight: "600",
                         ...(v.statutPaiement === "payé" ? {
                           background: "#dcfce7",
@@ -2346,79 +2585,77 @@ export default function Ventes() {
                          v.statutPaiement === "partiel" ? "⏳ Partiel" : 
                          "❌ Impayé"}
                       </span>
-                    </td>
-                    <td style={{ 
-                      padding: "10px", 
-                      textAlign: "right",
-                      fontSize: "16px",
-                      fontWeight: "bold",
-                      color: "#059669"
-                    }}>
-                      {total.toFixed(2)} DH
-                    </td>
-                    <td style={{ padding: "8px" }}>
-                      <div style={{ display: "flex", gap: "5px", justifyContent: "center", flexWrap: "wrap" }}>
-                        <button 
-                          className="btn info" 
-                          onClick={() => {
-                            setSelectedVente(v);
-                            setShowDetails(true);
-                          }}
-                          style={{ padding: "4px 8px", fontSize: "12px" }}
-                          title="Voir les détails"
-                        >
-                          👁️
-                        </button>
-                        <button 
-                          className="btn" 
-                          onClick={() => handleEditVente(v)}
-                          style={{ 
-                            padding: "4px 8px", 
-                            fontSize: "12px",
-                            background: "#f59e0b"
-                          }}
-                          title="Modifier"
-                        >
-                          ✏️
-                        </button>
-                        <button 
-                          className="btn success" 
-                          onClick={() => handleDuplicateVente(v)}
-                          style={{ padding: "4px 8px", fontSize: "12px" }}
-                          title="Dupliquer"
-                        >
-                          📋
-                        </button>
-                        <button 
-                          className="btn print" 
-                          onClick={() => handlePrintVente(v)}
-                          style={{ 
-                            padding: "4px 8px", 
-                            fontSize: "12px",
-                            background: "#8b5cf6"
-                          }}
-                          title={`Imprimer avec cachet ${parametres.typeCachet === "image" ? "image" : "texte"} et traçabilité`}
-                        >
-                          🖨️
-                        </button>
-                        <button 
-                          className="btn danger" 
-                          onClick={() => handleDeleteVente(v)}
-                          style={{ padding: "4px 8px", fontSize: "12px" }}
-                          title="Supprimer"
-                        >
-                          🗑️
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })
-            )}
-          </tbody>
-        </table>
-      </div>
+                    </div>
+                  </div>
 
+                  {/* Actions */}
+                  <div style={{ 
+                    display: "flex", 
+                    gap: "6px", 
+                    flexWrap: "wrap",
+                    paddingTop: '8px',
+                    borderTop: '1px solid #f3f4f6'
+                  }}>
+                    <button 
+                      className="btn info" 
+                      onClick={() => {
+                        setSelectedVente(v);
+                        setShowDetails(true);
+                      }}
+                      style={{ 
+                        padding: "6px 10px", 
+                        fontSize: "12px",
+                        flex: '1',
+                        minWidth: '60px'
+                      }}
+                    >
+                      👁️ Détails
+                    </button>
+                    <button 
+                      className="btn" 
+                      onClick={() => handleEditVente(v)}
+                      style={{ 
+                        padding: "6px 10px", 
+                        fontSize: "12px",
+                        background: "#f59e0b",
+                        flex: '1',
+                        minWidth: '60px'
+                      }}
+                    >
+                      ✏️ Modifier
+                    </button>
+                    <button 
+                      className="btn print" 
+                      onClick={() => handlePrintVente(v)}
+                      style={{ 
+                        padding: "6px 10px", 
+                        fontSize: "12px",
+                        background: "#8b5cf6",
+                        flex: '1',
+                        minWidth: '60px'
+                      }}
+                    >
+                      🖨️ Imprimer
+                    </button>
+                    <button 
+                      className="btn danger" 
+                      onClick={() => handleDeleteVente(v)}
+                      style={{ 
+                        padding: "6px 10px", 
+                        fontSize: "12px",
+                        flex: '1',
+                        minWidth: '60px'
+                      }}
+                    >
+                      🗑️ Supprimer
+                    </button>
+                  </div>
+                </div>
+              );
+            })
+          )}
+        </div>
+      </div>
       {/* MODAL DÉTAILS VENTE MULTI-LOTS */}
       {showDetails && selectedVente && (
         <div style={{
@@ -2461,7 +2698,8 @@ export default function Ventes() {
                   border: "none",
                   fontSize: "24px",
                   cursor: "pointer",
-                  color: "#6b7280"
+                  color: "#6b7280",
+                  marginTop: "13%"
                 }}
               >
                 ✕

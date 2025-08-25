@@ -33,7 +33,7 @@ export default function Login() {
       const userCredential = await signInWithEmailAndPassword(auth, email.trim(), password);
       const uid = userCredential.user.uid;
 
-      // Vérifier l'état "verrouillé" dans Firestore
+      // Vérifier l'état de l'utilisateur dans Firestore
       const snap = await getDoc(doc(db, "users", uid));
       if (!snap.exists()) {
         // Pas de doc user => on te laisse créer/associer une société
@@ -42,13 +42,37 @@ export default function Login() {
       }
 
       const data = snap.data();
-      const isLocked = data?.locked === true || data?.status === "disabled";
+
+      // NOUVEAU: Vérifier si l'utilisateur est supprimé
+      if (data?.deleted === true) {
+        const deletedAt = data.deletedAt ? 
+          new Date(data.deletedAt.seconds * 1000).toLocaleDateString('fr-FR') : 
+          'récemment';
+        
+        // Préparer un message explicite pour l'écran de login
+        const title = "🗑️ Compte supprimé";
+        const msg = `Ce compte a été supprimé par l'administrateur le ${deletedAt}. Contactez le support pour plus d'informations.`;
+        
+        try {
+          localStorage.setItem("forcedSignOutMessage", `${title} — ${msg}`);
+        } catch {}
+
+        // Sortir immédiatement et bloquer l'accès
+        await signOut(auth);
+        setNotice(`${title} — ${msg}`);
+        setError("Accès refusé : ce compte a été supprimé.");
+        setLoading(false);
+        return;
+      }
+
+      // Vérifier si l'utilisateur est verrouillé
+      const isLocked = data?.locked === true || data?.isLocked === true || data?.status === "disabled";
       if (isLocked) {
         // Préparer un message explicite pour l'écran de login
         const title = data?.adminPopup?.title || "🔒 Compte verrouillé";
         const msg =
           data?.adminPopup?.message ||
-          "Votre compte a été verrouillé par l’administrateur. Veuillez contacter le support.";
+          "Votre compte a été verrouillé par l'administrateur. Veuillez contacter le support.";
         try {
           localStorage.setItem("forcedSignOutMessage", `${title} — ${msg}`);
         } catch {}
@@ -61,7 +85,24 @@ export default function Login() {
         return;
       }
 
-      // Si non verrouillé, continuer le flux d'origine (societeId => dashboard sinon /societe)
+      // NOUVEAU: Vérifier si l'utilisateur est inactif
+      const isInactive = data?.active === false || data?.isActive === false;
+      if (isInactive) {
+        const title = "⏸️ Compte inactif";
+        const msg = "Votre compte a été désactivé par l'administrateur. Contactez le support.";
+        
+        try {
+          localStorage.setItem("forcedSignOutMessage", `${title} — ${msg}`);
+        } catch {}
+
+        await signOut(auth);
+        setNotice(`${title} — ${msg}`);
+        setError("Accès refusé : votre compte est inactif.");
+        setLoading(false);
+        return;
+      }
+
+      // Si tout est ok, continuer le flux d'origine (societeId => dashboard sinon /societe)
       if (data.societeId) {
         navigate("/dashboard");
       } else {
@@ -79,6 +120,10 @@ export default function Login() {
       } else if (err.code === "auth/user-disabled") {
         // Désactivation côté Firebase Auth (cas différent du verrouillage Firestore)
         setError("Ce compte a été désactivé !");
+      } else if (err.code === "auth/too-many-requests") {
+        setError("Trop de tentatives de connexion. Réessayez plus tard.");
+      } else if (err.code === "auth/network-request-failed") {
+        setError("Erreur de connexion réseau. Vérifiez votre connexion internet.");
       } else {
         setError("Email ou mot de passe incorrect !");
       }
@@ -86,6 +131,42 @@ export default function Login() {
       setLoading(false);
     }
   };
+
+  // Fonction pour obtenir la couleur et l'icône du message de notice
+  const getNoticeStyle = () => {
+    if (notice.includes("supprimé")) {
+      return {
+        border: "1px solid #dc2626",
+        color: "#dc2626",
+        background: "rgba(220, 38, 38, 0.15)",
+        icon: "🗑️"
+      };
+    }
+    if (notice.includes("verrouillé")) {
+      return {
+        border: "1px solid #f59e0b",
+        color: "#f59e0b",
+        background: "rgba(245, 158, 11, 0.15)",
+        icon: "🔒"
+      };
+    }
+    if (notice.includes("inactif")) {
+      return {
+        border: "1px solid #6b7280",
+        color: "#6b7280",
+        background: "rgba(107, 114, 128, 0.15)",
+        icon: "⏸️"
+      };
+    }
+    return {
+      border: "1px solid #ffd93d",
+      color: "#ffd93d",
+      background: "rgba(255,217,61,0.15)",
+      icon: "ℹ️"
+    };
+  };
+
+  const noticeStyle = getNoticeStyle();
 
   return (
     <div
@@ -106,8 +187,21 @@ export default function Login() {
           margin: "0 auto",
           borderRadius: 18,
           padding: "30px 28px 26px 28px",
+          position: "relative"
         }}
       >
+        {/* Indicateur de statut en haut à droite */}
+        {notice && (
+          <div style={{
+            position: "absolute",
+            top: "15px",
+            right: "15px",
+            fontSize: "24px"
+          }}>
+            {noticeStyle.icon}
+          </div>
+        )}
+
         <div
           className="fullscreen-table-title"
           style={{
@@ -133,21 +227,24 @@ export default function Login() {
           Connexion à votre compte
         </h3>
 
-        {/* Notice (verrouillage / info admin) */}
+        {/* Notice (verrouillage / suppression / info admin) */}
         {notice && (
           <div
-            className="status-chip warning"
             style={{
               margin: "14px auto",
-              padding: "10px 15px",
+              padding: "12px 15px",
               fontSize: "0.95em",
-              border: "1px solid #ffd93d",
-              color: "#ffd93d",
-              background: "rgba(255,217,61,0.15)",
               borderRadius: 8,
+              lineHeight: 1.4,
+              ...noticeStyle
             }}
           >
-            {notice}
+            <div style={{ display: "flex", alignItems: "flex-start", gap: "8px" }}>
+              <span style={{ fontSize: "16px", marginTop: "2px" }}>
+                {noticeStyle.icon}
+              </span>
+              <div>{notice}</div>
+            </div>
           </div>
         )}
 
@@ -157,11 +254,15 @@ export default function Login() {
             className="status-chip danger"
             style={{
               margin: "14px auto",
-              padding: "10px 15px",
+              padding: "12px 15px",
               fontSize: "0.95em",
+              display: "flex",
+              alignItems: "center",
+              gap: "8px"
             }}
           >
-            {error}
+            <span>❌</span>
+            <span>{error}</span>
           </div>
         )}
 
@@ -195,7 +296,10 @@ export default function Login() {
               onChange={(e) => setEmail(e.target.value)}
               required
               disabled={loading}
-              style={{ width: "100%" }}
+              style={{ 
+                width: "100%",
+                opacity: loading ? 0.7 : 1
+              }}
             />
           </div>
 
@@ -220,7 +324,10 @@ export default function Login() {
               onChange={(e) => setPassword(e.target.value)}
               required
               disabled={loading}
-              style={{ width: "100%" }}
+              style={{ 
+                width: "100%",
+                opacity: loading ? 0.7 : 1
+              }}
             />
           </div>
 
@@ -232,11 +339,20 @@ export default function Login() {
               marginTop: 10,
               padding: "12px",
               background: loading ? "#4a5a7a" : undefined,
+              cursor: loading ? "not-allowed" : "pointer",
+              transition: "all 0.3s ease"
             }}
             type="submit"
             disabled={loading}
           >
-            {loading ? "Connexion en cours..." : "Se connecter"}
+            {loading ? (
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "8px" }}>
+                <span>⏳</span>
+                <span>Connexion en cours...</span>
+              </div>
+            ) : (
+              "Se connecter"
+            )}
           </button>
         </form>
 
@@ -259,48 +375,95 @@ export default function Login() {
               fontWeight: 700,
               boxShadow: "none",
               padding: 0,
+              cursor: loading ? "not-allowed" : "pointer",
+              opacity: loading ? 0.5 : 1
             }}
-            onClick={() => navigate("/register")}
-            onMouseOver={(e) => (e.target.style.textDecoration = "underline")}
+            onClick={() => !loading && navigate("/register")}
+            onMouseOver={(e) => !loading && (e.target.style.textDecoration = "underline")}
             onMouseOut={(e) => (e.target.style.textDecoration = "none")}
             type="button"
+            disabled={loading}
           >
             Créez un compte
           </button>
         </div>
 
-        <div
-          style={{
-            marginTop: 30,
-            padding: 15,
-            background: "#1a2b45",
-            borderRadius: 10,
-            border: "1px solid #2a3b55",
-          }}
-        >
-          <h4
-            style={{
-              color: "#7ee4e6",
-              fontSize: "0.95em",
-              marginBottom: 10,
-            }}
-          >
-            ℹ️ Informations de connexion :
-          </h4>
+        {/* NOUVEAU: Section d'aide pour les comptes bloqués */}
+        {(notice.includes("supprimé") || notice.includes("verrouillé") || notice.includes("inactif")) && (
           <div
             style={{
-              color: "#e1e6ef",
-              fontSize: "0.85em",
-              lineHeight: 1.6,
+              marginTop: 25,
+              padding: 15,
+              background: "#1a2b45",
+              borderRadius: 10,
+              border: "1px solid #dc2626",
             }}
           >
-            <strong>Première connexion ?</strong>
-            <br />
-            Vous serez redirigé vers la page de gestion de société pour :
-            <br />• Créer votre société (si vous êtes pharmacien)
-            <br />• Rejoindre une société (si vous êtes vendeuse)
+            <h4
+              style={{
+                color: "#ff6b6b",
+                fontSize: "0.95em",
+                marginBottom: 10,
+                display: "flex",
+                alignItems: "center",
+                gap: "8px"
+              }}
+            >
+              🆘 Besoin d'aide ?
+            </h4>
+            <div
+              style={{
+                color: "#e1e6ef",
+                fontSize: "0.85em",
+                lineHeight: 1.6,
+              }}
+            >
+              <strong>Si vous pensez qu'il s'agit d'une erreur :</strong>
+              <br />
+              • Contactez votre pharmacien ou administrateur
+              <br />
+              • Vérifiez que vous utilisez le bon email
+              <br />
+              • Attendez quelques minutes et réessayez
+            </div>
           </div>
-        </div>
+        )}
+
+        {/* Section d'information normale */}
+        {!notice && (
+          <div
+            style={{
+              marginTop: 30,
+              padding: 15,
+              background: "#1a2b45",
+              borderRadius: 10,
+              border: "1px solid #2a3b55",
+            }}
+          >
+            <h4
+              style={{
+                color: "#7ee4e6",
+                fontSize: "0.95em",
+                marginBottom: 10,
+              }}
+            >
+              ℹ️ Informations de connexion :
+            </h4>
+            <div
+              style={{
+                color: "#e1e6ef",
+                fontSize: "0.85em",
+                lineHeight: 1.6,
+              }}
+            >
+              <strong>Première connexion ?</strong>
+              <br />
+              Vous serez redirigé vers la page de gestion de société pour :
+              <br />• Créer votre société (si vous êtes pharmacien)
+              <br />• Rejoindre une société (si vous êtes vendeuse)
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

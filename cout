@@ -1,0 +1,53 @@
+Coûts par opération (plan Blaze)
+
+Lectures : $0.06 pour 100K documents
+Écritures : $0.18 pour 100K documents
+Stockage : $0.18/GB/mois
+Bande passante : $0.12/GB
+
+Consommation estimée par pharmacie/mois
+Pharmacie type (50 ventes/jour, 200 produits) :
+
+Lectures : ~150K opérations/mois = $0.09
+Écritures : ~30K opérations/mois = $0.054
+Stockage : ~50MB = $0.009
+Total/pharmacie/mois : ~$0.15
+
+Grande pharmacie (200 ventes/jour, 1000 produits) :
+
+Lectures : ~600K opérations/mois = $0.36
+Écritures : ~120K opérations/mois = $0.216
+Stockage : ~200MB = $0.036
+Total/pharmacie/mois : ~$0.61
+
+Capacité théorique du SaaS
+Avec budget mensuel de $100 :
+
+650+ petites pharmacies
+150+ grandes pharmacies
+Mix réaliste : ~300-400 pharmacies
+
+Avec budget mensuel de $500 :
+
+3000+ petites pharmacies
+800+ grandes pharmacies
+Mix réaliste : ~1500-2000 pharmacies
+
+Points d'attention identifiés dans votre code
+Consommation élevée :
+
+Requêtes avec orderBy + limit(500) dans fetchVentes
+Listeners temps réel non optimisés
+Filtres multiples simultanés
+Exports CSV complets sans pagination
+
+Optimisations recommandées :
+
+Pagination avec startAfter() au lieu de limit(500)
+Cache des données statiques (paramètres, stock)
+Requêtes composites avec index Firestore
+Lazy loading pour les détails de ventes
+
+Estimation réaliste
+Votre architecture actuelle peut supporter 500-1000 pharmacies actives avec un budget mensuel de $200-400, en supposant un mix de petites/moyennes pharmacies.
+Les goulots d'étranglement ne seront probablement pas les coûts Firebase mais plutôt les performances côté client avec de gros volumes de données non paginées.

@@ -18,7 +18,7 @@ import {
 export default function Register() {
   const navigate = useNavigate();
 
-  // Choix du type d’inscription
+  // Choix du type d'inscription
   const [registrationType, setRegistrationType] = useState(""); // "new_company" | "invitation"
 
   // Champs compte
@@ -83,7 +83,7 @@ export default function Register() {
       return;
     }
     if (!pharmaNameTrim || !pharmaAddressTrim) {
-      setError("Veuillez renseigner le nom et l’adresse de la pharmacie.");
+      setError("Veuillez renseigner le nom et l'adresse de la pharmacie.");
       return;
     }
 
@@ -102,7 +102,7 @@ export default function Register() {
         } catch {}
       }
 
-      // 2) Générer code d’invitation unique
+      // 2) Générer code d'invitation unique
       const invite = await generateUniqueInviteCode();
 
       // 3) Créer la société
@@ -113,13 +113,14 @@ export default function Register() {
         telephone: pharmaPhoneTrim || "",
         invitationCode: invite,            // <- Code partagé aux collaborateurs
         membres: [uid],                    // <- Le créateur est membre
+        ownerId: uid,                      // <- NOUVEAU: ID du propriétaire permanent
         createdBy: uid,
         createdAt: serverTimestamp(),
         active: true,
         plan: "basic",
       });
 
-      // 4) Créer/compléter le doc utilisateur
+      // 4) Créer/compléter le doc utilisateur - CRÉATEUR = PROPRIÉTAIRE
       await setDoc(
         doc(db, "users", uid),
         {
@@ -127,16 +128,36 @@ export default function Register() {
           displayName: dnameTrim || null,
           role: "docteur",                 // <- Admin
           societeId,                       // <- Lien vers la société
+          isOwner: true,                   // <- NOUVEAU: Le créateur est propriétaire permanent
           locked: false,
           active: true,
           adminPopup: null,
           paymentWarning: null,
           createdAt: serverTimestamp(),
+          createdBy: uid,                  // <- Se crée lui-même
         },
         { merge: true }
       );
 
-      setSuccess("Pharmacie créée avec succès.");
+      // 5) Log de la création pour traçabilité
+      try {
+        await setDoc(doc(db, "societe", societeId, "activities", `owner_creation_${uid}`), {
+          type: "owner_creation",
+          userId: uid,
+          userEmail: emailTrim,
+          timestamp: serverTimestamp(),
+          details: {
+            action: "Création de la société et nomination du propriétaire",
+            pharmaName: pharmaNameTrim,
+            isOwner: true
+          }
+        });
+      } catch (logError) {
+        // Log non critique, ne pas faire échouer l'inscription
+        console.warn("Erreur lors du log de création:", logError);
+      }
+
+      setSuccess("Pharmacie créée avec succès. Vous êtes le propriétaire permanent.");
       navigate("/dashboard");
     } catch (e) {
       console.error(e);
@@ -190,6 +211,7 @@ export default function Register() {
       const snap = await getDocs(qSoc);
 
       // 3) Créer le doc user par défaut (même si le code est invalide)
+      // EMPLOYÉ = PAS PROPRIÉTAIRE
       await setDoc(
         doc(db, "users", uid),
         {
@@ -197,6 +219,7 @@ export default function Register() {
           displayName: dnameTrim || null,
           role: "vendeuse",                // <- rôle par défaut pour un invité
           societeId: null,
+          isOwner: false,                  // <- NOUVEAU: Les employés ne sont jamais propriétaires
           locked: false,
           active: true,
           adminPopup: null,
@@ -217,10 +240,33 @@ export default function Register() {
 
       const sDoc = snap.docs[0];
       const societeId = sDoc.id;
+      const societeData = sDoc.data();
 
-      // 4) Lier l’utilisateur et ajouter aux membres
-      await setDoc(doc(db, "users", uid), { societeId }, { merge: true });
+      // 4) Lier l'utilisateur et ajouter aux membres
+      await setDoc(doc(db, "users", uid), { 
+        societeId,
+        createdBy: societeData.ownerId || societeData.createdBy || "unknown" // Référencer le créateur
+      }, { merge: true });
       await updateDoc(doc(db, "societe", societeId), { membres: arrayUnion(uid) });
+
+      // 5) Log de l'ajout pour traçabilité
+      try {
+        await setDoc(doc(db, "societe", societeId, "activities", `employee_join_${uid}`), {
+          type: "employee_join",
+          userId: uid,
+          userEmail: emailTrim,
+          timestamp: serverTimestamp(),
+          details: {
+            action: "Inscription d'un employé avec code d'invitation",
+            invitationCode: code,
+            role: "vendeuse",
+            isOwner: false
+          }
+        });
+      } catch (logError) {
+        // Log non critique
+        console.warn("Erreur lors du log d'ajout:", logError);
+      }
 
       setSuccess("Compte créé et rattaché à la pharmacie avec succès.");
       navigate("/dashboard");
@@ -326,7 +372,7 @@ export default function Register() {
                   color: "#2e7d32",
                 }}
               >
-                🏪 Créer une nouvelle pharmacie (administrateur)
+                👑 Créer une nouvelle pharmacie (propriétaire permanent)
               </button>
 
               <button
@@ -339,8 +385,22 @@ export default function Register() {
                   color: "#1565c0",
                 }}
               >
-                🎯 Rejoindre avec un code d'invitation
+                👥 Rejoindre avec un code d'invitation (employé)
               </button>
+            </div>
+
+            <div style={{ 
+              marginTop: 15, 
+              padding: 12, 
+              background: "#fff3cd", 
+              border: "1px solid #ffeaa7", 
+              borderRadius: 6,
+              fontSize: "0.9em",
+              color: "#856404"
+            }}>
+              <strong>Note importante :</strong> Le créateur d'une pharmacie devient automatiquement 
+              propriétaire permanent avec tous les privilèges. Les employés peuvent être promus docteur 
+              mais ne peuvent jamais devenir propriétaires.
             </div>
           </div>
         )}
@@ -356,9 +416,10 @@ export default function Register() {
                 border: "1px solid #4caf50",
               }}
             >
-              <h4 style={{ color: "#2e7d32", margin: 0 }}>🏪 Création d'une nouvelle pharmacie</h4>
+              <h4 style={{ color: "#2e7d32", margin: 0 }}>👑 Création d'une nouvelle pharmacie</h4>
               <p style={{ color: "#1b5e20", margin: "6px 0 0 0", fontSize: "0.9em" }}>
-                Vous serez créé en tant que <strong>docteur</strong> (administrateur).
+                Vous serez créé en tant que <strong>propriétaire permanent</strong> avec tous les privilèges.
+                Vous pourrez inviter des employés et changer leurs rôles à tout moment.
               </p>
             </div>
 
@@ -425,7 +486,7 @@ export default function Register() {
             />
 
             <button className="btn" disabled={loading} style={{ fontSize: "1.05rem" }}>
-              {loading ? "Création…" : "🎉 Créer ma pharmacie"}
+              {loading ? "Création…" : "👑 Créer ma pharmacie (Propriétaire)"}
             </button>
 
             <button
@@ -457,9 +518,10 @@ export default function Register() {
                 border: "1px solid #90caf9",
               }}
             >
-              <h4 style={{ color: "#1565c0", margin: 0 }}>🎯 Rejoindre avec un code</h4>
+              <h4 style={{ color: "#1565c0", margin: 0 }}>👥 Rejoindre en tant qu'employé</h4>
               <p style={{ color: "#0d47a1", margin: "6px 0 0 0", fontSize: "0.9em" }}>
-                Le code doit être fourni par votre pharmacien/employeur.
+                Le code doit être fourni par le propriétaire de la pharmacie.
+                Vous serez créé en tant qu'employé (vendeuse par défaut).
               </p>
             </div>
 
@@ -511,7 +573,7 @@ export default function Register() {
             />
 
             <button className="btn" disabled={loading} style={{ fontSize: "1.05rem" }}>
-              {loading ? "Inscription…" : "✅ Créer mon compte et rejoindre"}
+              {loading ? "Inscription…" : "👥 Créer mon compte employé"}
             </button>
 
             <button

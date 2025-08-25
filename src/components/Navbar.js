@@ -1,4 +1,3 @@
-// src/components/Navbar.js
 import React, { useState } from "react";
 import { Link, useNavigate, useLocation } from "react-router-dom";
 import {
@@ -24,8 +23,8 @@ import {
   Description as DescriptionIcon,
   AttachMoney as AttachMoneyIcon,
   Settings as SettingsIcon,
-  People as PeopleIcon,
-  GroupAdd as GroupAddIcon,
+  People as PeopleIcon,          // Icône pour gestion utilisateurs
+  PersonAdd as PersonAddIcon,     // NOUVEAU: Icône pour invitations
   Logout as LogoutIcon,
 } from "@mui/icons-material";
 
@@ -37,18 +36,73 @@ export default function Navbar() {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const navigate = useNavigate();
   const location = useLocation();
-  const { role, loading, societeName } = useUserRole();
+  const { role, loading, isOwner } = useUserRole(); // NOUVEAU: Récupérer isOwner
 
-  // Menus visibles selon le rôle (Dashboard retiré de la liste normale)
+  // Menus visibles selon le rôle ET le statut de propriétaire
   const menuItems = [
-    { text: "Achats", icon: <ShoppingCartIcon />, path: "/achats", allowed: ["docteur"] },
-    { text: "Ventes", icon: <PointOfSaleIcon />, path: "/ventes", allowed: ["docteur", "vendeuse"] },
-    { text: "Stock", icon: <LocalPharmacyIcon />, path: "/stock", allowed: ["docteur", "vendeuse"] },
-    { text: "Devis & Factures", icon: <DescriptionIcon />, path: "/devis-factures", allowed: ["docteur", "vendeuse"] },
-    { text: "Paiements", icon: <AttachMoneyIcon />, path: "/paiements", allowed: ["docteur", "vendeuse"] },
-    { text: "Invitations", icon: <GroupAddIcon />, path: "/invitations", allowed: ["docteur", "vendeuse"] },
-    { text: "Gestion Utilisateurs", icon: <PeopleIcon />, path: "/gestion-utilisateurs", allowed: ["docteur"] },
-    { text: "Paramètres", icon: <SettingsIcon />, path: "/parametres", allowed: ["docteur"] },
+    { 
+      text: "Dashboard", 
+      icon: <DashboardIcon />, 
+      path: "/dashboard", 
+      allowed: ["docteur", "vendeuse"],
+      ownerOnly: false 
+    },
+    { 
+      text: "Achats", 
+      icon: <ShoppingCartIcon />, 
+      path: "/achats", 
+      allowed: ["docteur"],
+      ownerOnly: false 
+    },
+    { 
+      text: "Ventes", 
+      icon: <PointOfSaleIcon />, 
+      path: "/ventes", 
+      allowed: ["docteur", "vendeuse"],
+      ownerOnly: false 
+    },
+    { 
+      text: "Stock", 
+      icon: <LocalPharmacyIcon />, 
+      path: "/stock", 
+      allowed: ["docteur", "vendeuse"],
+      ownerOnly: false 
+    },
+    { 
+      text: "Devis & Factures", 
+      icon: <DescriptionIcon />, 
+      path: "/devis-factures", 
+      allowed: ["docteur", "vendeuse"],
+      ownerOnly: false 
+    },
+    { 
+      text: "Paiements", 
+      icon: <AttachMoneyIcon />, 
+      path: "/paiements", 
+      allowed: ["docteur", "vendeuse"],
+      ownerOnly: false 
+    },
+    { 
+      text: "Paramètres", 
+      icon: <SettingsIcon />, 
+      path: "/parametres", 
+      allowed: ["docteur"],
+      ownerOnly: false 
+    },
+    { 
+      text: "Invitations", 
+      icon: <PersonAddIcon />, 
+      path: "/invitations", 
+      allowed: ["docteur", "vendeuse"], // NOUVEAU: Accessible à tous
+      ownerOnly: false 
+    },
+    { 
+      text: "Gestion Utilisateurs", 
+      icon: <PeopleIcon />, 
+      path: "/gestion-utilisateurs", 
+      allowed: ["docteur"], 
+      ownerOnly: true  // Réservé au propriétaire uniquement
+    },
   ];
 
   const handleLogout = async () => {
@@ -56,6 +110,7 @@ export default function Navbar() {
     navigate("/login");
   };
 
+  // Affiche rien tant que rôle non chargé
   if (loading) return null;
 
   const drawer = (
@@ -80,107 +135,73 @@ export default function Navbar() {
           letterSpacing: "2px"
         }}
       >
-        💊 Pharma Gestion
+        {isOwner ? "👑" : "💊"} Pharma Gestion {/* NOUVEAU: Couronne pour le propriétaire */}
       </Typography>
-
-      {/* Bandeau nom de la pharmacie */}
-      <Box
-        sx={{
-          display: "flex",
-          alignItems: "center",
-          gap: 1,
+      
+      {/* NOUVEAU: Indication du statut utilisateur */}
+      {isOwner && (
+        <Box sx={{ 
+          textAlign: "center", 
+          mb: 1,
           px: 2,
           py: 1,
-          mb: 1,
-          color: "#e8f0ff",
-          bgcolor: "#00000022",
-          borderTop: "1px solid #ffffff22",
-          borderBottom: "1px solid #ffffff22",
-        }}
-      >
-        <LocalPharmacyIcon fontSize="small" />
-        <Typography
-          variant="body2"
-          sx={{
-            fontWeight: 600,
-            whiteSpace: "nowrap",
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            maxWidth: "190px",
-          }}
-          title={societeName || "—"}
-        >
-          {societeName || "—"}
-        </Typography>
-      </Box>
-
-      {/* DASHBOARD PROÉMINENT EN HAUT */}
-      <Box sx={{ px: 2, mb: 2 }}>
-        <ListItemButton
-          component={Link}
-          to="/dashboard"
-          selected={location.pathname === "/dashboard"}
-          sx={{
-            background: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
-            color: "#fff",
-            borderRadius: 3,
-            mb: 1,
-            py: 1.5,
-            "&:hover": {
-              background: "linear-gradient(135deg, #764ba2 0%, #667eea 100%)",
-            },
-            "&.Mui-selected": {
-              background: "linear-gradient(135deg, #61c7ef 0%, #3272e0 100%)",
-            }
-          }}
-        >
-          <ListItemIcon sx={{ color: "#fff", minWidth: "40px" }}>
-            <DashboardIcon />
-          </ListItemIcon>
-          <ListItemText 
-            primary="📊 DASHBOARD" 
-            sx={{ 
-              "& .MuiTypography-root": { 
-                fontWeight: 800, 
-                fontSize: "1.1em",
-                letterSpacing: "1px"
-              } 
-            }} 
-          />
-        </ListItemButton>
-      </Box>
-
+          bgcolor: "rgba(255,215,0,0.2)",
+          mx: 1,
+          borderRadius: 1
+        }}>
+          <Typography sx={{ 
+            fontSize: "0.8rem", 
+            color: "#FFD700",
+            fontWeight: 600
+          }}>
+            Propriétaire de la société
+          </Typography>
+        </Box>
+      )}
+      
       <Divider sx={{ bgcolor: "#fff3", mb: 2 }} />
-
       <List>
         {menuItems
-          .filter(item => item.allowed.includes(role))
-          .map((item) => {
-            const selected = location.pathname === item.path;
-            return (
-              <ListItemButton
-                key={item.text}
-                component={Link}
-                to={item.path}
-                selected={selected}
-                sx={{
-                  color: selected ? "#1976d2" : "#fff",
-                  background: selected ? "#fff" : "transparent",
-                  my: 0.5,
-                  borderRadius: 2,
-                  "&:hover": {
-                    background: "#fff3",
-                    color: "#1c3db1"
-                  }
+          .filter(item => {
+            // Vérifier le rôle
+            if (!item.allowed.includes(role)) return false;
+            // Vérifier si c'est réservé au propriétaire
+            if (item.ownerOnly && !isOwner) return false;
+            return true;
+          })
+          .map((item) => (
+            <ListItemButton
+              key={item.text}
+              component={Link}
+              to={item.path}
+              selected={location.pathname === item.path}
+              sx={{
+                color: location.pathname === item.path ? "#1976d2" : "#fff",
+                background: location.pathname === item.path ? "#fff" : "transparent",
+                my: 0.5,
+                borderRadius: 2,
+                "&:hover": {
+                  background: "#fff3",
+                  color: "#1c3db1"
+                },
+                // NOUVEAU: Style spécial pour les options propriétaire
+                ...(item.ownerOnly && {
+                  borderLeft: "3px solid #FFD700",
+                  paddingLeft: "13px"
+                })
+              }}
+            >
+              <ListItemIcon sx={{ color: "inherit" }}>{item.icon}</ListItemIcon>
+              <ListItemText 
+                primary={item.text}
+                secondary={item.ownerOnly ? "Propriétaire uniquement" : null}
+                secondaryTypographyProps={{
+                  sx: { fontSize: "0.7rem", color: "#FFD700" }
                 }}
-              >
-                <ListItemIcon sx={{ color: "inherit" }}>{item.icon}</ListItemIcon>
-                <ListItemText primary={item.text} />
-              </ListItemButton>
-            );
-          })}
+              />
+            </ListItemButton>
+          ))}
       </List>
-
       <Divider sx={{ bgcolor: "#fff3", mt: 2 }} />
       <Box sx={{ textAlign: "center", my: 2 }}>
         <Button
@@ -208,7 +229,9 @@ export default function Navbar() {
         position="sticky"
         elevation={6}
         sx={{
-          background: "linear-gradient(90deg, #122058 60%, #3366ff 130%)",
+          background: isOwner 
+            ? "linear-gradient(90deg, #B8860B 60%, #FFD700 130%)" // NOUVEAU: Dégradé doré pour le propriétaire
+            : "linear-gradient(90deg, #122058 60%, #3366ff 130%)",
           color: "#fff",
           fontFamily: "'Montserrat', 'Segoe UI', Arial, sans-serif",
           boxShadow: "0 8px 32px #2030a425"
@@ -224,73 +247,46 @@ export default function Navbar() {
           >
             <MenuIcon />
           </IconButton>
-
-          {/* BOUTON DASHBOARD DANS LA NAVBAR */}
-          <Button
-            component={Link}
-            to="/dashboard"
-            startIcon={<DashboardIcon />}
+          <Typography
+            variant="h6"
             sx={{
-              color: location.pathname === "/dashboard" ? "#61c7ef" : "#fff",
-              fontWeight: 800,
-              fontSize: "1.1em",
-              bgcolor: location.pathname === "/dashboard" ? "#fff2" : "transparent",
-              borderRadius: 2,
-              px: 2,
-              mr: 2,
-              transition: "all 0.2s",
-              "&:hover": { 
-                bgcolor: "#fff3", 
-                color: "#61c7ef",
-                transform: "scale(1.05)"
-              }
+              flexGrow: 1,
+              fontFamily: "'Montserrat', 'Segoe UI', Arial, sans-serif",
+              fontWeight: 700,
+              letterSpacing: "1.5px",
+              textShadow: "0 1px 10px #0003"
             }}
           >
-            📊 DASHBOARD
-          </Button>
-
-          {/* Titre + nom de la pharmacie */}
-          <Box sx={{ display: "flex", alignItems: "baseline", gap: 2, flexGrow: 1, minWidth: 0 }}>
-            <Typography
-              variant="h6"
-              sx={{
-                fontFamily: "'Montserrat', 'Segoe UI', Arial, sans-serif",
-                fontWeight: 700,
-                letterSpacing: "1.5px",
-                textShadow: "0 1px 10px #0003",
-                whiteSpace: "nowrap"
-              }}
-            >
-              💊 Pharma Gestion
-            </Typography>
-            {societeName && (
-              <Typography
-                variant="subtitle2"
-                sx={{
-                  opacity: 0.95,
-                  maxWidth: "50vw",
-                  whiteSpace: "nowrap",
-                  overflow: "hidden",
-                  textOverflow: "ellipsis"
+            {isOwner ? "👑" : "💊"} Pharma Gestion
+            {/* NOUVEAU: Indicateur de statut dans la barre principale */}
+            {isOwner && (
+              <Typography 
+                component="span" 
+                sx={{ 
+                  fontSize: "0.7rem", 
+                  ml: 2, 
+                  opacity: 0.8,
+                  fontWeight: 400
                 }}
-                title={societeName}
               >
-                | {societeName}
+                (Propriétaire)
               </Typography>
             )}
-          </Box>
-
+          </Typography>
           <Button
             color="inherit"
             onClick={handleLogout}
             startIcon={<LogoutIcon />}
             sx={{
               fontWeight: 600,
-              bgcolor: "#ffffff22",
+              bgcolor: "#fff2",
               borderRadius: 2,
               px: 2,
               transition: "background 0.2s",
-              "&:hover": { bgcolor: "#ffffff55", color: "#1976d2" }
+              "&:hover": { 
+                bgcolor: "#fff5", 
+                color: isOwner ? "#B8860B" : "#1976d2" 
+              }
             }}
           >
             Déconnexion
