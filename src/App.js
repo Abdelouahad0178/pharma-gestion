@@ -1,4 +1,4 @@
-// src/App.js - Version avec login au démarrage
+// src/App.js - Version avec page d'accueil au démarrage
 
 import React from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate, useLocation } from 'react-router-dom';
@@ -16,6 +16,7 @@ import Paiements from './components/paiements/Paiements';
 import BackupExport from './components/BackupExport';
 import UsersManagement from './components/users/UsersManagement';
 import GestionUtilisateurs from './components/admin/GestionUtilisateurs';
+import Homepage from './components/Homepage'; // Nouveau composant
 import { UserRoleProvider } from './contexts/UserRoleContext';
 import Protected from './components/Protected';
 import AddSocieteIdToAllUsers from './components/admin/AddSocieteIdToAllUsers';
@@ -78,12 +79,13 @@ function GestionRolesPage() {
   );
 }
 
-// Wrapper pour masquer la Navbar sur les pages d'auth et admin
+// Wrapper pour masquer la Navbar sur les pages d'auth, admin et homepage
 function AppWrapper() {
   const location = useLocation();
   
   // Pages où la navbar doit être masquée
   const hideNavbar = [
+    "/",                    // Page d'accueil
     "/login", 
     "/register", 
     "/accept-invitation"
@@ -92,8 +94,19 @@ function AppWrapper() {
   return (
     <>
       {!hideNavbar && <Navbar />}
-      <div style={{ minHeight: "100vh", background: "#f6f8fa" }}>
+      <div style={{ minHeight: "100vh", background: hideNavbar && location.pathname === "/" ? "transparent" : "#f6f8fa" }}>
         <Routes>
+          {/* ========== PAGE D'ACCUEIL ========== */}
+          <Route 
+            path="/" 
+            element={
+              <Homepage 
+                onLogin={() => window.location.href = '/login'}
+                onRegister={() => window.location.href = '/register'}
+              />
+            } 
+          />
+
           {/* ========== ROUTES D'AUTHENTIFICATION ========== */}
           <Route path="/login" element={<Login />} />
           <Route path="/register" element={<Register />} />
@@ -205,11 +218,8 @@ function AppWrapper() {
 
           {/* ========== REDIRECTIONS ========== */}
           
-          {/* CHANGEMENT PRINCIPAL : Redirection vers login au lieu de dashboard */}
-          <Route path="/" element={<Navigate to="/login" replace />} />
-          
-          {/* Toute autre route non définie redirige vers login */}
-          <Route path="*" element={<Navigate to="/login" replace />} />
+          {/* Toute autre route non définie redirige vers la page d'accueil */}
+          <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </div>
     </>
