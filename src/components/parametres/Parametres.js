@@ -12,7 +12,9 @@ import {
   query,
   where,
   orderBy,
-  limit
+  limit,
+  writeBatch,
+  deleteDoc
 } from "firebase/firestore";
 
 export default function Parametres() {
@@ -62,6 +64,16 @@ export default function Parametres() {
   const [filterType, setFilterType] = useState("");
   const [showActivitesFilters, setShowActivitesFilters] = useState(false);
 
+  // --- États pour sauvegarde/restauration
+  const [backupProgress, setBackupProgress] = useState(0);
+  const [restoreProgress, setRestoreProgress] = useState(0);
+  const [backupData, setBackupData] = useState(null);
+  const [backupPreview, setBackupPreview] = useState(null);
+  const [uploadingBackup, setUploadingBackup] = useState(false);
+  const [creatingBackup, setCreatingBackup] = useState(false);
+  const [restoring, setRestoring] = useState(false);
+  const [backupStats, setBackupStats] = useState(null);
+
   // --- États UI
   const [saved, setSaved] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -77,10 +89,10 @@ export default function Parametres() {
 
   // ====== Utils & Helpers ======
 
-  // Rôles autorisés (laisse passer "pharmacien", "admin", "ADMIN" et garde "docteur" si votre schéma l’utilise)
+  // Rôles autorisés (laisse passer "pharmacien", "admin", "ADMIN" et garde "docteur" si votre schéma l'utilise)
   const isRoleAutorise = (r) => ["pharmacien", "admin", "ADMIN", "docteur"].includes((r || "").toLowerCase());
 
-  // Hook: détecter la taille d’écran
+  // Hook: détecter la taille d'écran
   useEffect(() => {
     const checkScreenSize = () => {
       const width = window.innerWidth;
@@ -159,6 +171,322 @@ export default function Parametres() {
     if (fileInput) fileInput.value = "";
     showNotification("Image du cachet supprimée", "info");
   }, [showNotification]);
+
+  // ====== Fonctions de sauvegarde/restauration ======
+
+  // Convertir un timestamp Firestore en objet sérialisable
+  const serializeTimestamp = (value) => {
+    if (value && typeof value.seconds === 'number') {
+      return {
+        _firebaseTimestamp: true,
+        seconds: value.seconds,
+        nanoseconds: value.nanoseconds || 0
+      };
+    }
+    if (value instanceof Date) {
+      return {
+        _firebaseTimestamp: true,
+        seconds: Math.floor(value.getTime() / 1000),
+        nanoseconds: (value.getTime() % 1000) * 1000000
+      };
+    }
+    return value;
+  };
+
+  // Restaurer un timestamp Firestore depuis un objet sérialisé
+  const deserializeTimestamp = (value) => {
+    if (value && value._firebaseTimestamp) {
+      return Timestamp.fromMillis(value.seconds * 1000 + Math.floor(value.nanoseconds / 1000000));
+    }
+    return value;
+  };
+
+  // Sérialiser récursivement un objet
+  const deepSerialize = (obj) => {
+    if (obj === null || obj === undefined) return obj;
+    if (typeof obj !== 'object') return obj;
+    if (Array.isArray(obj)) return obj.map(deepSerialize);
+    
+    const result = {};
+    for (const [key, value] of Object.entries(obj)) {
+      if (key === 'id') continue; // On gère l'id séparément
+      result[key] = deepSerialize(serializeTimestamp(value));
+    }
+    return result;
+  };
+
+  // Désérialiser récursivement un objet
+  const deepDeserialize = (obj) => {
+    if (obj === null || obj === undefined) return obj;
+    if (typeof obj !== 'object') return obj;
+    if (Array.isArray(obj)) return obj.map(deepDeserialize);
+    
+    const result = {};
+    for (const [key, value] of Object.entries(obj)) {
+      result[key] = deepDeserialize(deserializeTimestamp(value));
+    }
+    return result;
+  };
+
+  // Créer une sauvegarde complète
+  const createBackup = useCallback(async () => {
+    if (!user || !societeId) return;
+
+    setCreatingBackup(true);
+    setBackupProgress(0);
+
+    try {
+      const backupData = {
+        metadata: {
+          societeId,
+          createdBy: user.uid,
+          createdAt: new Date().toISOString(),
+          version: "1.0",
+          type: "emergency-restore-compatible"
+        },
+        data: {},
+        statistics: {
+          totalDocuments: 0,
+          collectionsCount: 0
+        }
+      };
+
+      const collections = [
+        'produits', 'ventes', 'achats', 'stock_entries', 'fournisseurs', 
+        'clients', 'paiements', 'activities', 'parametres'
+      ];
+
+      let totalDocuments = 0;
+      let processedCollections = 0;
+
+      // Sauvegarder les informations de la société
+      setBackupProgress(5);
+      try {
+        const societeDoc = await getDoc(doc(db, "societe", societeId));
+        if (societeDoc.exists()) {
+          backupData.data.societeInfo = [{
+            id: societeId,
+            ...deepSerialize(societeDoc.data())
+          }];
+          totalDocuments += 1;
+        }
+      } catch (error) {
+        console.warn("Erreur sauvegarde info société:", error);
+      }
+
+      // Sauvegarder les utilisateurs
+      setBackupProgress(10);
+      try {
+        const usersQuery = query(collection(db, "users"), where("societeId", "==", societeId));
+        const usersSnapshot = await getDocs(usersQuery);
+        backupData.data.users = [];
+        usersSnapshot.forEach(doc => {
+          backupData.data.users.push({
+            id: doc.id,
+            ...deepSerialize(doc.data())
+          });
+          totalDocuments++;
+        });
+      } catch (error) {
+        console.warn("Erreur sauvegarde utilisateurs:", error);
+        backupData.data.users = [];
+      }
+
+      // Sauvegarder chaque collection de la société
+      for (const collectionName of collections) {
+        try {
+          setBackupProgress(20 + (processedCollections / collections.length) * 70);
+          
+          const collectionRef = collection(db, "societe", societeId, collectionName);
+          const snapshot = await getDocs(collectionRef);
+          
+          backupData.data[collectionName] = [];
+          snapshot.forEach(doc => {
+            backupData.data[collectionName].push({
+              id: doc.id,
+              ...deepSerialize(doc.data())
+            });
+            totalDocuments++;
+          });
+
+          if (backupData.data[collectionName].length > 0) {
+            processedCollections++;
+          }
+          
+        } catch (error) {
+          console.warn(`Erreur sauvegarde ${collectionName}:`, error);
+          backupData.data[collectionName] = [];
+        }
+      }
+
+      backupData.statistics.totalDocuments = totalDocuments;
+      backupData.statistics.collectionsCount = Object.keys(backupData.data).length;
+
+      setBackupProgress(100);
+
+      // Télécharger le fichier
+      const fileName = `backup-pharma-${new Date().toISOString().split('T')[0]}-${Date.now()}.json`;
+      const blob = new Blob([JSON.stringify(backupData, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = fileName;
+      link.click();
+      
+      URL.revokeObjectURL(url);
+
+      setBackupStats(backupData.statistics);
+      showNotification(`Sauvegarde créée: ${totalDocuments} documents sauvegardés`, "success");
+
+    } catch (error) {
+      console.error("Erreur création sauvegarde:", error);
+      showNotification("Erreur lors de la création de la sauvegarde: " + error.message, "error");
+    } finally {
+      setCreatingBackup(false);
+      setBackupProgress(0);
+    }
+  }, [user, societeId, showNotification]);
+
+  // Upload et lecture d'un fichier de sauvegarde
+  const handleBackupUpload = useCallback(async (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    if (!file.name.endsWith('.json')) {
+      showNotification("Veuillez sélectionner un fichier JSON de sauvegarde", "error");
+      return;
+    }
+
+    setUploadingBackup(true);
+
+    try {
+      const text = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = () => reject(new Error("Erreur lors de la lecture du fichier"));
+        reader.readAsText(file);
+      });
+
+      const data = JSON.parse(text);
+      
+      // Vérifier la structure
+      if (!data.metadata || !data.data || !data.statistics) {
+        throw new Error("Format de sauvegarde invalide");
+      }
+
+      setBackupData(data);
+      setBackupPreview({
+        fileName: file.name,
+        createdAt: data.metadata.createdAt,
+        societeId: data.metadata.societeId,
+        createdBy: data.metadata.createdBy,
+        totalDocuments: data.statistics.totalDocuments,
+        collections: Object.keys(data.data).map(key => ({
+          name: key,
+          count: Array.isArray(data.data[key]) ? data.data[key].length : 0
+        }))
+      });
+
+      showNotification("Fichier de sauvegarde chargé avec succès", "success");
+
+    } catch (error) {
+      console.error("Erreur lecture sauvegarde:", error);
+      showNotification("Erreur lors de la lecture du fichier: " + error.message, "error");
+    } finally {
+      setUploadingBackup(false);
+    }
+  }, [showNotification]);
+
+  // Restaurer depuis une sauvegarde
+  const restoreFromBackup = useCallback(async () => {
+    if (!backupData || !user || !societeId) return;
+
+    const confirmation = window.confirm(
+      "ATTENTION: Cette opération va remplacer toutes les données existantes par celles de la sauvegarde. Cette action est irréversible. Voulez-vous continuer ?"
+    );
+
+    if (!confirmation) return;
+
+    setRestoring(true);
+    setRestoreProgress(0);
+
+    try {
+      let processedDocs = 0;
+      const totalDocs = backupData.statistics.totalDocuments;
+
+      // Restaurer par lots de 500 documents (limite Firestore)
+      const batchSize = 500;
+      const batch = writeBatch(db);
+      let batchCount = 0;
+
+      const commitBatch = async () => {
+        if (batchCount > 0) {
+          await batch.commit();
+          batchCount = 0;
+        }
+      };
+
+      // Restaurer chaque collection
+      for (const [collectionName, documents] of Object.entries(backupData.data)) {
+        if (!Array.isArray(documents)) continue;
+
+        console.log(`Restauration ${collectionName}: ${documents.length} documents`);
+
+        for (const docData of documents) {
+          if (!docData.id) continue;
+
+          const deserializedData = deepDeserialize({ ...docData });
+          delete deserializedData.id;
+
+          let docRef;
+          
+          // Définir le chemin selon le type de collection
+          if (collectionName === 'users') {
+            docRef = doc(db, 'users', docData.id);
+          } else if (collectionName === 'societeInfo') {
+            docRef = doc(db, 'societe', docData.id);
+          } else {
+            docRef = doc(db, 'societe', societeId, collectionName, docData.id);
+          }
+
+          batch.set(docRef, deserializedData);
+          batchCount++;
+          processedDocs++;
+
+          // Commit par lots
+          if (batchCount >= batchSize) {
+            await commitBatch();
+            setRestoreProgress((processedDocs / totalDocs) * 100);
+          }
+        }
+      }
+
+      // Commit final
+      await commitBatch();
+      setRestoreProgress(100);
+
+      // Rafraîchir les données après restauration
+      window.location.reload();
+
+      showNotification("Restauration terminée avec succès!", "success");
+
+    } catch (error) {
+      console.error("Erreur restauration:", error);
+      showNotification("Erreur lors de la restauration: " + error.message, "error");
+    } finally {
+      setRestoring(false);
+      setRestoreProgress(0);
+    }
+  }, [backupData, user, societeId, showNotification]);
+
+  // Supprimer la prévisualisation
+  const clearBackupPreview = useCallback(() => {
+    setBackupData(null);
+    setBackupPreview(null);
+    const fileInput = document.getElementById('backup-upload');
+    if (fileInput) fileInput.value = '';
+  }, []);
 
   // Libellé type activité
   const getActivityTypeLabel = useCallback((type) => {
@@ -303,7 +631,6 @@ export default function Parametres() {
         }
       } catch (e) {
         // Si pas d'index/orderBy dispo ou collection absente, on ignore sans casser
-        // console.warn("Activities fetch skipped:", e?.message);
       }
 
       // 2) Ventes (compatibilité)
@@ -501,7 +828,7 @@ export default function Parametres() {
     };
   }, [user, societeId, fetchUtilisateurs, fetchStockEntries, showNotification]);
 
-  // Charger les activités lorsqu’on bascule sur l’onglet
+  // Charger les activités lorsqu'on bascule sur l'onglet
   useEffect(() => {
     if (activeTab === "activites" && utilisateurs.length >= 0) {
       // on peut afficher même si 0 utilisateur (traçabilité ancienne)
@@ -897,7 +1224,21 @@ export default function Parametres() {
       fontSize: "0.9em",
       textTransform: "uppercase",
       letterSpacing: "0.5px"
-    }
+    },
+    progressBar: {
+      width: "100%",
+      height: "8px",
+      background: "#e2e8f0",
+      borderRadius: "4px",
+      overflow: "hidden",
+      marginTop: "10px"
+    },
+    progressFill: (progress) => ({
+      height: "100%",
+      background: "linear-gradient(135deg, #48bb78 0%, #38a169 100%)",
+      width: `${progress}%`,
+      transition: "width 0.3s ease"
+    })
   });
   const styles = getResponsiveStyles();
 
@@ -1001,7 +1342,7 @@ export default function Parametres() {
         <div style={styles.mainCard}>
           <div style={styles.header}>
             <h1 style={styles.title}>Paramètres Pharmacie</h1>
-            <p style={styles.subtitle}>Configuration complète avec gestion avancée des lots</p>
+            <p style={styles.subtitle}>Configuration complète avec gestion avancée des lots et sauvegarde</p>
             {gestionMultiLots && !isMobile && (
               <div
                 style={{
@@ -1043,7 +1384,7 @@ export default function Parametres() {
                   margin: "0 0 5px 0"
                 }}
               >
-                <strong>Paramètres Multi-Lots</strong> - Configuration avancée de la traçabilité
+                <strong>Paramètres Multi-Lots</strong> - Configuration avancée avec sauvegarde/restauration
               </p>
               <p style={{ color: "#4a5568", fontSize: "0.8em", margin: 0 }}>
                 {stockEntries.length} entrées de stock • {utilisateurs.length} utilisateurs • {activites.length} activités
@@ -1084,7 +1425,8 @@ export default function Parametres() {
                 ["informations", "Informations"],
                 ["gestion", "Gestion"],
                 ["multilots", "Multi-Lots"],
-                ["activites", "Activités"]
+                ["activites", "Activités"],
+                ["sauvegarde", "Sauvegarde"]
               ].map(([key, label]) => (
                 <button
                   key={key}
@@ -1716,7 +2058,7 @@ export default function Parametres() {
                 </form>
               )}
 
-              {/* Multi-lots */}
+        {/* Multi-lots */}
               {activeTab === "multilots" && (
                 <form onSubmit={handleSaveMultiLots}>
                   <h3

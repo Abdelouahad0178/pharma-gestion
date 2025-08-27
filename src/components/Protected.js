@@ -15,6 +15,7 @@ export default function Protected({ permission, children }) {
     isDeleted,
     isLocked,
     isActive,
+    isOwner,
     role 
   } = useUserRole();
   
@@ -144,7 +145,7 @@ export default function Protected({ permission, children }) {
   }
 
   // Si le compte ne peut pas accéder à l'application (verrouillé/désactivé)
-  if (!canAccessApp()) {
+  if (canAccessApp && !canAccessApp()) {
     const getStatusInfo = () => {
       if (isLocked) {
         return {
@@ -197,7 +198,7 @@ export default function Protected({ permission, children }) {
           {statusInfo.subtitle}
         </div>
         <div style={{ fontSize: '14px', color: '#6b7280', marginBottom: '20px' }}>
-          {getBlockMessage()}
+          {getBlockMessage && getBlockMessage()}
         </div>
         <div style={{ display: 'flex', gap: '15px' }}>
           <button
@@ -240,15 +241,100 @@ export default function Protected({ permission, children }) {
     const getPermissionInfo = () => {
       const permissionMessages = {
         'voir_achats': 'Seul le pharmacien peut accéder aux achats',
-        'gerer_utilisateurs': 'Seul le pharmacien peut gérer les utilisateurs',
+        'gerer_utilisateurs': 'Seul le propriétaire peut gérer les utilisateurs',
         'parametres': 'Seul le pharmacien peut accéder aux paramètres',
         'voir_ventes': 'Vous n\'avez pas accès aux ventes',
-        'ajouter_stock': 'Vous n\'avez pas accès à la gestion du stock'
+        'ajouter_stock': 'Vous n\'avez pas accès à la gestion du stock',
+        'modifier_roles': 'Seul le propriétaire peut modifier les rôles'
       };
       
       return permissionMessages[permission] || 'Permission insuffisante pour cette action';
     };
 
+    // Message spécial pour la gestion des utilisateurs
+    if (permission === "gerer_utilisateurs") {
+      return (
+        <div style={{
+          padding: 40,
+          textAlign: "center",
+          color: "#fbbf24",
+          minHeight: '50vh',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          flexDirection: 'column',
+          background: 'linear-gradient(120deg, #2d2416 0%, #3d3020 100%)'
+        }}>
+          <div style={{ fontSize: '64px', marginBottom: '20px' }}>👑</div>
+          <div style={{ fontSize: '24px', fontWeight: 800, marginBottom: '10px' }}>
+            🔒 Accès Restreint - Propriétaire Uniquement
+          </div>
+          <div style={{ fontSize: '16px', color: '#8892b0', marginBottom: '10px' }}>
+            Seul le propriétaire de la société peut gérer les utilisateurs.
+          </div>
+          <div style={{ 
+            fontSize: '14px', 
+            color: '#6b7280', 
+            marginBottom: '10px',
+            background: 'rgba(0,0,0,0.3)',
+            padding: '8px 16px',
+            borderRadius: '20px'
+          }}>
+            Votre rôle: <strong>{role}</strong> {isOwner ? '(👑 Propriétaire)' : '(👤 Utilisateur standard)'}
+          </div>
+          {!isOwner && (
+            <div style={{ 
+              fontSize: '14px', 
+              color: '#6b7280', 
+              marginBottom: '20px',
+              background: 'rgba(251, 191, 36, 0.1)',
+              border: '1px solid rgba(251, 191, 36, 0.3)',
+              padding: '12px 20px',
+              borderRadius: '8px',
+              maxWidth: '500px'
+            }}>
+              💡 <strong>Information :</strong> Cette fonctionnalité permet de promouvoir des vendeuses 
+              au rang de docteur ou de rétrograder des docteurs. Elle n'est accessible qu'au propriétaire 
+              pour des raisons de sécurité.
+            </div>
+          )}
+          <div style={{ display: 'flex', gap: '15px' }}>
+            <button
+              onClick={() => navigate("/dashboard")}
+              style={{
+                background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                color: 'white',
+                border: 'none',
+                borderRadius: '10px',
+                padding: '12px 24px',
+                fontSize: '16px',
+                fontWeight: 700,
+                cursor: 'pointer'
+              }}
+            >
+              Retour au Dashboard
+            </button>
+            <button
+              onClick={() => navigate(-1)}
+              style={{
+                background: 'linear-gradient(135deg, #6b7280 0%, #4b5563 100%)',
+                color: 'white',
+                border: 'none',
+                borderRadius: '10px',
+                padding: '12px 24px',
+                fontSize: '16px',
+                fontWeight: 700,
+                cursor: 'pointer'
+              }}
+            >
+              Retour
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    // Message générique pour les autres permissions
     return (
       <div style={{
         padding: 40,
@@ -276,7 +362,7 @@ export default function Protected({ permission, children }) {
           padding: '8px 16px',
           borderRadius: '20px'
         }}>
-          Votre rôle: <strong>{role}</strong>
+          Votre rôle: <strong>{role}</strong> {isOwner && '(👑 Propriétaire)'}
         </div>
         <div style={{ fontSize: '14px', color: '#6b7280', marginBottom: '20px' }}>
           Contactez l'administrateur pour plus d'informations.

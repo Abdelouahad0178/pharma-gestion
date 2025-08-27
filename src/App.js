@@ -1,7 +1,10 @@
+// src/App.js - Version avec login au démarrage
+
 import React from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import Login from './components/auth/Login';
 import Register from './components/auth/Register';
+import AcceptInvitation from './components/auth/AcceptInvitation';
 import Dashboard from './components/dashboard/Dashboard';
 import Achats from './components/achats/Achats';
 import Stock from './components/stock/Stock';
@@ -10,31 +13,103 @@ import Navbar from './components/Navbar';
 import Parametres from './components/parametres/Parametres';
 import DevisFactures from './components/devisFactures/DevisFactures';
 import Paiements from './components/paiements/Paiements';
-import SecureUserManagement from './components/admin/SecureUserManagement';
-import Invitations from './components/invitations/Invitations';
-import FloatingDashboardButton from './components/common/FloatingDashboardButton'; // CORRIGÉ
+import BackupExport from './components/BackupExport';
+import UsersManagement from './components/users/UsersManagement';
+import GestionUtilisateurs from './components/admin/GestionUtilisateurs';
 import { UserRoleProvider } from './contexts/UserRoleContext';
 import Protected from './components/Protected';
+import AddSocieteIdToAllUsers from './components/admin/AddSocieteIdToAllUsers';
+import InitOwner from './components/admin/InitOwner';
 import './styles/main.css';
 
-// Wrapper pour masquer la Navbar sur Login/Register
+// Page dédiée aux sauvegardes
+function BackupPage() {
+  return (
+    <div className="fullscreen-table-wrap">
+      <div className="fullscreen-table-title">💾 Gestion des Sauvegardes</div>
+      <BackupExport />
+      
+      <div className="paper-card" style={{ maxWidth: 700, margin: '20px auto' }}>
+        <h4 style={{ color: '#e4edfa', marginBottom: 15 }}>📋 Guide d'utilisation</h4>
+        <div style={{ color: '#99b2d4', lineHeight: 1.8 }}>
+          <div style={{ display: 'grid', gap: 12 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <span style={{ fontSize: '1.2rem' }}>🔒</span>
+              <span><strong>Sécurité :</strong> Seul le propriétaire peut créer des sauvegardes complètes de toutes les données.</span>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <span style={{ fontSize: '1.2rem' }}>📁</span>
+              <span><strong>Localisation :</strong> Les fichiers JSON sont téléchargés dans votre dossier "Téléchargements".</span>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <span style={{ fontSize: '1.2rem' }}>📅</span>
+              <span><strong>Fréquence :</strong> Sauvegarde complète 1x/semaine, sauvegarde rapide quotidienne recommandée.</span>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <span style={{ fontSize: '1.2rem' }}>💾</span>
+              <span><strong>Format :</strong> Données exportées en JSON (lisible, réimportable, compatible).</span>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <span style={{ fontSize: '1.2rem' }}>🔄</span>
+              <span><strong>Restauration :</strong> Gardez vos fichiers de sauvegarde en sécurité pour une restauration future.</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Page dédiée à la gestion des utilisateurs (votre version existante)
+function UsersPage() {
+  return (
+    <div style={{ minHeight: "100vh", background: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)" }}>
+      <UsersManagement />
+    </div>
+  );
+}
+
+// Page dédiée à la gestion des rôles propriétaire
+function GestionRolesPage() {
+  return (
+    <div style={{ minHeight: "100vh", background: "linear-gradient(135deg, #223049 0%, #344060 100%)" }}>
+      <GestionUtilisateurs />
+    </div>
+  );
+}
+
+// Wrapper pour masquer la Navbar sur les pages d'auth et admin
 function AppWrapper() {
   const location = useLocation();
-  const hideNavbar = location.pathname === "/login" || location.pathname === "/register";
+  
+  // Pages où la navbar doit être masquée
+  const hideNavbar = [
+    "/login", 
+    "/register", 
+    "/accept-invitation"
+  ].includes(location.pathname) || location.pathname.startsWith("/admin-");
 
   return (
     <>
       {!hideNavbar && <Navbar />}
       <div style={{ minHeight: "100vh", background: "#f6f8fa" }}>
         <Routes>
-          {/* Auth */}
+          {/* ========== ROUTES D'AUTHENTIFICATION ========== */}
           <Route path="/login" element={<Login />} />
           <Route path="/register" element={<Register />} />
+          <Route path="/accept-invitation" element={<AcceptInvitation />} />
 
-          {/* Dashboard */}
-          <Route path="/dashboard" element={<Dashboard />} />
+          {/* ========== DASHBOARD PRINCIPAL (PROTÉGÉ) ========== */}
+          <Route 
+            path="/dashboard" 
+            element={
+              <Protected permission="voir_dashboard">
+                <Dashboard />
+              </Protected>
+            } 
+          />
 
-          {/* Routes protégées (avec permissions) */}
+          {/* ========== MODULES PRINCIPAUX (PROTÉGÉS) ========== */}
           <Route
             path="/achats"
             element={
@@ -60,7 +135,7 @@ function AppWrapper() {
             }
           />
 
-          {/* Modules secondaires */}
+          {/* ========== MODULES SECONDAIRES (PROTÉGÉS) ========== */}
           <Route
             path="/devis-factures"
             element={
@@ -77,6 +152,10 @@ function AppWrapper() {
               </Protected>
             }
           />
+
+          {/* ========== GESTION ET ADMINISTRATION (PROTÉGÉS) ========== */}
+          
+          {/* Paramètres système */}
           <Route
             path="/parametres"
             element={
@@ -86,39 +165,58 @@ function AppWrapper() {
             }
           />
 
-          {/* NOUVEAU: Gestion sécurisée des utilisateurs - PROPRIÉTAIRE UNIQUEMENT */}
+          {/* Gestion des sauvegardes */}
+          <Route
+            path="/backup"
+            element={
+              <Protected permission="voir_dashboard">
+                <BackupPage />
+              </Protected>
+            }
+          />
+
+          {/* Gestion des rôles - PROPRIÉTAIRE UNIQUEMENT */}
           <Route
             path="/gestion-utilisateurs"
             element={
               <Protected permission="gerer_utilisateurs">
-                <SecureUserManagement />
+                <GestionRolesPage />
               </Protected>
             }
           />
 
-          {/* NOUVEAU: Invitations - Accessible à tous les utilisateurs connectés */}
+          {/* Gestion utilisateurs (votre version existante) - Docteurs */}
           <Route
-            path="/invitations"
+            path="/users"
             element={
-              <Protected permission="voir_invitations">
-                <Invitations />
+              <Protected permission="parametres">
+                <UsersPage />
               </Protected>
             }
           />
 
-          {/* Redirection par défaut */}
-          <Route path="*" element={<Navigate to="/login" />} />
-        </Routes>
+          {/* ========== ROUTES ADMINISTRATIVES TEMPORAIRES ========== */}
+          
+          {/* Initialisation propriétaire (première fois) */}
+          <Route path="/admin-init-owner" element={<InitOwner />} />
+          
+          {/* Migration société (existant) */}
+          <Route path="/admin-update-societe" element={<AddSocieteIdToAllUsers />} />
 
-        {/* NOUVEAU: Bouton flottant Dashboard - Visible sur toutes les pages sauf dashboard/auth */}
-        <FloatingDashboardButton />
+          {/* ========== REDIRECTIONS ========== */}
+          
+          {/* CHANGEMENT PRINCIPAL : Redirection vers login au lieu de dashboard */}
+          <Route path="/" element={<Navigate to="/login" replace />} />
+          
+          {/* Toute autre route non définie redirige vers login */}
+          <Route path="*" element={<Navigate to="/login" replace />} />
+        </Routes>
       </div>
     </>
   );
 }
 
 function App() {
-  // Le Provider englobe tout pour permettre l'accès au contexte partout
   return (
     <UserRoleProvider>
       <Router>

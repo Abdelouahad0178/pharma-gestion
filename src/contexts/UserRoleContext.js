@@ -73,7 +73,7 @@ export function UserRoleProvider({ children }) {
                 setRole(data.role || "vendeuse");
                 setSocieteId(data.societeId || null);
                 setIsLocked(data.locked === true || data.isLocked === true);
-                setIsOwner(data.isOwner === true);
+                setIsOwner(data.isOwner === true); // ✅ État propriétaire
                 setIsActive(data.active !== false && data.isActive !== false);
                 setAdminPopup(data.adminPopup || null);
                 setPaymentWarning(data.paymentWarning || null);
@@ -86,7 +86,7 @@ export function UserRoleProvider({ children }) {
                   role: data.role || "vendeuse",
                   locked: data.locked === true || data.isLocked === true,
                   deleted: data.deleted === true,
-                  isOwner: data.isOwner === true,
+                  isOwner: data.isOwner === true, // ✅ Propriétaire
                   active: data.active !== false && data.isActive !== false,
                   adminPopup: data.adminPopup || null,
                   paymentWarning: data.paymentWarning || null,
@@ -99,7 +99,7 @@ export function UserRoleProvider({ children }) {
                   societeId: null,
                   locked: false,
                   deleted: false,
-                  isOwner: false,
+                  isOwner: false, // ✅ Pas propriétaire par défaut
                   active: true,
                   adminPopup: null,
                   paymentWarning: null,
@@ -134,7 +134,7 @@ export function UserRoleProvider({ children }) {
                 setSocieteId(null);
                 setIsLocked(true); // Verrouillé par sécurité
                 setIsDeleted(false);
-                setIsOwner(false);
+                setIsOwner(false); // ✅ Pas propriétaire en cas d'erreur
                 setIsActive(false); // Désactivé par sécurité
                 setAdminPopup("Erreur de permissions - contactez l'administrateur");
                 setPaymentWarning(null);
@@ -145,7 +145,7 @@ export function UserRoleProvider({ children }) {
                   role: "vendeuse",
                   locked: true,
                   deleted: false,
-                  isOwner: false,
+                  isOwner: false, // ✅ Pas propriétaire en cas d'erreur
                   active: false,
                   adminPopup: "Erreur de permissions - contactez l'administrateur",
                   paymentWarning: null,
@@ -157,7 +157,7 @@ export function UserRoleProvider({ children }) {
                 setSocieteId(null);
                 setIsLocked(false);
                 setIsDeleted(false);
-                setIsOwner(false);
+                setIsOwner(false); // ✅ Pas propriétaire par défaut
                 setIsActive(true);
                 setAdminPopup(null);
                 setPaymentWarning(null);
@@ -168,7 +168,7 @@ export function UserRoleProvider({ children }) {
                   role: "vendeuse",
                   locked: false,
                   deleted: false,
-                  isOwner: false,
+                  isOwner: false, // ✅ Pas propriétaire par défaut
                   active: true,
                   adminPopup: null,
                   paymentWarning: null,
@@ -186,7 +186,7 @@ export function UserRoleProvider({ children }) {
           setSocieteId(null);
           setIsLocked(false);
           setIsDeleted(false);
-          setIsOwner(false);
+          setIsOwner(false); // ✅ Pas propriétaire par défaut
           setIsActive(true);
           setAdminPopup(null);
           setPaymentWarning(null);
@@ -197,7 +197,7 @@ export function UserRoleProvider({ children }) {
             role: "vendeuse",
             locked: false,
             deleted: false,
-            isOwner: false,
+            isOwner: false, // ✅ Pas propriétaire par défaut
             active: true,
             adminPopup: null,
             paymentWarning: null,
@@ -213,7 +213,7 @@ export function UserRoleProvider({ children }) {
         setUser(null);
         setIsLocked(false);
         setIsDeleted(false);
-        setIsOwner(false);
+        setIsOwner(false); // ✅ Pas propriétaire si déconnecté
         setIsActive(true);
         setAdminPopup(null);
         setPaymentWarning(null);
@@ -280,7 +280,7 @@ export function UserRoleProvider({ children }) {
     };
   }, [user, societeId, isDeleted]);
 
-  // ✅ Permissions avec vérifications de sécurité
+  // ✅ Permissions avec vérifications de sécurité et gestion propriétaire
   const can = (permission) => {
     // Si l'utilisateur est supprimé, aucune permission
     if (isDeleted || !user || !authReady) return false;
@@ -290,6 +290,20 @@ export function UserRoleProvider({ children }) {
     
     // Si compte inactif et pas propriétaire, aucune permission  
     if (!isActive && !isOwner) return false;
+    
+    // 🔑 PERMISSIONS SPÉCIALES PROPRIÉTAIRE UNIQUEMENT
+    const ownerOnlyPermissions = [
+      "gerer_utilisateurs",
+      "modifier_roles", 
+      "voir_gestion_utilisateurs",
+      "promouvoir_utilisateur",
+      "retrograder_utilisateur"
+    ];
+    
+    // Si c'est une permission propriétaire, vérifier strictement
+    if (ownerOnlyPermissions.includes(permission)) {
+      return isOwner && role === "docteur" && !isDeleted && isActive && authReady;
+    }
     
     // Le propriétaire peut TOUT faire (même si techniquement verrouillé par erreur)
     if (isOwner && user && !isDeleted) return true;
@@ -305,8 +319,8 @@ export function UserRoleProvider({ children }) {
         "voir_devis_factures",
         "voir_paiements",
         "voir_dashboard",
-        "gerer_utilisateurs",
         "voir_invitations",
+        // ❌ RETIRÉ: "gerer_utilisateurs" maintenant réservé au propriétaire
       ],
       vendeuse: [
         "voir_ventes", 
@@ -330,17 +344,17 @@ export function UserRoleProvider({ children }) {
     return true;
   };
 
-  // ✅ Permissions de gestion (strictement propriétaire)
+  // 🔑 PERMISSIONS DE GESTION STRICTEMENT PROPRIÉTAIRE
   const canManageUsers = () => {
-    return isOwner && user && !isDeleted && isActive && authReady;
+    return isOwner && user && !isDeleted && isActive && authReady && role === "docteur";
   };
 
   const canChangeRoles = () => {
-    return isOwner && user && !isDeleted && isActive && authReady;
+    return isOwner && user && !isDeleted && isActive && authReady && role === "docteur";
   };
 
   const canDeleteSociete = () => {
-    return isOwner && user && !isDeleted && isActive && authReady;
+    return isOwner && user && !isDeleted && isActive && authReady && role === "docteur";
   };
 
   // ❌ Impossible de promouvoir quelqu'un d'autre propriétaire
@@ -371,6 +385,23 @@ export function UserRoleProvider({ children }) {
     if (targetUserIsOwner) return false;
     if (targetUserId === user?.uid) return false;
     if (!["docteur", "vendeuse"].includes(newRole)) return false;
+    return true;
+  };
+
+  // 🔑 FONCTIONS SPÉCIFIQUES GESTION DES RÔLES
+  const canPromoteToDoctor = (targetUserId, targetUserIsOwner = false, currentRole) => {
+    if (!canChangeRoles()) return false;
+    if (targetUserIsOwner) return false;
+    if (targetUserId === user?.uid) return false;
+    if (currentRole !== "vendeuse") return false; // Seulement vendeuse → docteur
+    return true;
+  };
+
+  const canDemoteToVendeuse = (targetUserId, targetUserIsOwner = false, currentRole) => {
+    if (!canChangeRoles()) return false;
+    if (targetUserIsOwner) return false; // Propriétaire ne peut pas être rétrogradé
+    if (targetUserId === user?.uid) return false;
+    if (currentRole !== "docteur") return false; // Seulement docteur → vendeuse
     return true;
   };
 
@@ -408,6 +439,8 @@ export function UserRoleProvider({ children }) {
         canChangeRoles: canChangeRoles(),
         canDeleteSociete: canDeleteSociete(),
         isUntouchable: isOwner,
+        canPromoteUsers: canChangeRoles(),
+        canDemoteUsers: canChangeRoles(),
       }
     };
   };
@@ -426,7 +459,7 @@ export function UserRoleProvider({ children }) {
     if (isOwner) {
       messages.push({
         type: "success",
-        text: "🔑 Vous êtes le propriétaire permanent de cette pharmacie"
+        text: "👑 Vous êtes le propriétaire permanent de cette pharmacie"
       });
     }
     
@@ -464,6 +497,20 @@ export function UserRoleProvider({ children }) {
     return messages;
   };
 
+  // 🔑 FONCTIONS D'AIDE POUR UI
+  const getUserRoleDisplay = () => {
+    if (!role) return "Non défini";
+    if (isOwner) return `${role === "docteur" ? "Docteur" : "Vendeuse"} (👑 Propriétaire)`;
+    return role === "docteur" ? "Docteur" : "Vendeuse";
+  };
+
+  const getOwnershipStatus = () => {
+    if (!user) return "Non connecté";
+    if (isOwner) return "Propriétaire";
+    if (role === "docteur") return "Docteur";
+    return "Utilisateur standard";
+  };
+
   // ✅ Valeur du contexte
   const contextValue = {
     // États de base
@@ -472,13 +519,13 @@ export function UserRoleProvider({ children }) {
     societeId,
     societeName,
     loading,
-    authReady, // ✅ NOUVEAU: Indique si Firebase Auth est initialisé
+    authReady, // ✅ Indique si Firebase Auth est initialisé
     
     // États de sécurité  
     isLocked,
     isDeleted,
     isActive,
-    isOwner,
+    isOwner, // ✅ État propriétaire
     
     // Notifications
     adminPopup,
@@ -492,7 +539,7 @@ export function UserRoleProvider({ children }) {
     isSuperAdmin,
     getUserStats,
     
-    // Gestions strictes propriétaire
+    // 🔑 GESTIONS STRICTES PROPRIÉTAIRE
     canManageUsers,
     canChangeRoles,
     canDeleteSociete,
@@ -501,9 +548,13 @@ export function UserRoleProvider({ children }) {
     canLockOwner,
     canModifyUser,
     canChangeUserRole,
+    canPromoteToDoctor,
+    canDemoteToVendeuse,
     
-    // Utilitaires
+    // Utilitaires UI
     getPermissionMessages,
+    getUserRoleDisplay,
+    getOwnershipStatus,
   };
 
   return (

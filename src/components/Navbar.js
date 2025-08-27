@@ -1,3 +1,5 @@
+// src/components/Navbar.js - Version complète avec gestion rôles propriétaire et sauvegardes
+
 import React, { useState } from "react";
 import { Link, useNavigate, useLocation } from "react-router-dom";
 import {
@@ -12,7 +14,9 @@ import {
   ListItemText,
   Box,
   Button,
-  Divider
+  Divider,
+  Badge,
+  Chip
 } from "@mui/material";
 import {
   Menu as MenuIcon,
@@ -23,9 +27,11 @@ import {
   Description as DescriptionIcon,
   AttachMoney as AttachMoneyIcon,
   Settings as SettingsIcon,
-  People as PeopleIcon,          // Icône pour gestion utilisateurs
-  PersonAdd as PersonAddIcon,     // NOUVEAU: Icône pour invitations
   Logout as LogoutIcon,
+  CloudDownload as BackupIcon,
+  People as PeopleIcon,
+  SupervisorAccount as SupervisorAccountIcon,
+  ManageAccounts as ManageAccountsIcon,
 } from "@mui/icons-material";
 
 import { signOut } from "firebase/auth";
@@ -36,87 +42,123 @@ export default function Navbar() {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const navigate = useNavigate();
   const location = useLocation();
-  const { role, loading, isOwner } = useUserRole(); // NOUVEAU: Récupérer isOwner
+  
+  const { 
+    role, 
+    loading, 
+    authReady,
+    canAccessApp,
+    isDeleted,
+    isLocked,
+    isActive,
+    isOwner,
+    getUserRoleDisplay,
+    getOwnershipStatus 
+  } = useUserRole();
 
-  // Menus visibles selon le rôle ET le statut de propriétaire
+  // Menus avec hiérarchie des permissions et badges appropriés
   const menuItems = [
     { 
       text: "Dashboard", 
       icon: <DashboardIcon />, 
       path: "/dashboard", 
       allowed: ["docteur", "vendeuse"],
-      ownerOnly: false 
+      description: "Tableau de bord principal"
     },
     { 
       text: "Achats", 
       icon: <ShoppingCartIcon />, 
       path: "/achats", 
       allowed: ["docteur"],
-      ownerOnly: false 
+      description: "Gestion des achats fournisseurs"
     },
     { 
       text: "Ventes", 
       icon: <PointOfSaleIcon />, 
       path: "/ventes", 
       allowed: ["docteur", "vendeuse"],
-      ownerOnly: false 
+      description: "Gestion des ventes clients"
     },
     { 
       text: "Stock", 
       icon: <LocalPharmacyIcon />, 
       path: "/stock", 
       allowed: ["docteur", "vendeuse"],
-      ownerOnly: false 
+      description: "Gestion du stock pharmacie"
     },
     { 
       text: "Devis & Factures", 
       icon: <DescriptionIcon />, 
       path: "/devis-factures", 
       allowed: ["docteur", "vendeuse"],
-      ownerOnly: false 
+      description: "Gestion devis et factures"
     },
     { 
       text: "Paiements", 
       icon: <AttachMoneyIcon />, 
       path: "/paiements", 
       allowed: ["docteur", "vendeuse"],
-      ownerOnly: false 
+      description: "Suivi des paiements"
     },
+    
+    // SAUVEGARDES avec permissions étendues pour propriétaire
+    { 
+      text: "Sauvegardes", 
+      icon: <BackupIcon />, 
+      path: "/backup", 
+      allowed: ["docteur", "vendeuse"],
+      description: "Sauvegarde des données",
+      isNew: true,
+      hasOwnerBonus: true // Propriétaire a accès complet
+    },
+    
+    // GESTION UTILISATEURS (votre version existante) - Docteurs
+    { 
+      text: "Utilisateurs", 
+      icon: <PeopleIcon />, 
+      path: "/users", 
+      allowed: ["docteur"],
+      description: "Gestion des invitations et utilisateurs",
+      isAdmin: true
+    },
+    
+    // 🔑 GESTION DES RÔLES - PROPRIÉTAIRE UNIQUEMENT
+    { 
+      text: "👑 Gestion Rôles", 
+      icon: <ManageAccountsIcon />, 
+      path: "/gestion-utilisateurs", 
+      allowed: ["docteur"], 
+      ownerOnly: true,
+      description: "Promotion/rétrogradation des utilisateurs",
+      isOwnerSpecial: true
+    },
+    
     { 
       text: "Paramètres", 
       icon: <SettingsIcon />, 
       path: "/parametres", 
       allowed: ["docteur"],
-      ownerOnly: false 
-    },
-    { 
-      text: "Invitations", 
-      icon: <PersonAddIcon />, 
-      path: "/invitations", 
-      allowed: ["docteur", "vendeuse"], // NOUVEAU: Accessible à tous
-      ownerOnly: false 
-    },
-    { 
-      text: "Gestion Utilisateurs", 
-      icon: <PeopleIcon />, 
-      path: "/gestion-utilisateurs", 
-      allowed: ["docteur"], 
-      ownerOnly: true  // Réservé au propriétaire uniquement
+      description: "Configuration système"
     },
   ];
 
   const handleLogout = async () => {
-    await signOut(auth);
-    navigate("/login");
+    try {
+      await signOut(auth);
+      navigate("/login");
+    } catch (error) {
+      console.error("Erreur lors de la déconnexion:", error);
+    }
   };
 
-  // Affiche rien tant que rôle non chargé
-  if (loading) return null;
+  // Affichage conditionnel strict
+  if (loading || !authReady) return null;
+  if (!canAccessApp()) return null;
 
   const drawer = (
     <Box
       sx={{
-        width: 260,
+        width: 285,
         height: "100%",
         background: "linear-gradient(135deg,#122058,#315aac 120%)",
         color: "#fff"
@@ -125,6 +167,7 @@ export default function Navbar() {
       onClick={() => setDrawerOpen(false)}
       onKeyDown={() => setDrawerOpen(false)}
     >
+      {/* En-tête application */}
       <Typography
         variant="h6"
         align="center"
@@ -135,37 +178,68 @@ export default function Navbar() {
           letterSpacing: "2px"
         }}
       >
-        {isOwner ? "👑" : "💊"} Pharma Gestion {/* NOUVEAU: Couronne pour le propriétaire */}
+        💊 Pharma Gestion
       </Typography>
       
-      {/* NOUVEAU: Indication du statut utilisateur */}
-      {isOwner && (
-        <Box sx={{ 
-          textAlign: "center", 
-          mb: 1,
-          px: 2,
-          py: 1,
-          bgcolor: "rgba(255,215,0,0.2)",
-          mx: 1,
-          borderRadius: 1
-        }}>
-          <Typography sx={{ 
-            fontSize: "0.8rem", 
-            color: "#FFD700",
-            fontWeight: 600
-          }}>
-            Propriétaire de la société
-          </Typography>
+      {/* Statut utilisateur principal */}
+      <Box sx={{ textAlign: "center", mb: 2, px: 2 }}>
+        {isOwner ? (
+          <Chip
+            icon={<SupervisorAccountIcon />}
+            label="👑 PROPRIÉTAIRE"
+            sx={{
+              background: "linear-gradient(90deg, #ffd700, #ffed4a)",
+              color: "#1a2332",
+              fontWeight: "bold",
+              fontSize: "0.75rem",
+              height: "30px",
+              "& .MuiChip-icon": { color: "#1a2332" }
+            }}
+          />
+        ) : (
+          <Chip
+            label={getUserRoleDisplay()}
+            sx={{
+              background: role === "docteur" 
+                ? "linear-gradient(90deg, #4caf50, #81c784)" 
+                : "linear-gradient(90deg, #2196f3, #64b5f6)",
+              color: "white",
+              fontWeight: "600",
+              fontSize: "0.75rem",
+              height: "28px"
+            }}
+          />
+        )}
+      </Box>
+
+      {/* Indicateurs d'état si problèmes */}
+      {(isDeleted || isLocked || !isActive) && (
+        <Box sx={{ textAlign: "center", mb: 1, px: 2 }}>
+          <Chip
+            label={
+              isDeleted ? "🗑️ Supprimé" 
+              : isLocked ? "🔒 Verrouillé" 
+              : "⏸️ Désactivé"
+            }
+            size="small"
+            sx={{
+              background: "linear-gradient(90deg, #f44336, #e57373)",
+              color: "white",
+              fontSize: "0.7rem"
+            }}
+          />
         </Box>
       )}
       
       <Divider sx={{ bgcolor: "#fff3", mb: 2 }} />
+      
+      {/* Menu principal avec badges et permissions */}
       <List>
         {menuItems
           .filter(item => {
-            // Vérifier le rôle
+            // Vérifier permissions de base
             if (!item.allowed.includes(role)) return false;
-            // Vérifier si c'est réservé au propriétaire
+            // Vérifier permission propriétaire uniquement
             if (item.ownerOnly && !isOwner) return false;
             return true;
           })
@@ -179,31 +253,149 @@ export default function Navbar() {
                 color: location.pathname === item.path ? "#1976d2" : "#fff",
                 background: location.pathname === item.path ? "#fff" : "transparent",
                 my: 0.5,
+                mx: 1,
                 borderRadius: 2,
+                position: 'relative',
                 "&:hover": {
-                  background: "#fff3",
-                  color: "#1c3db1"
-                },
-                // NOUVEAU: Style spécial pour les options propriétaire
-                ...(item.ownerOnly && {
-                  borderLeft: "3px solid #FFD700",
-                  paddingLeft: "13px"
-                })
+                  background: location.pathname === item.path ? "#fff" : "#fff3",
+                  color: location.pathname === item.path ? "#1976d2" : "#1c3db1"
+                }
               }}
             >
-              <ListItemIcon sx={{ color: "inherit" }}>{item.icon}</ListItemIcon>
+              <ListItemIcon sx={{ color: "inherit" }}>
+                {item.isOwnerSpecial ? (
+                  <Badge
+                    badgeContent="👑"
+                    sx={{
+                      "& .MuiBadge-badge": {
+                        fontSize: "10px",
+                        height: "16px",
+                        minWidth: "16px",
+                        background: "transparent"
+                      }
+                    }}
+                  >
+                    {item.icon}
+                  </Badge>
+                ) : (
+                  item.icon
+                )}
+              </ListItemIcon>
+              
               <ListItemText 
                 primary={item.text}
-                secondary={item.ownerOnly ? "Propriétaire uniquement" : null}
-                secondaryTypographyProps={{
-                  sx: { fontSize: "0.7rem", color: "#FFD700" }
+                secondary={item.description}
+                sx={{ 
+                  "& .MuiTypography-root": { 
+                    fontSize: item.isOwnerSpecial ? "0.95rem" : "1rem",
+                    fontWeight: item.isOwnerSpecial ? "700" : "500"
+                  },
+                  "& .MuiListItemText-secondary": {
+                    color: "rgba(255,255,255,0.7)",
+                    fontSize: "0.7rem"
+                  }
                 }}
               />
+              
+              {/* Badge "NEW" pour Sauvegardes */}
+              {item.isNew && (
+                <Box
+                  sx={{
+                    position: 'absolute',
+                    top: 6,
+                    right: 10,
+                    background: '#ff4757',
+                    color: '#fff',
+                    fontSize: '0.6rem',
+                    fontWeight: 700,
+                    padding: '2px 6px',
+                    borderRadius: '10px',
+                    lineHeight: 1
+                  }}
+                >
+                  NEW
+                </Box>
+              )}
+              
+              {/* Badge "ADMIN" pour Gestion Utilisateurs classique */}
+              {item.isAdmin && (
+                <Box
+                  sx={{
+                    position: 'absolute',
+                    top: 6,
+                    right: 10,
+                    background: '#9c27b0',
+                    color: '#fff',
+                    fontSize: '0.6rem',
+                    fontWeight: 700,
+                    padding: '2px 6px',
+                    borderRadius: '10px',
+                    lineHeight: 1
+                  }}
+                >
+                  ADMIN
+                </Box>
+              )}
+              
+              {/* Badge "OWNER" pour Gestion Rôles */}
+              {item.isOwnerSpecial && (
+                <Box
+                  sx={{
+                    position: 'absolute',
+                    top: 6,
+                    right: 10,
+                    background: 'linear-gradient(90deg, #ffd700, #ffed4a)',
+                    color: '#1a2332',
+                    fontSize: '0.6rem',
+                    fontWeight: 700,
+                    padding: '2px 6px',
+                    borderRadius: '10px',
+                    lineHeight: 1
+                  }}
+                >
+                  OWNER
+                </Box>
+              )}
+              
+              {/* Badge "FULL" pour propriétaire sur Sauvegardes */}
+              {item.hasOwnerBonus && isOwner && (
+                <Box
+                  sx={{
+                    position: 'absolute',
+                    bottom: 6,
+                    right: 10,
+                    background: '#2ed573',
+                    color: '#fff',
+                    fontSize: '0.55rem',
+                    fontWeight: 600,
+                    padding: '1px 5px',
+                    borderRadius: '8px',
+                    lineHeight: 1
+                  }}
+                >
+                  FULL
+                </Box>
+              )}
             </ListItemButton>
           ))}
       </List>
-      <Divider sx={{ bgcolor: "#fff3", mt: 2 }} />
-      <Box sx={{ textAlign: "center", my: 2 }}>
+      
+      <Divider sx={{ bgcolor: "#fff3", mt: 3, mb: 2 }} />
+      
+      {/* Section informations utilisateur */}
+      <Box sx={{ px: 2, mb: 2 }}>
+        <Typography variant="caption" sx={{ color: "#b3c5d7", display: "block" }}>
+          Statut: {getOwnershipStatus()}
+        </Typography>
+        {isOwner && (
+          <Typography variant="caption" sx={{ color: "#ffd700", display: "block", fontWeight: "bold" }}>
+            ⚡ Droits étendus activés
+          </Typography>
+        )}
+      </Box>
+      
+      {/* Bouton déconnexion */}
+      <Box sx={{ textAlign: "center", mb: 2 }}>
         <Button
           variant="contained"
           color="error"
@@ -229,9 +421,7 @@ export default function Navbar() {
         position="sticky"
         elevation={6}
         sx={{
-          background: isOwner 
-            ? "linear-gradient(90deg, #B8860B 60%, #FFD700 130%)" // NOUVEAU: Dégradé doré pour le propriétaire
-            : "linear-gradient(90deg, #122058 60%, #3366ff 130%)",
+          background: "linear-gradient(90deg, #122058 60%, #3366ff 130%)",
           color: "#fff",
           fontFamily: "'Montserrat', 'Segoe UI', Arial, sans-serif",
           boxShadow: "0 8px 32px #2030a425"
@@ -247,6 +437,7 @@ export default function Navbar() {
           >
             <MenuIcon />
           </IconButton>
+          
           <Typography
             variant="h6"
             sx={{
@@ -257,22 +448,55 @@ export default function Navbar() {
               textShadow: "0 1px 10px #0003"
             }}
           >
-            {isOwner ? "👑" : "💊"} Pharma Gestion
-            {/* NOUVEAU: Indicateur de statut dans la barre principale */}
+            💊 Pharma Gestion
+            
+            {/* Badge propriétaire dans la barre principale */}
             {isOwner && (
-              <Typography 
-                component="span" 
-                sx={{ 
-                  fontSize: "0.7rem", 
-                  ml: 2, 
-                  opacity: 0.8,
-                  fontWeight: 400
+              <Chip
+                icon={<SupervisorAccountIcon />}
+                label="👑 PROPRIÉTAIRE"
+                size="small"
+                sx={{
+                  marginLeft: "16px",
+                  background: "linear-gradient(90deg, #ffd700, #ffed4a)",
+                  color: "#1a2332",
+                  fontSize: "0.7rem",
+                  fontWeight: "bold",
+                  height: "24px",
+                  "& .MuiChip-icon": { 
+                    color: "#1a2332",
+                    fontSize: "14px"
+                  }
                 }}
-              >
-                (Propriétaire)
-              </Typography>
+              />
             )}
           </Typography>
+          
+          {/* Indicateur de rôle dans la barre */}
+          <Box sx={{ mr: 2 }}>
+            <Typography variant="caption" sx={{ 
+              color: "rgba(255,255,255,0.8)",
+              fontSize: "0.75rem" 
+            }}>
+              {role === "docteur" ? "👨‍⚕️ Docteur" : "👩‍💼 Vendeuse"}
+            </Typography>
+          </Box>
+
+          {/* Accès rapide Backup dans la barre */}
+          <IconButton
+            color="inherit"
+            onClick={() => navigate('/backup')}
+            sx={{
+              bgcolor: "#fff2",
+              borderRadius: 2,
+              mr: 1,
+              "&:hover": { bgcolor: "#fff3" }
+            }}
+            title="Sauvegardes rapides"
+          >
+            <BackupIcon />
+          </IconButton>
+          
           <Button
             color="inherit"
             onClick={handleLogout}
@@ -283,10 +507,7 @@ export default function Navbar() {
               borderRadius: 2,
               px: 2,
               transition: "background 0.2s",
-              "&:hover": { 
-                bgcolor: "#fff5", 
-                color: isOwner ? "#B8860B" : "#1976d2" 
-              }
+              "&:hover": { bgcolor: "#fff5", color: "#1976d2" }
             }}
           >
             Déconnexion
