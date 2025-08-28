@@ -1,4 +1,4 @@
-// src/components/users/UsersManagement.js - Version simplifiée sans boucles infinies
+// src/components/users/UsersManagement.js - Version responsive complète
 import React, { useState, useEffect } from "react";
 import { db } from "../../firebase/config";
 import { useUserRole } from "../../contexts/UserRoleContext";
@@ -29,6 +29,27 @@ export default function UsersManagement() {
   const [showInviteCode, setShowInviteCode] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(null);
   const [updatingUser, setUpdatingUser] = useState("");
+
+  // Détection responsive
+  const [screenSize, setScreenSize] = useState({
+    isMobile: window.innerWidth < 768,
+    isTablet: window.innerWidth >= 768 && window.innerWidth < 1024,
+    isDesktop: window.innerWidth >= 1024
+  });
+
+  // Gestionnaire de redimensionnement
+  useEffect(() => {
+    const handleResize = () => {
+      setScreenSize({
+        isMobile: window.innerWidth < 768,
+        isTablet: window.innerWidth >= 768 && window.innerWidth < 1024,
+        isDesktop: window.innerWidth >= 1024
+      });
+    };
+
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
 
   // Vérification simple des permissions
   const hasAccess = isOwner || ["pharmacien", "admin", "ADMIN", "docteur"].includes((role || "").toLowerCase());
@@ -90,7 +111,7 @@ export default function UsersManagement() {
 
     loadUsers();
     loadInvitations();
-  }, [user?.uid, societeId, hasAccess]); // Dépendances stables
+  }, [user?.uid, societeId, hasAccess]);
 
   // Fonction simple pour envoyer invitation
   const sendInvitation = async (e) => {
@@ -162,20 +183,9 @@ export default function UsersManagement() {
 
   // Fonction pour verrouiller/déverrouiller un utilisateur
   const toggleUserLock = async (userId, currentStatus, userEmail) => {
-    console.log("=== DEBUG VERROUILLAGE ===");
-    console.log("User ID:", userId);
-    console.log("Current status:", currentStatus);
-    console.log("User email:", userEmail);
-    console.log("Updating user:", updatingUser);
-    console.log("Current user:", user);
-    
-    if (updatingUser === userId) {
-      console.log("STOP: Déjà en cours de mise à jour");
-      return;
-    }
+    if (updatingUser === userId) return;
     
     setUpdatingUser(userId);
-    console.log("Starting update...");
     
     try {
       const userDocRef = doc(db, "users", userId);
@@ -185,19 +195,12 @@ export default function UsersManagement() {
         modifiePar: user.uid
       };
       
-      console.log("Update data:", updateData);
-      
       await updateDoc(userDocRef, updateData);
-      console.log("Firestore update successful");
       
       // Mettre à jour localement
-      setUtilisateurs(prev => {
-        const updated = prev.map(u => 
-          u.id === userId ? { ...u, actif: !currentStatus } : u
-        );
-        console.log("Local state updated");
-        return updated;
-      });
+      setUtilisateurs(prev => 
+        prev.map(u => u.id === userId ? { ...u, actif: !currentStatus } : u)
+      );
       
       setNotification({
         message: `${userEmail} ${!currentStatus ? 'déverrouillé' : 'verrouillé'}`,
@@ -206,11 +209,10 @@ export default function UsersManagement() {
       setTimeout(() => setNotification(null), 3000);
       
     } catch (error) {
-      console.error("=== ERREUR VERROUILLAGE ===", error);
+      console.error("Erreur verrouillage:", error);
       setNotification({ message: "Erreur: " + error.message, type: "error" });
       setTimeout(() => setNotification(null), 3000);
     } finally {
-      console.log("Clearing updating user state");
       setUpdatingUser("");
     }
   };
@@ -222,14 +224,12 @@ export default function UsersManagement() {
     setUpdatingUser(userId);
     
     try {
-      // Supprimer de Firestore
       await updateDoc(doc(db, "users", userId), {
         deleted: true,
         deletedAt: Timestamp.now(),
         deletedBy: user.uid
       });
       
-      // Retirer de la liste locale
       setUtilisateurs(prev => prev.filter(u => u.id !== userId));
       
       setNotification({
@@ -251,88 +251,261 @@ export default function UsersManagement() {
 
   // Vérifier si l'utilisateur peut être géré
   const canManageUser = (targetUser) => {
-    console.log("=== DEBUG PERMISSIONS ===");
-    console.log("Target user:", targetUser);
-    console.log("Current user ID:", user?.uid);
-    console.log("Current user role:", role);
-    console.log("Is owner:", isOwner);
-    
-    // Ne peut pas se gérer soi-même
-    if (targetUser.id === user?.uid) {
-      console.log("PERMISSION DENIED: Cannot manage self");
-      return false;
-    }
-    
-    // Ne peut pas gérer un pharmacien/docteur
-    if (["pharmacien", "docteur", "admin"].includes(targetUser.role?.toLowerCase())) {
-      console.log("PERMISSION DENIED: Cannot manage admin roles");
-      return false;
-    }
-    
-    // Seul le pharmacien/docteur peut gérer
-    const hasPermission = ["pharmacien", "docteur", "admin"].includes(role?.toLowerCase()) || isOwner;
-    console.log("Has permission:", hasPermission);
-    
-    return hasPermission;
+    if (targetUser.id === user?.uid) return false;
+    if (["pharmacien", "docteur", "admin"].includes(targetUser.role?.toLowerCase())) return false;
+    return ["pharmacien", "docteur", "admin"].includes(role?.toLowerCase()) || isOwner;
   };
 
-  // Styles simplifiés
-  const styles = {
-    container: {
-      background: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
-      minHeight: "100vh",
-      padding: "20px",
-      fontFamily: "Inter, Arial, sans-serif"
-    },
-    card: {
-      background: "white",
-      borderRadius: "25px",
-      boxShadow: "0 30px 60px rgba(0,0,0,0.15)",
-      overflow: "hidden",
-      margin: "0 auto",
-      maxWidth: "1200px"
-    },
-    header: {
-      background: "linear-gradient(135deg, #4a5568 0%, #2d3748 100%)",
-      padding: "40px",
-      textAlign: "center",
-      color: "white"
-    },
-    title: {
-      fontSize: "2.5em",
-      fontWeight: 800,
-      margin: 0
-    },
-    content: {
-      padding: "40px"
-    },
-    button: {
-      background: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
-      border: "none",
-      borderRadius: "10px",
-      padding: "12px 20px",
-      color: "white",
-      fontWeight: 700,
-      cursor: "pointer"
-    },
-    input: {
-      width: "100%",
-      padding: "12px",
-      border: "2px solid #e2e8f0",
-      borderRadius: "8px",
-      marginBottom: "15px"
-    },
-    notification: {
-      position: "fixed",
-      top: "30px",
-      right: "30px",
-      padding: "15px 25px",
-      borderRadius: "10px",
-      color: "white",
-      fontWeight: 600,
-      zIndex: 1000
-    }
+  // Styles responsifs dynamiques
+  const getResponsiveStyles = () => {
+    const { isMobile, isTablet, isDesktop } = screenSize;
+    
+    return {
+      // Container principal
+      container: {
+        background: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
+        minHeight: "100vh",
+        padding: isMobile ? "10px" : isTablet ? "15px" : "20px",
+        fontFamily: "Inter, Arial, sans-serif",
+        overflow: "auto"
+      },
+
+      // Carte principale
+      card: {
+        background: "white",
+        borderRadius: isMobile ? "15px" : isTablet ? "20px" : "25px",
+        boxShadow: "0 30px 60px rgba(0,0,0,0.15)",
+        overflow: "hidden",
+        margin: "0 auto",
+        maxWidth: isDesktop ? "1200px" : "100%",
+        width: "100%"
+      },
+
+      // Header
+      header: {
+        background: "linear-gradient(135deg, #4a5568 0%, #2d3748 100%)",
+        padding: isMobile ? "20px 15px" : isTablet ? "30px 20px" : "40px",
+        textAlign: "center",
+        color: "white"
+      },
+
+      title: {
+        fontSize: isMobile ? "1.8em" : isTablet ? "2.2em" : "2.5em",
+        fontWeight: 800,
+        margin: 0,
+        wordBreak: "break-word"
+      },
+
+      // Content principal
+      content: {
+        padding: isMobile ? "15px" : isTablet ? "25px" : "40px"
+      },
+
+      // Header de section
+      sectionHeader: {
+        display: "flex",
+        flexDirection: isMobile ? "column" : "row",
+        justifyContent: "space-between",
+        alignItems: isMobile ? "stretch" : "center",
+        marginBottom: isMobile ? "20px" : "30px",
+        gap: isMobile ? "15px" : "20px"
+      },
+
+      sectionTitle: {
+        color: "#2d3748",
+        margin: 0,
+        fontSize: isMobile ? "1.3em" : isTablet ? "1.5em" : "1.8em",
+        fontWeight: 700
+      },
+
+      // Boutons header
+      headerButtons: {
+        display: "flex",
+        flexDirection: isMobile ? "column" : "row",
+        gap: "10px",
+        alignSelf: isMobile ? "stretch" : "auto"
+      },
+
+      // Bouton standard
+      button: {
+        background: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
+        border: "none",
+        borderRadius: isMobile ? "8px" : "10px",
+        padding: isMobile ? "12px 16px" : "12px 20px",
+        color: "white",
+        fontWeight: 700,
+        cursor: "pointer",
+        fontSize: isMobile ? "0.9em" : "1em",
+        minHeight: isMobile ? "44px" : "auto", // Taille tactile
+        transition: "all 0.3s ease",
+        width: isMobile ? "100%" : "auto"
+      },
+
+      // Container utilisateurs
+      usersContainer: {
+        display: "grid",
+        gap: isMobile ? "15px" : "20px",
+        marginBottom: "40px"
+      },
+
+      // Carte utilisateur - RESPONSIVE FLEX
+      userCard: {
+        background: "#f8fafc",
+        padding: isMobile ? "15px" : "20px",
+        borderRadius: isMobile ? "10px" : "15px",
+        border: "2px solid #e2e8f0",
+        display: "flex",
+        flexDirection: isMobile ? "column" : "row",
+        justifyContent: "space-between",
+        alignItems: isMobile ? "stretch" : "center",
+        gap: isMobile ? "15px" : "20px",
+        position: "relative"
+      },
+
+      // Info utilisateur
+      userInfo: {
+        flex: 1,
+        minWidth: 0 // Permet la contraction
+      },
+
+      userName: {
+        fontWeight: 700,
+        color: "#2d3748",
+        marginBottom: "5px",
+        fontSize: isMobile ? "1em" : "1.1em",
+        wordBreak: "break-word"
+      },
+
+      userDetails: {
+        fontSize: isMobile ? "0.8em" : "0.9em",
+        color: "#6b7280",
+        wordBreak: "break-word"
+      },
+
+      // Actions utilisateur - SCROLL HORIZONTAL MOBILE
+      userActions: {
+        display: "flex",
+        alignItems: "center",
+        gap: "15px",
+        flexShrink: 0,
+        ...(isMobile && {
+          overflowX: "auto",
+          overflowY: "hidden",
+          WebkitOverflowScrolling: "touch",
+          scrollbarWidth: "none",
+          msOverflowStyle: "none",
+          paddingBottom: "5px"
+        })
+      },
+
+      // Status badge
+      statusBadge: {
+        padding: "6px 12px",
+        borderRadius: "12px",
+        fontSize: "0.8em",
+        fontWeight: 600,
+        whiteSpace: "nowrap",
+        flexShrink: 0
+      },
+
+      // Boutons d'action - TAILLE TACTILE
+      actionButtons: {
+        display: "flex",
+        gap: "8px",
+        flexShrink: 0,
+        ...(isMobile && {
+          minWidth: "max-content" // Empêche la compression
+        })
+      },
+
+      actionButton: {
+        border: "none",
+        borderRadius: isMobile ? "8px" : "10px",
+        padding: isMobile ? "10px 14px" : "8px 12px",
+        fontSize: isMobile ? "0.85em" : "0.8em",
+        fontWeight: 700,
+        cursor: "pointer",
+        color: "white",
+        minHeight: isMobile ? "44px" : "auto",
+        minWidth: isMobile ? "44px" : "auto",
+        whiteSpace: "nowrap",
+        transition: "all 0.3s ease"
+      },
+
+      // Input styles
+      input: {
+        width: "100%",
+        padding: isMobile ? "14px 12px" : "12px",
+        border: "2px solid #e2e8f0",
+        borderRadius: isMobile ? "8px" : "8px",
+        marginBottom: "15px",
+        fontSize: isMobile ? "16px" : "14px", // 16px évite le zoom sur iOS
+        minHeight: isMobile ? "44px" : "auto",
+        boxSizing: "border-box"
+      },
+
+      // Modal overlay
+      modalOverlay: {
+        position: "fixed",
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        background: "rgba(0,0,0,0.5)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        zIndex: 1000,
+        padding: isMobile ? "10px" : "20px"
+      },
+
+      // Modal content
+      modalContent: {
+        background: "white",
+        borderRadius: isMobile ? "15px" : "20px",
+        padding: isMobile ? "20px" : "30px",
+        width: "100%",
+        maxWidth: isMobile ? "100%" : isTablet ? "500px" : "400px",
+        maxHeight: isMobile ? "90vh" : "80vh",
+        overflow: "auto"
+      },
+
+      // Notification
+      notification: {
+        position: "fixed",
+        top: isMobile ? "15px" : "30px",
+        right: isMobile ? "10px" : "30px",
+        left: isMobile ? "10px" : "auto",
+        padding: isMobile ? "12px 16px" : "15px 25px",
+        borderRadius: "10px",
+        color: "white",
+        fontWeight: 600,
+        zIndex: 1001,
+        fontSize: isMobile ? "0.9em" : "1em",
+        maxWidth: isMobile ? "calc(100vw - 20px)" : "400px"
+      },
+
+      // Invitations container
+      invitationsContainer: {
+        display: "grid",
+        gap: isMobile ? "12px" : "15px"
+      },
+
+      invitationCard: {
+        background: "#f8fafc",
+        padding: isMobile ? "12px" : "15px",
+        borderRadius: "10px",
+        border: "1px solid #e2e8f0",
+        display: "flex",
+        flexDirection: isMobile ? "column" : "row",
+        justifyContent: "space-between",
+        alignItems: isMobile ? "stretch" : "center",
+        gap: isMobile ? "10px" : "15px"
+      }
+    };
   };
+
+  const styles = getResponsiveStyles();
 
   // Guards simplifiés
   if (loading) {
@@ -348,7 +521,7 @@ export default function UsersManagement() {
   if (!hasAccess) {
     return (
       <div style={styles.container}>
-        <div style={{ textAlign: "center", color: "white", fontSize: "1.5em", paddingTop: "100px" }}>
+        <div style={{ textAlign: "center", color: "white", fontSize: "1.5em", paddingTop: "100px", padding: "20px" }}>
           Accès refusé. Seuls les administrateurs peuvent gérer les utilisateurs.
         </div>
       </div>
@@ -379,24 +552,25 @@ export default function UsersManagement() {
 
           {/* Section Utilisateurs */}
           <div style={{ marginBottom: "40px" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "30px" }}>
-              <h2 style={{ color: "#2d3748", margin: 0 }}>Équipe actuelle ({utilisateurs.length})</h2>
-              <div style={{ display: "flex", gap: "10px" }}>
+            <div style={styles.sectionHeader}>
+              <h2 style={styles.sectionTitle}>
+                Équipe actuelle ({utilisateurs.length})
+              </h2>
+              
+              <div style={styles.headerButtons}>
                 <button
                   style={{
                     ...styles.button,
-                    background: "linear-gradient(135deg, #ed8936 0%, #dd6b20 100%)",
-                    fontSize: "0.8em",
-                    padding: "8px 12px"
+                    background: "linear-gradient(135deg, #ed8936 0%, #dd6b20 100%)"
                   }}
                   onClick={() => {
-                    console.log("Test button clicked!");
                     setNotification({ message: "Test réussi!", type: "success" });
                     setTimeout(() => setNotification(null), 2000);
                   }}
                 >
                   Test
                 </button>
+                
                 <button
                   style={{
                     ...styles.button,
@@ -409,23 +583,13 @@ export default function UsersManagement() {
               </div>
             </div>
 
-            {/* Liste utilisateurs */}
-            <div style={{ display: "grid", gap: "20px" }}>
+            {/* Liste utilisateurs avec scroll horizontal sur mobile */}
+            <div style={styles.usersContainer}>
               {utilisateurs.map((utilisateur) => (
-                <div
-                  key={utilisateur.id}
-                  style={{
-                    background: "#f8fafc",
-                    padding: "20px",
-                    borderRadius: "15px",
-                    border: "2px solid #e2e8f0",
-                    display: "flex",
-                    justifyContent: "space-between",
-                    alignItems: "center"
-                  }}
-                >
-                  <div>
-                    <div style={{ fontWeight: 700, color: "#2d3748", marginBottom: "5px" }}>
+                <div key={utilisateur.id} style={styles.userCard}>
+                  {/* Informations utilisateur */}
+                  <div style={styles.userInfo}>
+                    <div style={styles.userName}>
                       {utilisateur.prenom && utilisateur.nom 
                         ? `${utilisateur.prenom} ${utilisateur.nom}`
                         : utilisateur.email
@@ -436,21 +600,19 @@ export default function UsersManagement() {
                         </span>
                       )}
                     </div>
-                    <div style={{ fontSize: "0.9em", color: "#6b7280" }}>
+                    <div style={styles.userDetails}>
                       {utilisateur.email} • {utilisateur.role}
                     </div>
                   </div>
                   
-                  <div style={{ display: "flex", alignItems: "center", gap: "15px" }}>
+                  {/* Actions utilisateur avec scroll horizontal */}
+                  <div style={styles.userActions}>
                     {/* Statut utilisateur */}
                     <div
                       style={{
-                        padding: "6px 12px",
-                        borderRadius: "12px",
+                        ...styles.statusBadge,
                         background: utilisateur.actif ? "#c6f6d5" : "#fed7d7",
-                        color: utilisateur.actif ? "#22543d" : "#c53030",
-                        fontSize: "0.8em",
-                        fontWeight: 600
+                        color: utilisateur.actif ? "#22543d" : "#c53030"
                       }}
                     >
                       {utilisateur.actif ? "Actif" : "Verrouillé"}
@@ -458,16 +620,14 @@ export default function UsersManagement() {
 
                     {/* Actions administrateur */}
                     {canManageUser(utilisateur) && (
-                      <div style={{ display: "flex", gap: "8px" }}>
+                      <div style={styles.actionButtons}>
                         {/* Bouton Verrouiller/Déverrouiller */}
                         <button
                           style={{
-                            ...styles.button,
+                            ...styles.actionButton,
                             background: utilisateur.actif 
                               ? "linear-gradient(135deg, #ed8936 0%, #dd6b20 100%)"
                               : "linear-gradient(135deg, #48bb78 0%, #38a169 100%)",
-                            padding: "8px 12px",
-                            fontSize: "0.8em",
                             opacity: updatingUser === utilisateur.id ? 0.6 : 1,
                             cursor: updatingUser === utilisateur.id ? "not-allowed" : "pointer"
                           }}
@@ -477,25 +637,31 @@ export default function UsersManagement() {
                           {updatingUser === utilisateur.id 
                             ? "..." 
                             : utilisateur.actif 
-                              ? "🔒 Verrouiller" 
-                              : "🔓 Déverrouiller"
+                              ? "🔒" 
+                              : "🔓"
                           }
+                          {!screenSize.isMobile && (
+                            <span style={{ marginLeft: "5px" }}>
+                              {utilisateur.actif ? "Verrouiller" : "Déverrouiller"}
+                            </span>
+                          )}
                         </button>
 
                         {/* Bouton Supprimer */}
                         <button
                           style={{
-                            ...styles.button,
+                            ...styles.actionButton,
                             background: "linear-gradient(135deg, #f56565 0%, #e53e3e 100%)",
-                            padding: "8px 12px",
-                            fontSize: "0.8em",
                             opacity: updatingUser === utilisateur.id ? 0.6 : 1,
                             cursor: updatingUser === utilisateur.id ? "not-allowed" : "pointer"
                           }}
                           onClick={() => setConfirmDelete(utilisateur)}
                           disabled={updatingUser === utilisateur.id}
                         >
-                          🗑️ Supprimer
+                          🗑️
+                          {!screenSize.isMobile && (
+                            <span style={{ marginLeft: "5px" }}>Supprimer</span>
+                          )}
                         </button>
                       </div>
                     )}
@@ -507,7 +673,7 @@ export default function UsersManagement() {
 
           {/* Section Invitations */}
           <div>
-            <h2 style={{ color: "#2d3748", marginBottom: "20px" }}>
+            <h2 style={styles.sectionTitle}>
               Invitations ({invitations.filter(i => i.statut === "pending").length} en attente)
             </h2>
 
@@ -516,36 +682,23 @@ export default function UsersManagement() {
                 Aucune invitation envoyée
               </div>
             ) : (
-              <div style={{ display: "grid", gap: "15px" }}>
+              <div style={styles.invitationsContainer}>
                 {invitations.map((invitation) => (
-                  <div
-                    key={invitation.id}
-                    style={{
-                      background: "#f8fafc",
-                      padding: "15px",
-                      borderRadius: "10px",
-                      border: "1px solid #e2e8f0",
-                      display: "flex",
-                      justifyContent: "space-between",
-                      alignItems: "center"
-                    }}
-                  >
-                    <div>
-                      <div style={{ fontWeight: 600, color: "#2d3748" }}>
+                  <div key={invitation.id} style={styles.invitationCard}>
+                    <div style={styles.userInfo}>
+                      <div style={{ fontWeight: 600, color: "#2d3748", marginBottom: "5px" }}>
                         {invitation.email}
                       </div>
                       <div style={{ fontSize: "0.8em", color: "#6b7280" }}>
                         Rôle: {invitation.role}
                       </div>
                     </div>
+                    
                     <div
                       style={{
-                        padding: "4px 8px",
-                        borderRadius: "8px",
+                        ...styles.statusBadge,
                         background: invitation.statut === "pending" ? "#fff3cd" : "#d4edda",
-                        color: invitation.statut === "pending" ? "#856404" : "#155724",
-                        fontSize: "0.8em",
-                        fontWeight: 600
+                        color: invitation.statut === "pending" ? "#856404" : "#155724"
                       }}
                     >
                       {invitation.statut === "pending" ? "En attente" : "Acceptée"}
@@ -560,25 +713,11 @@ export default function UsersManagement() {
 
       {/* Modal Invitation */}
       {showInviteForm && (
-        <div style={{
-          position: "fixed",
-          top: 0,
-          left: 0,
-          right: 0,
-          bottom: 0,
-          background: "rgba(0,0,0,0.5)",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          zIndex: 1000
-        }}>
-          <div style={{
-            background: "white",
-            borderRadius: "20px",
-            padding: "30px",
-            width: "400px"
-          }}>
-            <h3 style={{ marginBottom: "20px" }}>Inviter un utilisateur</h3>
+        <div style={styles.modalOverlay}>
+          <div style={styles.modalContent}>
+            <h3 style={{ marginBottom: "20px", fontSize: screenSize.isMobile ? "1.3em" : "1.5em" }}>
+              Inviter un utilisateur
+            </h3>
             
             <form onSubmit={sendInvitation}>
               <input
@@ -602,7 +741,13 @@ export default function UsersManagement() {
                 <option value="admin">Administrateur</option>
               </select>
 
-              <div style={{ display: "flex", gap: "15px", justifyContent: "flex-end" }}>
+              <div style={{ 
+                display: "flex", 
+                flexDirection: screenSize.isMobile ? "column" : "row",
+                gap: "15px", 
+                justifyContent: "flex-end",
+                marginTop: "20px"
+              }}>
                 <button
                   type="button"
                   style={{
@@ -629,29 +774,18 @@ export default function UsersManagement() {
 
       {/* Modal Code Invitation */}
       {showInviteCode && invitationCode && (
-        <div style={{
-          position: "fixed",
-          top: 0,
-          left: 0,
-          right: 0,
-          bottom: 0,
-          background: "rgba(0,0,0,0.5)",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          zIndex: 1000
-        }}>
-          <div style={{
-            background: "white",
-            borderRadius: "20px",
-            padding: "30px",
-            width: "500px"
-          }}>
-            <h3 style={{ textAlign: "center", marginBottom: "25px", color: "#48bb78" }}>
+        <div style={styles.modalOverlay}>
+          <div style={styles.modalContent}>
+            <h3 style={{ 
+              textAlign: "center", 
+              marginBottom: "25px", 
+              color: "#48bb78",
+              fontSize: screenSize.isMobile ? "1.3em" : "1.5em"
+            }}>
               Invitation créée!
             </h3>
             
-            <div style={{ marginBottom: "20px" }}>
+            <div style={{ marginBottom: "20px", lineHeight: "1.5" }}>
               <strong>Email:</strong> {invitationCode.email}<br/>
               <strong>Rôle:</strong> {invitationCode.role}
             </div>
@@ -663,10 +797,11 @@ export default function UsersManagement() {
                 padding: "10px",
                 borderRadius: "8px",
                 fontFamily: "monospace",
-                fontSize: "1.1em",
+                fontSize: screenSize.isMobile ? "0.9em" : "1.1em",
                 fontWeight: "bold",
                 textAlign: "center",
-                margin: "10px 0"
+                margin: "10px 0",
+                wordBreak: "break-all"
               }}>
                 {invitationCode.token}
               </div>
@@ -678,15 +813,22 @@ export default function UsersManagement() {
                 background: "#f7fafc",
                 padding: "10px",
                 borderRadius: "8px",
-                fontSize: "0.9em",
+                fontSize: "0.8em",
                 wordBreak: "break-all",
-                margin: "10px 0"
+                margin: "10px 0",
+                maxHeight: "100px",
+                overflow: "auto"
               }}>
                 {invitationCode.link}
               </div>
             </div>
 
-            <div style={{ display: "flex", gap: "10px", marginBottom: "20px" }}>
+            <div style={{ 
+              display: "flex",
+              flexDirection: screenSize.isMobile ? "column" : "row",
+              gap: "10px", 
+              marginBottom: "20px"
+            }}>
               <button
                 style={{
                   ...styles.button,
@@ -726,30 +868,22 @@ export default function UsersManagement() {
 
       {/* Modal Confirmation Suppression */}
       {confirmDelete && (
-        <div style={{
-          position: "fixed",
-          top: 0,
-          left: 0,
-          right: 0,
-          bottom: 0,
-          background: "rgba(0,0,0,0.5)",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          zIndex: 1000
-        }}>
-          <div style={{
-            background: "white",
-            borderRadius: "20px",
-            padding: "30px",
-            width: "450px",
-            textAlign: "center"
-          }}>
-            <h3 style={{ color: "#e53e3e", marginBottom: "20px", fontSize: "1.5em" }}>
+        <div style={styles.modalOverlay}>
+          <div style={styles.modalContent}>
+            <h3 style={{ 
+              color: "#e53e3e", 
+              marginBottom: "20px", 
+              fontSize: screenSize.isMobile ? "1.3em" : "1.5em",
+              textAlign: "center"
+            }}>
               Confirmer la suppression
             </h3>
             
-            <div style={{ marginBottom: "25px", fontSize: "1.1em", lineHeight: "1.5" }}>
+            <div style={{ 
+              marginBottom: "25px", 
+              fontSize: screenSize.isMobile ? "1em" : "1.1em", 
+              lineHeight: "1.5" 
+            }}>
               <p style={{ color: "#2d3748", margin: "0 0 15px 0" }}>
                 Êtes-vous sûr de vouloir supprimer l'utilisateur :
               </p>
@@ -769,12 +903,22 @@ export default function UsersManagement() {
                   {confirmDelete.email} • {confirmDelete.role}
                 </div>
               </div>
-              <p style={{ color: "#e53e3e", margin: "15px 0 0 0", fontSize: "0.9em" }}>
+              <p style={{ 
+                color: "#e53e3e", 
+                margin: "15px 0 0 0", 
+                fontSize: screenSize.isMobile ? "0.9em" : "0.9em",
+                textAlign: "center"
+              }}>
                 Cette action est <strong>irréversible</strong>. L'utilisateur ne pourra plus se connecter.
               </p>
             </div>
 
-            <div style={{ display: "flex", gap: "15px", justifyContent: "center" }}>
+            <div style={{ 
+              display: "flex", 
+              flexDirection: screenSize.isMobile ? "column" : "row",
+              gap: "15px", 
+              justifyContent: "center" 
+            }}>
               <button
                 style={{
                   ...styles.button,
@@ -804,6 +948,128 @@ export default function UsersManagement() {
           </div>
         </div>
       )}
+
+      {/* Styles CSS injectés pour le scroll horizontal */}
+      <style>
+        {`
+          /* Masquer les scrollbars sur mobile tout en gardant le scroll */
+          .user-actions-scroll::-webkit-scrollbar {
+            display: none;
+          }
+          
+          .user-actions-scroll {
+            -ms-overflow-style: none;
+            scrollbar-width: none;
+          }
+          
+          /* Améliorer le scroll sur mobile */
+          @media (max-width: 767px) {
+            .user-actions-scroll {
+              -webkit-overflow-scrolling: touch;
+              scroll-behavior: smooth;
+            }
+            
+            /* Indicateur visuel de scroll */
+            .user-actions-scroll::after {
+              content: '';
+              position: absolute;
+              right: 0;
+              top: 0;
+              bottom: 0;
+              width: 20px;
+              background: linear-gradient(to left, rgba(248, 250, 252, 1) 0%, rgba(248, 250, 252, 0) 100%);
+              pointer-events: none;
+            }
+          }
+          
+          /* Transitions fluides pour tous les éléments interactifs */
+          @media (prefers-reduced-motion: no-preference) {
+            button, .user-card, .invitation-card {
+              transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            }
+          }
+          
+          /* Amélioration pour les écrans tactiles */
+          @media (hover: none) and (pointer: coarse) {
+            button:active {
+              transform: scale(0.98);
+            }
+            
+            .user-card:active {
+              transform: translateY(1px);
+              box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            }
+          }
+          
+          /* Focus visible pour l'accessibilité */
+          button:focus-visible {
+            outline: 2px solid #667eea;
+            outline-offset: 2px;
+          }
+          
+          /* Amélioration des modals sur très petits écrans */
+          @media (max-width: 320px) {
+            .modal-content {
+              margin: 5px !important;
+              padding: 15px !important;
+            }
+          }
+          
+          /* Mode paysage mobile */
+          @media (max-height: 500px) and (max-width: 900px) {
+            .modal-content {
+              max-height: 85vh;
+              overflow-y: auto;
+            }
+          }
+          
+          /* Animation d'apparition pour les notifications */
+          @keyframes slideInRight {
+            from {
+              transform: translateX(100%);
+              opacity: 0;
+            }
+            to {
+              transform: translateX(0);
+              opacity: 1;
+            }
+          }
+          
+          @keyframes slideInDown {
+            from {
+              transform: translateY(-100%);
+              opacity: 0;
+            }
+            to {
+              transform: translateY(0);
+              opacity: 1;
+            }
+          }
+          
+          .notification-animation {
+            animation: ${screenSize.isMobile ? 'slideInDown' : 'slideInRight'} 0.3s ease-out;
+          }
+          
+          /* Optimisation pour les appareils à faible résolution */
+          @media screen and (max-device-pixel-ratio: 1) {
+            .user-card, .invitation-card {
+              border-width: 1px;
+            }
+          }
+          
+          /* Amélioration du contraste pour les utilisateurs malvoyants */
+          @media (prefers-contrast: high) {
+            .user-card, .invitation-card {
+              border-color: #000 !important;
+              border-width: 2px !important;
+            }
+            
+            .status-badge {
+              border: 2px solid currentColor !important;
+            }
+          }
+        `}
+      </style>
     </div>
   );
 }

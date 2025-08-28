@@ -18,6 +18,7 @@ function toDateSafe(v) {
     return null;
   }
 }
+
 function fmtCountdown(msLeft) {
   const totalSec = Math.max(0, Math.ceil(msLeft / 1000));
   const d = Math.floor(totalSec / 86400);
@@ -29,6 +30,7 @@ function fmtCountdown(msLeft) {
   if (m > 0) return `${m}m ${s}s`;
   return `${s}s`;
 }
+
 function buildPaymentMessage(data) {
   const pw = data?.paymentWarning;
   const isPaid = data?.isPaid === true;
@@ -45,6 +47,7 @@ function buildPaymentMessage(data) {
   }
   return "⛔ Délai 48h dépassé (compte non verrouillé) — régularisez le paiement au plus vite.";
 }
+
 function dismissKeyFor(uid, sentAt) {
   const key = sentAt ? String(sentAt.getTime()) : "nosent";
   return `paymentWarning:dismissed:${uid}:${key}`;
@@ -107,7 +110,7 @@ export default function Login() {
 
       const data = snap.data();
 
-      // 1) Compte supprimé
+      // 1) Compte supprimé - STRICT COMME AVANT
       if (data?.deleted === true) {
         const deletedAt = data?.deletedAt
           ? toDateSafe(data.deletedAt)?.toLocaleDateString("fr-FR") ?? "récemment"
@@ -122,13 +125,18 @@ export default function Login() {
         return;
       }
 
-      // 2) Verrouillé
-      const isLocked = data?.locked === true || data?.isLocked === true || data?.status === "disabled";
+      // 2) Compte verrouillé - RENFORCER LA LOGIQUE
+      const isLocked = 
+        data?.locked === true || 
+        data?.isLocked === true || 
+        data?.status === "disabled" ||
+        data?.actif === false; // Ajouter cette condition pour les vendeuses
+
       if (isLocked) {
         const title = data?.adminPopup?.title || "🔒 Compte verrouillé";
-        const msg =
-          data?.adminPopup?.message ||
-          "Votre compte a été verrouillé par l'administrateur. Veuillez contacter le support.";
+        const msg = data?.adminPopup?.message || 
+          "Votre compte a été verrouillé par l'administrateur. Vous ne pouvez plus accéder à l'application. Veuillez contacter le support.";
+        
         try { localStorage.setItem("forcedSignOutMessage", `${title} — ${msg}`); } catch {}
         await signOut(auth);
         setNotice(`${title} — ${msg}`);
@@ -137,17 +145,44 @@ export default function Login() {
         return;
       }
 
-      // 3) Inactif
-      const isInactive = data?.active === false || data?.isActive === false;
+      // 3) Compte inactif - STRICT
+      const isInactive = 
+        data?.active === false || 
+        data?.isActive === false;
+        
       if (isInactive) {
         const title = "⏸️ Compte inactif";
-        const msg = "Votre compte a été désactivé par l'administrateur. Contactez le support.";
+        const msg = "Votre compte a été désactivé par l'administrateur. Contactez le support pour réactivation.";
         try { localStorage.setItem("forcedSignOutMessage", `${title} — ${msg}`); } catch {}
         await signOut(auth);
         setNotice(`${title} — ${msg}`);
         setError("Accès refusé : votre compte est inactif.");
         setLoading(false);
         return;
+      }
+
+      // 4) Vérification spécifique pour les vendeuses
+      const userRole = (data?.role || "").toLowerCase();
+      if (["vendeuse", "assistant", "employee"].includes(userRole)) {
+        // Vérifications supplémentaires pour les vendeuses
+        const hasAccess = 
+          data?.actif !== false && // doit être actif
+          data?.locked !== true && // pas verrouillé
+          data?.isLocked !== true && // pas verrouillé (autre champ)
+          data?.status !== "disabled" && // statut non désactivé
+          data?.active !== false && // actif
+          data?.isActive !== false; // actif (autre champ)
+
+        if (!hasAccess) {
+          const title = "🔒 Accès refusé";
+          const msg = "Votre compte vendeuse a été désactivé. Contactez votre pharmacien ou administrateur.";
+          try { localStorage.setItem("forcedSignOutMessage", `${title} — ${msg}`); } catch {}
+          await signOut(auth);
+          setNotice(`${title} — ${msg}`);
+          setError("Accès refusé : compte vendeuse désactivé.");
+          setLoading(false);
+          return;
+        }
       }
 
       // Chemin post-login
@@ -175,7 +210,6 @@ export default function Login() {
         const alreadyDismissed = localStorage.getItem(dKey) === "1";
         if (!alreadyDismissed) {
           // garder la main sur la navigation jusqu'à fermeture manuelle
-          // (on enregistre aussi le message si tu veux l'utiliser ailleurs)
           try {
             localStorage.setItem(
               "paymentNotice",
@@ -195,8 +229,9 @@ export default function Login() {
         try { localStorage.removeItem("paymentNotice"); } catch {}
       }
 
-      // Si pas d’avertissement actif ou déjà "compris", on continue
+      // Si tout est OK, on navigue
       navigate(nextPath);
+      
     } catch (err) {
       console.error("[Login] Erreur:", err);
       if (err.code === "auth/user-not-found") {
@@ -219,13 +254,13 @@ export default function Login() {
     }
   };
 
-  // Style du panneau de notice
+  // Style du panneau de notice - AJOUTER STYLE POUR VENDEUSE
   const getNoticeStyle = () => {
     const n = (notice || "").toLowerCase();
     if (n.includes("supprimé")) {
       return { border: "1px solid #dc2626", color: "#dc2626", background: "rgba(220, 38, 38, 0.15)", icon: "🗑️" };
     }
-    if (n.includes("verrouillé")) {
+    if (n.includes("verrouillé") || n.includes("désactivé")) {
       return { border: "1px solid #f59e0b", color: "#f59e0b", background: "rgba(245, 158, 11, 0.15)", icon: "🔒" };
     }
     if (n.includes("inactif")) {
@@ -233,6 +268,9 @@ export default function Login() {
     }
     if (n.includes("paiement")) {
       return { border: "1px solid #f59e0b", color: "#f59e0b", background: "rgba(245,158,11,0.15)", icon: "⚠️" };
+    }
+    if (n.includes("refusé")) {
+      return { border: "1px solid #dc2626", color: "#dc2626", background: "rgba(220, 38, 38, 0.15)", icon: "🚫" };
     }
     return { border: "1px solid #ffd93d", color: "#ffd93d", background: "rgba(255,217,61,0.15)", icon: "ℹ️" };
   };
@@ -338,7 +376,6 @@ export default function Login() {
                 )}
 
                 <div style={{ marginTop: 14, display: "flex", gap: 10, flexWrap: "wrap" }}>
-                  {/* Lien de paiement -> adapte la route si besoin */}
                   <a
                     href="#/paiement"
                     style={{
@@ -367,13 +404,13 @@ export default function Login() {
                     }}
                     type="button"
                   >
-                    J’ai compris
+                    J'ai compris
                   </button>
                 </div>
 
                 <div style={{ marginTop: 10, fontSize: 12, color: "#9fb5e1" }}>
-                  Cet avertissement restera visible jusqu’à fermeture manuelle. Il réapparaîtra si un nouvel
-                  avertissement est envoyé par l’administrateur.
+                  Cet avertissement restera visible jusqu'à fermeture manuelle. Il réapparaîtra si un nouvel
+                  avertissement est envoyé par l'administrateur.
                 </div>
               </div>
             </div>
@@ -399,7 +436,7 @@ export default function Login() {
             style={{ position: "absolute", top: "15px", right: "15px", fontSize: "24px" }}
             aria-hidden
           >
-            {getNoticeStyle().icon}
+            {noticeStyle.icon}
           </div>
         )}
 
@@ -576,7 +613,8 @@ export default function Login() {
           </button>
         </div>
 
-        {(notice.includes("supprimé") || notice.includes("verrouillé") || notice.includes("inactif")) && (
+        {/* Section d'aide renforcée pour tous les cas de blocage */}
+        {(notice.includes("supprimé") || notice.includes("verrouillé") || notice.includes("inactif") || notice.includes("désactivé") || notice.includes("refusé")) && (
           <div
             style={{
               marginTop: 25,
@@ -605,7 +643,18 @@ export default function Login() {
               <br />
               • Vérifiez que vous utilisez le bon email
               <br />
-              • Attendez quelques minutes et réessayez
+              • Attendez la réactivation par l'administrateur
+              <br />
+              {notice.includes("vendeuse") && (
+                <>
+                  <br />
+                  <strong>Pour les vendeuses :</strong>
+                  <br />
+                  • Votre accès peut être géré par votre pharmacien
+                  <br />
+                  • Contactez directement votre équipe ou pharmacie
+                </>
+              )}
             </div>
           </div>
         )}

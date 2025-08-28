@@ -54,7 +54,7 @@ export default function Homepage({ onLogin, onRegister }) {
       <style>{`
         .homepage {
           min-height: 100vh;
-          background: linear-gradient(135deg, #2c3e50 0%, #34495e 50%, #2980b9 100%);
+          background: linear-gradient(135deg, #0f4c75 0%, #3282b8 50%, #bbe1fa 100%);
           font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
           position: relative;
           display: flex;
@@ -65,9 +65,9 @@ export default function Homepage({ onLogin, onRegister }) {
           content: '';
           position: absolute;
           inset: 0;
-          background: radial-gradient(circle at 30% 20%, rgba(52, 152, 219, 0.15) 0%, transparent 60%),
-                      radial-gradient(circle at 80% 80%, rgba(46, 204, 113, 0.1) 0%, transparent 60%),
-                      linear-gradient(45deg, transparent 48%, rgba(255,255,255,0.02) 49%, rgba(255,255,255,0.02) 51%, transparent 52%);
+          background: radial-gradient(circle at 20% 30%, rgba(187, 225, 250, 0.2) 0%, transparent 60%),
+                      radial-gradient(circle at 80% 70%, rgba(15, 76, 117, 0.3) 0%, transparent 60%),
+                      linear-gradient(45deg, transparent 48%, rgba(255,255,255,0.05) 49%, rgba(255,255,255,0.05) 51%, transparent 52%);
           pointer-events: none;
         }
 
@@ -162,7 +162,6 @@ export default function Homepage({ onLogin, onRegister }) {
           margin: 0 0 24px 0;
           line-height: 1.1;
           letter-spacing: -0.02em;
-          text-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
         }
 
         .hero-subtitle {
@@ -208,27 +207,26 @@ export default function Homepage({ onLogin, onRegister }) {
         }
 
         .cta-btn.primary {
-          background: linear-gradient(135deg, #1abc9c 0%, #16a085 100%);
+          background: linear-gradient(135deg, #27ae60 0%, #2ecc71 100%);
           color: white;
-          box-shadow: 0 8px 25px rgba(26, 188, 156, 0.3);
+          box-shadow: 0 8px 25px rgba(39, 174, 96, 0.3);
         }
 
         .cta-btn.primary:hover {
-          background: linear-gradient(135deg, #17a2b8 0%, #138496 100%);
+          background: linear-gradient(135deg, #229954 0%, #27ae60 100%);
           transform: translateY(-2px);
-          box-shadow: 0 12px 30px rgba(26, 188, 156, 0.4);
+          box-shadow: 0 12px 30px rgba(39, 174, 96, 0.4);
         }
 
         .cta-btn.secondary {
-          background: rgba(255, 255, 255, 0.15);
+          background: rgba(255, 255, 255, 0.2);
           color: white;
-          border: 2px solid rgba(255, 255, 255, 0.3);
-          backdrop-filter: blur(10px);
+          border: 2px solid rgba(255, 255, 255, 0.4);
         }
 
         .cta-btn.secondary:hover {
-          background: rgba(255, 255, 255, 0.25);
-          border-color: rgba(255, 255, 255, 0.5);
+          background: rgba(255, 255, 255, 0.3);
+          border-color: rgba(255, 255, 255, 0.6);
           transform: translateY(-2px);
         }
 
@@ -242,7 +240,7 @@ export default function Homepage({ onLogin, onRegister }) {
 
         .feature-card {
           background: rgba(255, 255, 255, 0.1);
-          backdrop-filter: blur(20px);
+          backdrop-filter: blur(10px);
           border-radius: 16px;
           padding: 30px 20px;
           border: 1px solid rgba(255, 255, 255, 0.2);

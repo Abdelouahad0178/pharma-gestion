@@ -1830,6 +1830,7 @@ export default function Ventes() {
                   </span>
                 )}
               </h4>
+              
               <div className="table-pro-full" style={{ maxHeight: "300px", overflowY: "auto" }}>
                 <table style={{ width: "100%" }}>
                   <thead style={{ position: "sticky", top: 0, background: "#f3f4f6" }}>
@@ -2082,43 +2083,9 @@ export default function Ventes() {
               />
             </div>
 
-            <div>
-              <label style={{ fontSize: "14px", color: "#4b5563", marginBottom: "4px", display: "block" }}>
-                Client
-              </label>
-              <select 
-                value={filterClient} 
-                onChange={e => setFilterClient(e.target.value)}
-                style={{ 
-                  padding: "8px", 
-                  borderRadius: "4px", 
-                  border: "1px solid #d1d5db",
-                  width: "100%"
-                }}
-              >
-                <option value="">Tous les clients</option>
-                {clients.map(c => <option key={c} value={c}>{c}</option>)}
-              </select>
-            </div>
+            
 
-            <div>
-              <label style={{ fontSize: "14px", color: "#4b5563", marginBottom: "4px", display: "block" }}>
-                Statut
-              </label>
-              <select 
-                value={filterStatut} 
-                onChange={e => setFilterStatut(e.target.value)}
-                style={{ 
-                  padding: "8px", 
-                  borderRadius: "4px", 
-                  border: "1px solid #d1d5db",
-                  width: "100%"
-                }}
-              >
-                <option value="">Tous les clients</option>
-                {clients.map(c => <option key={c} value={c}>{c}</option>)}
-              </select>
-            </div>
+            
 
             <div>
               <label style={{ fontSize: "14px", color: "#4b5563", marginBottom: "4px", display: "block" }}>
