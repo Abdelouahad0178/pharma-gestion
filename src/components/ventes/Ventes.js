@@ -16,40 +16,83 @@ import {
   getDoc,
 } from "firebase/firestore";
 
+// ========== FONCTIONS UTILITAIRES POUR DATES ==========
+function safeParseDate(dateInput) {
+  if (!dateInput) return null;
+  
+  try {
+    if (dateInput?.toDate && typeof dateInput.toDate === 'function') {
+      return dateInput.toDate();
+    }
+    if (dateInput?.seconds) {
+      return new Date(dateInput.seconds * 1000);
+    }
+    if (dateInput instanceof Date) {
+      return dateInput;
+    }
+    if (typeof dateInput === 'string' || typeof dateInput === 'number') {
+      const date = new Date(dateInput);
+      return isNaN(date.getTime()) ? null : date;
+    }
+    return null;
+  } catch (error) {
+    console.warn("Erreur parsing date:", dateInput, error);
+    return null;
+  }
+}
+
+function formatDateSafe(dateInput, options = {}) {
+  const date = safeParseDate(dateInput);
+  if (!date) return '';
+  
+  try {
+    if (options.withTime) {
+      return date.toLocaleString('fr-FR');
+    }
+    return date.toLocaleDateString('fr-FR');
+  } catch (error) {
+    console.warn("Erreur formatage date:", error);
+    return '';
+  }
+}
+
+function getDateInputValue(dateInput) {
+  const date = safeParseDate(dateInput);
+  if (!date) return '';
+  
+  try {
+    return date.toISOString().split('T')[0];
+  } catch (error) {
+    console.warn("Erreur conversion ISO:", error);
+    return '';
+  }
+}
+
 /**
- * Composant principal de gestion des ventes avec support multi-lots
- * Gère l'ajout, modification, suppression et l'impression des ventes avec cachet image
- * Intègre la gestion du stock multi-lots et la traçabilité
+ * Composant de gestion des ventes avec support multi-lots optimisé et compatible import/export
  */
 export default function Ventes() {
   const { user, societeId, loading } = useUserRole();
 
-  // ============ ÉTATS FORMULAIRES ============
-  // Informations de la vente
-  const [client, setClient] = useState("");
-  const [dateVente, setDateVente] = useState("");
+  // ============ ÉTATS PRINCIPAUX ============
+  const [client, setClient] = useState("(passant)");
+  const [dateVente, setDateVente] = useState(new Date().toISOString().split('T')[0]);
   const [statutPaiement, setStatutPaiement] = useState("payé");
   const [modePaiement, setModePaiement] = useState("Espèces");
   const [notesVente, setNotesVente] = useState("");
-
-  // Article en cours d'ajout
   const [produit, setProduit] = useState("");
-  const [produitNouveau, setProduitNouveau] = useState("");
   const [quantite, setQuantite] = useState(1);
   const [prixUnitaire, setPrixUnitaire] = useState("");
   const [remiseArticle, setRemiseArticle] = useState(0);
-  const [selectedLot, setSelectedLot] = useState(""); // 🆕 Lot sélectionné
-  const [showLotSelector, setShowLotSelector] = useState(false); // 🆕 Afficher sélecteur de lots
-
-  // ============ ÉTATS DONNÉES ============
+  const [selectedLot, setSelectedLot] = useState("");
   const [articles, setArticles] = useState([]);
   const [ventes, setVentes] = useState([]);
   const [medicaments, setMedicaments] = useState([]);
-  const [stockEntries, setStockEntries] = useState([]); // 🆕 Entrées multi-lots
-  const [availableLots, setAvailableLots] = useState([]); // 🆕 Lots disponibles pour le produit sélectionné
+  const [stockEntries, setStockEntries] = useState([]);
+  const [availableLots, setAvailableLots] = useState([]);
   const [parametres, setParametres] = useState({ 
-    entete: "", 
-    pied: "",
+    entete: "PHARMACIE - BON DE VENTE", 
+    pied: "Merci de votre confiance",
     cachetTexte: "Cachet Société",
     cachetImage: null,
     afficherCachet: true,
@@ -57,43 +100,26 @@ export default function Ventes() {
     tailleCachet: 120
   });
   const [clients, setClients] = useState([]);
-
-  // ============ ÉTATS CONTRÔLE ============
   const [editId, setEditId] = useState(null);
   const [isEditing, setIsEditing] = useState(false);
   const [waiting, setWaiting] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
-
-  // ============ ÉTATS FILTRES ============
-  const [filterClient, setFilterClient] = useState("");
-  const [filterDateMin, setFilterDateMin] = useState("");
-  const [filterDateMax, setFilterDateMax] = useState("");
-  const [filterStatut, setFilterStatut] = useState("");
   const [searchTerm, setSearchTerm] = useState("");
-
-  // ============ ÉTATS UI ============
+  const [filterStatut, setFilterStatut] = useState("");
   const [showForm, setShowForm] = useState(false);
-  const [showFiltres, setShowFiltres] = useState(false);
-  const [showStats, setShowStats] = useState(false);
   const [selectedVente, setSelectedVente] = useState(null);
   const [showDetails, setShowDetails] = useState(false);
-  const [viewMode, setViewMode] = useState("auto"); // 🆕 "auto", "lots", "traditional"
 
-  // ============ VÉRIFICATION CHARGEMENT ============
+  // ============ CHARGEMENT ============
   useEffect(() => {
     setWaiting(loading || !societeId || !user);
   }, [loading, societeId, user]);
 
-  // ============ FONCTIONS DE CHARGEMENT DONNÉES ============
-  /**
-   * Charge les paramètres d'impression et de cachet avec support d'images
-   */
   const fetchParametres = useCallback(async () => {
     if (!societeId) return;
     try {
-      // Charger les paramètres documents
       const docRef = doc(db, "societe", societeId, "parametres", "documents");
       const docSnap = await getDoc(docRef);
       
@@ -108,44 +134,29 @@ export default function Ventes() {
           typeCachet: data.typeCachet || "texte",
           tailleCachet: data.tailleCachet || 120
         });
-      } else {
-        // Essayer l'ancienne méthode si le nouveau format n'existe pas
-        const snap = await getDocs(collection(db, "societe", societeId, "parametres"));
-        if (!snap.empty) {
-          const data = snap.docs[0].data();
-          setParametres({ 
-            entete: data.entete || "PHARMACIE - BON DE VENTE", 
-            pied: data.pied || "Merci de votre confiance",
-            cachetTexte: data.cachetTexte || "Cachet Société",
-            cachetImage: data.cachetImage || null,
-            afficherCachet: data.afficherCachet !== false,
-            typeCachet: data.typeCachet || "texte",
-            tailleCachet: data.tailleCachet || 120
-          });
-        }
       }
     } catch (err) {
       console.error("Erreur chargement paramètres:", err);
     }
   }, [societeId]);
 
-  /**
-   * Charge l'historique des ventes
-   */
   const fetchVentes = useCallback(async () => {
     if (!societeId) return setVentes([]);
     try {
       const q = query(
         collection(db, "societe", societeId, "ventes"),
         orderBy("date", "desc"),
-        limit(500)
+        limit(200)
       );
       const snap = await getDocs(q);
       const arr = [];
-      snap.forEach((doc) => arr.push({ id: doc.id, ...doc.data() }));
+      snap.forEach((doc) => {
+        const data = doc.data();
+        delete data._exportedAt;
+        delete data._collection;
+        arr.push({ id: doc.id, ...data });
+      });
       setVentes(arr);
-      
-      // Extraire les clients uniques
       const uniqueClients = [...new Set(arr.map(v => v.client).filter(Boolean))];
       setClients(uniqueClients);
     } catch (err) {
@@ -154,17 +165,25 @@ export default function Ventes() {
     }
   }, [societeId]);
 
-  // 🆕 Charge les entrées de stock multi-lots
   const fetchStockEntries = useCallback(async () => {
     if (!societeId) return setStockEntries([]);
     try {
       const snap = await getDocs(collection(db, "societe", societeId, "stock_entries"));
       const arr = [];
-      snap.forEach((doc) => arr.push({ id: doc.id, ...doc.data() }));
-      // Trier par nom puis par date d'expiration
+      snap.forEach((doc) => {
+        const data = doc.data();
+        delete data._exportedAt;
+        delete data._collection;
+        arr.push({ id: doc.id, ...data });
+      });
       arr.sort((a, b) => {
         if (a.nom !== b.nom) return a.nom.localeCompare(b.nom);
-        return new Date(a.datePeremption || 0) - new Date(b.datePeremption || 0);
+        const dateA = safeParseDate(a.datePeremption);
+        const dateB = safeParseDate(b.datePeremption);
+        if (!dateA && !dateB) return 0;
+        if (!dateA) return 1;
+        if (!dateB) return -1;
+        return dateA - dateB;
       });
       setStockEntries(arr);
     } catch (err) {
@@ -172,118 +191,83 @@ export default function Ventes() {
     }
   }, [societeId]);
 
-  /**
-   * Charge le stock de médicaments traditionnel
-   */
   const fetchMedicaments = useCallback(async () => {
     if (!societeId) return setMedicaments([]);
     try {
       const snap = await getDocs(collection(db, "societe", societeId, "stock"));
       const arr = [];
-      snap.forEach((doc) => arr.push({ id: doc.id, ...doc.data() }));
+      snap.forEach((doc) => {
+        const data = doc.data();
+        delete data._exportedAt;
+        delete data._collection;
+        arr.push({ id: doc.id, ...data });
+      });
       setMedicaments(arr);
     } catch (err) {
       console.error("Erreur chargement médicaments:", err);
-      setError("Erreur lors du chargement du stock");
     }
   }, [societeId]);
 
-  // 🔧 CORRECTION: Obtient tous les médicaments disponibles SANS DOUBLONS
   const getAllAvailableMedicaments = useMemo(() => {
     const medicamentMap = new Map();
     
-    // D'abord, ajouter les médicaments avec lots (priorité aux lots)
-    const lotMeds = stockEntries.filter(e => e.quantite > 0);
     const lotGroups = {};
-    
-    // Grouper les lots par nom de médicament
-    lotMeds.forEach(entry => {
+    stockEntries.filter(e => e.quantite > 0).forEach(entry => {
       if (!lotGroups[entry.nom]) {
         lotGroups[entry.nom] = [];
       }
       lotGroups[entry.nom].push(entry);
     });
     
-    // Ajouter les médicaments avec lots
     Object.keys(lotGroups).forEach(nom => {
       const lots = lotGroups[nom];
       const totalQuantity = lots.reduce((sum, lot) => sum + lot.quantite, 0);
-      const lastPrice = lots[0].prixVente || 0;
-      
       medicamentMap.set(nom, {
         nom,
         quantiteTotal: totalQuantity,
         hasLots: true,
-        hasTraditional: false,
-        lastPrice,
-        source: 'lots'
+        lastPrice: lots[0].prixVente || 0
       });
     });
     
-    // Ensuite, ajouter les médicaments traditionnels SEULEMENT s'ils n'ont pas de lots
-    const traditionalMeds = medicaments.filter(m => m.quantite > 0);
-    traditionalMeds.forEach(med => {
+    medicaments.filter(m => m.quantite > 0).forEach(med => {
       if (!medicamentMap.has(med.nom)) {
-        // Ce médicament n'a pas de lots, on l'ajoute depuis le stock traditionnel
         medicamentMap.set(med.nom, {
           nom: med.nom,
           quantiteTotal: med.quantite,
           hasLots: false,
-          hasTraditional: true,
-          lastPrice: med.prixVente || 0,
-          source: 'traditional'
+          lastPrice: med.prixVente || 0
         });
-      } else {
-        // Le médicament a déjà des lots, on ne fait rien pour éviter le doublon
-        // On peut éventuellement marquer qu'il existe aussi en traditionnel
-        const existing = medicamentMap.get(med.nom);
-        existing.hasTraditional = true;
-        // On ne modifie PAS la quantité pour éviter le doublon
       }
     });
     
-    // Convertir en tableau et trier par nom
     return Array.from(medicamentMap.values())
       .filter(m => m.quantiteTotal > 0)
       .sort((a, b) => a.nom.localeCompare(b.nom));
   }, [medicaments, stockEntries]);
 
-  // ============ GESTION DU FORMULAIRE ============
-  /**
-   * 🆕 Auto-remplissage du prix et gestion des lots lors de la sélection d'un produit
-   */
+  // ============ GESTION FORMULAIRE ============
   const handleProduitChange = (value) => {
     setProduit(value);
     setSelectedLot("");
     setAvailableLots([]);
-    setShowLotSelector(false);
     
-    if (value !== "_new_" && value) {
-      // Récupérer les lots disponibles pour ce produit
+    if (value) {
       const lotsForProduct = stockEntries.filter(entry => 
         entry.nom === value && entry.quantite > 0
       );
       
       setAvailableLots(lotsForProduct);
       
-      // Si des lots existent, afficher le sélecteur
       if (lotsForProduct.length > 0) {
-        setShowLotSelector(true);
-        // Prendre le prix du premier lot comme suggestion
         setPrixUnitaire(lotsForProduct[0].prixVente || 0);
       } else {
-        // Fallback sur le stock traditionnel
         const med = medicaments.find((m) => m.nom === value);
-        if (med) {
-          setPrixUnitaire(med.prixVente || 0);
-        }
+        if (med) setPrixUnitaire(med.prixVente || 0);
       }
-    } else {
-      setPrixUnitaire("");
     }
   };
 
-  // 🆕 Gestion de la sélection d'un lot spécifique
   const handleLotSelection = (lotId) => {
     setSelectedLot(lotId);
     const selectedLotData = availableLots.find(lot => lot.id === lotId);
@@ -292,15 +276,10 @@ export default function Ventes() {
     }
   };
 
-  /**
-   * Ajoute un article à la vente en cours avec gestion multi-lots
-   */
   const handleAddArticle = (e) => {
     e.preventDefault();
-    const nomProduitFinal = produit === "_new_" ? produitNouveau : produit;
     
-    // Validation
-    if (!nomProduitFinal || !quantite || !prixUnitaire) {
+    if (!produit || !quantite || !prixUnitaire) {
       setError("Veuillez remplir tous les champs obligatoires");
       return;
     }
@@ -308,53 +287,42 @@ export default function Ventes() {
     let stockSource = null;
     let maxQuantity = 0;
     
-    // Déterminer la source de stock et vérifier la disponibilité
     if (selectedLot) {
-      // Vente depuis un lot spécifique
       const lotData = availableLots.find(lot => lot.id === selectedLot);
       if (lotData) {
         stockSource = { type: "lot", data: lotData };
         maxQuantity = lotData.quantite;
       }
     } else {
-      // Vente depuis stock traditionnel ou auto-sélection
-      const availableMed = getAllAvailableMedicaments.find(m => m.nom === nomProduitFinal);
-      if (availableMed) {
-        maxQuantity = availableMed.quantiteTotal;
-        // Si des lots sont disponibles, prendre le premier (FIFO)
-        if (availableMed.hasLots) {
-          const firstLot = availableLots[0];
-          if (firstLot) {
-            stockSource = { type: "lot", data: firstLot };
-            maxQuantity = firstLot.quantite;
-          }
-        } else {
-          // Stock traditionnel
-          const medStock = medicaments.find(m => m.nom === nomProduitFinal);
-          if (medStock) {
-            stockSource = { type: "traditional", data: medStock };
-            maxQuantity = medStock.quantite;
-          }
+      const availableMed = getAllAvailableMedicaments.find(m => m.nom === produit);
+      if (availableMed && availableMed.hasLots) {
+        const firstLot = availableLots[0];
+        if (firstLot) {
+          stockSource = { type: "lot", data: firstLot };
+          maxQuantity = firstLot.quantite;
+        }
+      } else {
+        const medStock = medicaments.find(m => m.nom === produit);
+        if (medStock) {
+          stockSource = { type: "traditional", data: medStock };
+          maxQuantity = medStock.quantite;
         }
       }
     }
 
-    // Vérifier le stock disponible
     if (!stockSource || maxQuantity < quantite) {
       setError(`Stock insuffisant ! Disponible: ${maxQuantity}`);
       return;
     }
 
     const articleData = {
-      produit: nomProduitFinal,
+      produit,
       quantite: Number(quantite),
       prixUnitaire: Number(prixUnitaire),
       remise: Number(remiseArticle),
-      dateAjout: new Date().toISOString(),
-      stockSource: stockSource, // 🆕 Informations sur la source du stock
+      stockSource,
     };
 
-    // 🆕 Ajouter les informations de traçabilité si c'est un lot
     if (stockSource.type === "lot") {
       articleData.numeroLot = stockSource.data.numeroLot;
       articleData.fournisseur = stockSource.data.fournisseur;
@@ -363,61 +331,25 @@ export default function Ventes() {
     }
 
     setArticles([...articles, articleData]);
-
-    // Réinitialiser le formulaire article
+    
     setProduit("");
-    setProduitNouveau("");
     setQuantite(1);
     setPrixUnitaire("");
     setRemiseArticle(0);
     setSelectedLot("");
     setAvailableLots([]);
-    setShowLotSelector(false);
     setError("");
   };
 
-  /**
-   * Retire un article de la vente en cours
-   */
   const handleRemoveArticle = (idx) => {
     setArticles(articles.filter((_, i) => i !== idx));
   };
 
-  /**
-   * Modifie la quantité d'un article
-   */
-  const handleUpdateArticleQuantity = (idx, newQuantity) => {
-    const updatedArticles = [...articles];
-    const article = updatedArticles[idx];
-    
-    // Vérifier la disponibilité en stock
-    if (article.stockSource) {
-      const maxQuantity = article.stockSource.data.quantite;
-      if (newQuantity > maxQuantity) {
-        setError(`Quantité maximum pour cet article: ${maxQuantity}`);
-        return;
-      }
-    }
-    
-    updatedArticles[idx].quantite = Number(newQuantity);
-    setArticles(updatedArticles);
-    setError("");
-  };
-
-  // ============ GESTION DES VENTES ============
-  /**
-   * Enregistre ou modifie une vente avec gestion multi-lots
-   */
+  // ============ GESTION VENTES ============
   const handleAddVente = async (e) => {
     e.preventDefault();
     
-    // Validations
-    if (!user || !societeId) {
-      setError("Utilisateur ou société non connecté !");
-      return;
-    }
-    
-    if (!client || !dateVente || articles.length === 0) {
+    if (!user || !societeId || !client || !dateVente || articles.length === 0) {
       setError("Veuillez remplir tous les champs et ajouter au moins un article");
       return;
     }
@@ -426,7 +358,6 @@ export default function Ventes() {
     setError("");
 
     try {
-      // Calculer les totaux
       const montantTotal = articles.reduce(
         (sum, a) => sum + (a.prixUnitaire * a.quantite - a.remise),
         0
@@ -434,7 +365,6 @@ export default function Ventes() {
       
       const remiseTotal = articles.reduce((sum, a) => sum + a.remise, 0);
 
-      let venteRef = null;
       const venteData = {
         client,
         date: Timestamp.fromDate(new Date(dateVente)),
@@ -445,7 +375,6 @@ export default function Ventes() {
           quantite: a.quantite,
           prixUnitaire: a.prixUnitaire,
           remise: a.remise,
-          // 🆕 Informations de traçabilité multi-lots
           numeroLot: a.numeroLot || null,
           fournisseur: a.fournisseur || null,
           datePeremption: a.datePeremption || null,
@@ -459,41 +388,16 @@ export default function Ventes() {
         updatedBy: user.email,
       };
 
+      let venteRef = null;
+
       if (isEditing && editId) {
-        // ===== MODIFICATION D'UNE VENTE =====
         const oldVente = ventes.find((v) => v.id === editId);
-        
-        // Restaurer le stock de l'ancienne vente
         await updateStockOnCancel(oldVente);
-        
-        // Mettre à jour la vente
         await updateDoc(doc(db, "societe", societeId, "ventes", editId), venteData);
         venteRef = { id: editId };
-        
-        // Appliquer le nouveau stock
         await updateStockOnSell({ client, articles });
-        
-        // Traçabilité de la modification
-        await addDoc(collection(db, "societe", societeId, "activities"), {
-          type: "vente",
-          userId: user.uid,
-          userEmail: user.email,
-          timestamp: Timestamp.now(),
-          details: {
-            client,
-            montant: montantTotal,
-            articles: articles.length,
-            action: "modification",
-            venteId: editId,
-            changes: "Modification complète de la vente",
-            articlesAvecLots: articles.filter(a => a.numeroLot).length
-          }
-        });
-        
         setSuccess("Vente modifiée avec succès !");
-        
       } else {
-        // ===== NOUVELLE VENTE =====
         venteData.createdAt = Timestamp.now();
         venteData.createdBy = user.email;
         
@@ -502,30 +406,10 @@ export default function Ventes() {
           venteData
         );
         venteRef = added;
-        
-        // Mettre à jour le stock
         await updateStockOnSell({ client, articles });
-        
-        // Traçabilité de la création
-        await addDoc(collection(db, "societe", societeId, "activities"), {
-          type: "vente",
-          userId: user.uid,
-          userEmail: user.email,
-          timestamp: Timestamp.now(),
-          details: {
-            client,
-            montant: montantTotal,
-            articles: articles.length,
-            action: "création",
-            venteId: added.id,
-            articlesAvecLots: articles.filter(a => a.numeroLot).length
-          }
-        });
-        
         setSuccess("Vente enregistrée avec succès !");
       }
 
-      // Gestion du paiement automatique
       if (statutPaiement === "payé" && venteRef) {
         await addDoc(collection(db, "societe", societeId, "paiements"), {
           docId: venteRef.id,
@@ -535,31 +419,13 @@ export default function Ventes() {
           date: Timestamp.now(),
           createdBy: user.email
         });
-
-        // Traçabilité du paiement
-        await addDoc(collection(db, "societe", societeId, "activities"), {
-          type: "paiement",
-          userId: user.uid,
-          userEmail: user.email,
-          timestamp: Timestamp.now(),
-          details: {
-            mode: modePaiement,
-            type: "ventes",
-            montant: montantTotal,
-            client,
-            paiementAuto: true,
-            action: "création"
-          }
-        });
       }
 
-      // Réinitialiser et recharger
       resetForm();
       await fetchVentes();
       await fetchMedicaments();
-      await fetchStockEntries(); // 🆕 Recharger les entrées
+      await fetchStockEntries();
       
-      // Fermer le formulaire après succès
       setTimeout(() => {
         setShowForm(false);
         setSuccess("");
@@ -573,19 +439,15 @@ export default function Ventes() {
     }
   };
 
-  /**
-   * Prépare la modification d'une vente
-   */
   const handleEditVente = (vente) => {
     setEditId(vente.id);
     setIsEditing(true);
-    setClient(vente.client || "");
-    setDateVente(vente.date?.toDate().toISOString().split("T")[0] || "");
+    setClient(vente.client || "(passant)");
+    setDateVente(getDateInputValue(vente.date));
     setStatutPaiement(vente.statutPaiement || "payé");
     setModePaiement(vente.modePaiement || "Espèces");
     setNotesVente(vente.notes || "");
     
-    // 🆕 Reconstituer les articles avec leurs informations de source
     const reconstructedArticles = (vente.articles || []).map(a => ({
       produit: a.produit,
       quantite: a.quantite,
@@ -606,114 +468,36 @@ export default function Ventes() {
     
     setArticles(reconstructedArticles);
     setShowForm(true);
-    setError("");
-    setSuccess("");
   };
 
-  /**
-   * Supprime une vente avec restauration du stock multi-lots
-   */
   const handleDeleteVente = async (vente) => {
-    if (!user || !societeId) {
-      setError("Utilisateur non connecté !");
-      return;
-    }
-
-    if (!window.confirm(`Êtes-vous sûr de vouloir supprimer la vente de ${vente.client} ?`)) {
-      return;
-    }
+    if (!window.confirm(`Supprimer la vente de ${vente.client} ?`)) return;
 
     try {
-      // Restaurer le stock
       await updateStockOnCancel(vente);
-      
-      // Supprimer la vente
       await deleteDoc(doc(db, "societe", societeId, "ventes", vente.id));
-      
-      // Calculer le montant pour la traçabilité
-      const montant = (Array.isArray(vente.articles) ? vente.articles : [])
-        .reduce((sum, a) => sum + (a.prixUnitaire * a.quantite - a.remise), 0);
-      
-      // Traçabilité de la suppression
-      await addDoc(collection(db, "societe", societeId, "activities"), {
-        type: "vente",
-        userId: user.uid,
-        userEmail: user.email,
-        timestamp: Timestamp.now(),
-        details: {
-          client: vente.client,
-          montant,
-          articles: (vente.articles || []).length,
-          action: "suppression",
-          venteId: vente.id,
-          articlesAvecLots: (vente.articles || []).filter(a => a.numeroLot).length
-        }
-      });
-
       setSuccess("Vente supprimée avec succès");
       await fetchVentes();
-      await fetchStockEntries(); // 🆕 Recharger les entrées
-      
+      await fetchStockEntries();
       setTimeout(() => setSuccess(""), 3000);
-      
     } catch (err) {
-      console.error("Erreur lors de la suppression:", err);
-      setError("Erreur lors de la suppression de la vente");
+      console.error("Erreur suppression:", err);
+      setError("Erreur lors de la suppression");
     }
   };
 
-  /**
-   * Duplique une vente
-   */
-  const handleDuplicateVente = (vente) => {
-    setEditId(null);
-    setIsEditing(false);
-    setClient(vente.client || "");
-    setDateVente(new Date().toISOString().split("T")[0]);
-    setStatutPaiement("payé");
-    setModePaiement(vente.modePaiement || "Espèces");
-    setNotesVente("");
-    
-    // 🆕 Dupliquer les articles en vérifiant la disponibilité actuelle
-    const duplicatedArticles = (vente.articles || []).map(a => {
-      const baseArticle = {
-        produit: a.produit,
-        quantite: a.quantite,
-        prixUnitaire: a.prixUnitaire,
-        remise: a.remise || 0,
-        numeroLot: a.numeroLot || null,
-        fournisseur: a.fournisseur || null,
-        datePeremption: a.datePeremption || null
-      };
-      
-      // Essayer de retrouver la source de stock actuelle
-      if (a.stockEntryId) {
-        const entry = stockEntries.find(e => e.id === a.stockEntryId);
-        if (entry && entry.quantite > 0) {
-          baseArticle.stockSource = { type: "lot", data: entry };
-          baseArticle.stockEntryId = entry.id;
-        }
-      }
-      
-      return baseArticle;
-    });
-    
-    setArticles(duplicatedArticles);
-    setShowForm(true);
-    setSuccess("Vente dupliquée - Vérifiez la disponibilité des stocks");
+  const handleViewDetails = (vente) => {
+    setSelectedVente(vente);
+    setShowDetails(true);
   };
 
-  // ============ GESTION DU STOCK MULTI-LOTS ============
-  /**
-   * 🆕 Met à jour le stock après une vente (multi-lots + traditionnel)
-   */
+  // ============ GESTION STOCK ============
   const updateStockOnSell = async (vente) => {
     if (!user || !societeId) return;
     
     for (const art of vente.articles || []) {
       try {
         if (art.stockSource?.type === "lot" && art.stockEntryId) {
-          // Décrémenter du lot spécifique
           const entryRef = doc(db, "societe", societeId, "stock_entries", art.stockEntryId);
           const entrySnap = await getDoc(entryRef);
           
@@ -724,13 +508,10 @@ export default function Ventes() {
             await updateDoc(entryRef, {
               quantite: newQuantity,
               modifiePar: user.uid,
-              modifieParEmail: user.email,
-              modifieLe: Timestamp.now(),
-              derniereVente: Timestamp.now()
+              modifieLe: Timestamp.now()
             });
           }
-        } else if (art.stockSource?.type === "traditional") {
-          // Décrémenter du stock traditionnel SEULEMENT si c'est vraiment traditionnel
+        } else {
           const stockRef = collection(db, "societe", societeId, "stock");
           const q = query(stockRef, where("nom", "==", art.produit || ""));
           const stockSnap = await getDocs(q);
@@ -743,39 +524,22 @@ export default function Ventes() {
             await updateDoc(doc(db, "societe", societeId, "stock", docId), {
               quantite: newQuantity,
               modifiePar: user.uid,
-              modifieParEmail: user.email,
-              modifieLe: Timestamp.now(),
-              derniereVente: Timestamp.now()
+              modifieLe: Timestamp.now()
             });
-
-            // Alerte stock faible
-            if (newQuantity < (current.seuilAlerte || 10)) {
-              await addDoc(collection(db, "societe", societeId, "alertes"), {
-                type: "stock_faible",
-                produit: art.produit,
-                quantiteRestante: newQuantity,
-                date: Timestamp.now(),
-                lu: false
-              });
-            }
           }
         }
       } catch (error) {
-        console.error(`Erreur lors de la mise à jour du stock pour ${art.produit}:`, error);
+        console.error(`Erreur stock ${art.produit}:`, error);
       }
     }
   };
 
-  /**
-   * 🆕 Restaure le stock après annulation d'une vente (multi-lots + traditionnel)
-   */
   const updateStockOnCancel = async (vente) => {
     if (!user || !societeId) return;
     
     for (const art of vente.articles || []) {
       try {
         if (art.stockEntryId) {
-          // Restaurer dans le lot spécifique
           const entryRef = doc(db, "societe", societeId, "stock_entries", art.stockEntryId);
           const entrySnap = await getDoc(entryRef);
           
@@ -784,12 +548,10 @@ export default function Ventes() {
             await updateDoc(entryRef, {
               quantite: Number(currentEntry.quantite || 0) + Number(art.quantite || 0),
               modifiePar: user.uid,
-              modifieParEmail: user.email,
               modifieLe: Timestamp.now()
             });
           }
-        } else if (art.stockSourceType === "traditional" || !art.stockEntryId) {
-          // Restaurer dans le stock traditionnel SEULEMENT si c'était vraiment du stock traditionnel
+        } else {
           const stockRef = collection(db, "societe", societeId, "stock");
           const q = query(stockRef, where("nom", "==", art.produit || ""));
           const stockSnap = await getDocs(q);
@@ -801,21 +563,17 @@ export default function Ventes() {
             await updateDoc(doc(db, "societe", societeId, "stock", docId), {
               quantite: Number(current.quantite || 0) + Number(art.quantite || 0),
               modifiePar: user.uid,
-              modifieParEmail: user.email,
               modifieLe: Timestamp.now()
             });
           }
         }
       } catch (error) {
-        console.error(`Erreur lors de la restauration du stock pour ${art.produit}:`, error);
+        console.error(`Erreur restauration ${art.produit}:`, error);
       }
     }
   };
 
-  // ============ GÉNÉRATION DU CACHET ============
-  /**
-   * Génère le HTML du cachet selon le type (image ou texte)
-   */
+  // ============ IMPRESSION ============
   const generateCachetHtml = () => {
     if (!parametres.afficherCachet) return '';
     
@@ -826,43 +584,15 @@ export default function Ventes() {
         <div style="text-align: center; flex: 1;">
           <img 
             src="${parametres.cachetImage}" 
-            alt="Cachet de l'entreprise"
-            style="
-              max-width: ${taille}px;
-              max-height: ${taille}px;
-              border-radius: 8px;
-              box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
-              object-fit: contain;
-              background: white;
-              padding: 5px;
-            "
-            onerror="this.style.display='none'; this.nextElementSibling.style.display='inline-block';"
+            alt="Cachet"
+            style="max-width: ${taille}px; max-height: ${taille}px; border-radius: 8px;"
           />
-          <div class="cachet-fallback" style="
-            display: none;
-            border: 3px solid #1976d2;
-            color: #1976d2;
-            border-radius: 50%;
-            padding: 20px 30px;
-            font-size: 14px;
-            font-weight: bold;
-            text-transform: uppercase;
-            letter-spacing: 1px;
-            background: rgba(25, 118, 210, 0.05);
-            box-shadow: 0 4px 8px rgba(25, 118, 210, 0.2);
-            transform: rotate(-5deg);
-            position: relative;
-            max-width: ${taille}px;
-            margin: 0 auto;
-          ">
-            ${parametres.cachetTexte || "Cachet Société"}
-          </div>
         </div>
       `;
     } else {
       return `
         <div style="text-align: center; flex: 1;">
-          <div class="cachet" style="
+          <div style="
             display: inline-block;
             border: 3px solid #1976d2;
             color: #1976d2;
@@ -875,8 +605,6 @@ export default function Ventes() {
             background: rgba(25, 118, 210, 0.05);
             box-shadow: 0 4px 8px rgba(25, 118, 210, 0.2);
             transform: rotate(-5deg);
-            position: relative;
-            z-index: 2;
             max-width: ${taille}px;
           ">
             ${parametres.cachetTexte || "Cachet Société"}
@@ -886,10 +614,6 @@ export default function Ventes() {
     }
   };
 
-  // ============ IMPRESSION AVEC CACHET ET MULTI-LOTS ============
-  /**
-   * 🆕 Imprime un bon de vente avec informations multi-lots et cachet professionnel
-   */
   const handlePrintVente = (vente) => {
     const articles = Array.isArray(vente.articles) ? vente.articles : [];
     const total = vente.montantTotal || articles.reduce(
@@ -904,279 +628,71 @@ export default function Ventes() {
     printWindow.document.write(`
       <html>
         <head>
-          <title>Bon de Vente Multi-Lots N°${vente.id.slice(-6).toUpperCase()}</title>
+          <title>Bon de Vente N°${vente.id.slice(-6).toUpperCase()}</title>
           <style>
             * { margin: 0; padding: 0; box-sizing: border-box; }
-            body { 
-              font-family: 'Segoe UI', Arial, sans-serif; 
-              padding: 20px;
-              color: #333;
-              line-height: 1.6;
-            }
-            .header {
-              text-align: center;
-              margin-bottom: 30px;
-              padding: 20px;
-              border-bottom: 3px solid #2563eb;
-              background: linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%);
-              border-radius: 8px;
-            }
-            .header h1 { 
-              color: #2563eb;
-              margin-bottom: 10px;
-              font-size: 24px;
-              text-transform: uppercase;
-              letter-spacing: 1px;
-            }
-            .header h2 {
-              color: #1e40af;
-              font-size: 20px;
-              margin-top: 10px;
-            }
-            ${hasLotInfo ? `
-            .header .multi-lot-indicator {
-              background: #dcfce7;
-              color: #16a34a;
-              padding: 8px 16px;
-              border-radius: 20px;
-              font-size: 14px;
-              font-weight: 600;
-              margin-top: 10px;
-              display: inline-block;
-            }` : ''}
-            .info-section {
-              display: flex;
-              justify-content: space-between;
-              margin-bottom: 30px;
-              padding: 20px;
-              background: #f8f9fa;
-              border-radius: 8px;
-              border-left: 5px solid #2563eb;
-            }
-            .info-group {
-              flex: 1;
-            }
-            .info-group p {
-              margin: 8px 0;
-              font-size: 15px;
-            }
-            .info-group strong {
-              color: #2563eb;
-              font-weight: 600;
-            }
-            table {
-              width: 100%;
-              border-collapse: collapse;
-              margin: 20px 0;
-              border-radius: 8px;
-              overflow: hidden;
-              box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-            }
-            th {
-              background: linear-gradient(135deg, #2563eb 0%, #1e40af 100%);
-              color: white;
-              padding: 15px 12px;
-              text-align: left;
-              font-weight: 600;
-              font-size: 14px;
-              text-transform: uppercase;
-              letter-spacing: 0.5px;
-            }
-            td {
-              padding: 12px;
-              border-bottom: 1px solid #e5e7eb;
-              font-size: 14px;
-            }
-            tr:nth-child(even) {
-              background: #f9fafb;
-            }
-            tr:hover {
-              background: #f3f4f6;
-            }
-            .lot-info {
-              font-size: 12px;
-              color: #6b7280;
-              margin-top: 4px;
-              padding: 4px 8px;
-              background: #f3f4f6;
-              border-radius: 4px;
-              border-left: 3px solid #10b981;
-            }
-            .lot-badge {
-              background: #dcfce7;
-              color: #16a34a;
-              padding: 2px 8px;
-              border-radius: 12px;
-              font-size: 11px;
-              font-weight: 600;
-              margin-right: 4px;
-            }
-            .supplier-badge {
-              background: #dbeafe;
-              color: #2563eb;
-              padding: 2px 8px;
-              border-radius: 12px;
-              font-size: 11px;
-              font-weight: 600;
-            }
-            .expiry-warning {
-              color: #dc2626;
-              font-weight: 600;
-            }
-            .expiry-soon {
-              color: #d97706;
-              font-weight: 600;
-            }
-            .totals {
-              margin-top: 30px;
-              padding: 25px;
-              background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-              color: white;
-              border-radius: 8px;
-              box-shadow: 0 8px 15px rgba(0, 0, 0, 0.1);
-            }
-            .totals-row {
-              display: flex;
-              justify-content: space-between;
-              margin: 12px 0;
-              font-size: 16px;
-            }
-            .totals-row.grand-total {
-              font-size: 22px;
-              font-weight: bold;
-              padding-top: 15px;
-              border-top: 2px solid rgba(255,255,255,0.3);
-              margin-top: 15px;
-            }
-            .signature-section {
-              margin-top: 50px;
-              display: flex;
-              justify-content: space-between;
-              align-items: flex-end;
-            }
-            .signature-box {
-              text-align: center;
-              width: 200px;
-            }
-            .signature-line {
-              border-bottom: 2px solid #333;
-              margin-bottom: 8px;
-              height: 50px;
-            }
-            .signature-label {
-              font-weight: 600;
-              color: #4b5563;
-              font-size: 14px;
-            }
-            .footer {
-              text-align: center;
-              margin-top: 50px;
-              padding: 25px;
-              border-top: 3px solid #2563eb;
-              background: #f8fafc;
-              border-radius: 8px;
-              position: relative;
-            }
-            .notes-section {
-              margin-top: 25px;
-              padding: 20px;
-              background: #fef3c7;
-              border-left: 5px solid #f59e0b;
-              border-radius: 0 8px 8px 0;
-            }
-            .notes-section strong {
-              color: #92400e;
-              display: block;
-              margin-bottom: 8px;
-            }
-            .print-info {
-              color: #6b7280;
-              font-size: 12px;
-              margin-top: 15px;
-              font-style: italic;
-            }
-            .watermark {
-              position: fixed;
-              top: 50%;
-              left: 50%;
-              transform: translate(-50%, -50%) rotate(-45deg);
-              font-size: 80px;
-              color: rgba(37, 99, 235, 0.05);
-              font-weight: bold;
-              z-index: 0;
-              pointer-events: none;
-            }
-            @media print {
-              body { padding: 10px; }
-              .no-print { display: none; }
-              .header { break-inside: avoid; }
-              table { break-inside: avoid; }
-              .signature-section { page-break-inside: avoid; }
-              .footer { page-break-inside: avoid; }
-              img { 
-                print-color-adjust: exact;
-                -webkit-print-color-adjust: exact;
-              }
-            }
+            body { font-family: Arial, sans-serif; padding: 20px; }
+            .header { text-align: center; margin-bottom: 30px; padding: 20px; border-bottom: 3px solid #2563eb; }
+            .header h1 { color: #2563eb; margin-bottom: 10px; font-size: 24px; }
+            .info-section { display: flex; justify-content: space-between; margin-bottom: 30px; }
+            table { width: 100%; border-collapse: collapse; margin: 20px 0; }
+            th { background: #2563eb; color: white; padding: 12px; text-align: left; }
+            td { padding: 10px; border-bottom: 1px solid #e5e7eb; }
+            .lot-info { font-size: 11px; color: #6b7280; margin-top: 4px; padding: 4px; background: #f3f4f6; }
+            .totals { margin-top: 20px; padding: 20px; background: #2563eb; color: white; text-align: right; }
+            .signature-section { margin-top: 50px; display: flex; justify-content: space-between; }
+            .signature-box { text-align: center; width: 200px; }
+            .signature-line { border-bottom: 2px solid #333; margin-bottom: 8px; height: 50px; }
+            .footer { text-align: center; margin-top: 30px; padding: 20px; border-top: 2px solid #2563eb; }
+            ${hasLotInfo ? '.multi-lot-indicator { background: #dcfce7; color: #16a34a; padding: 8px 16px; border-radius: 20px; font-size: 14px; margin-top: 10px; display: inline-block; }' : ''}
           </style>
         </head>
         <body>
-          <div class="watermark">VENTE ${hasLotInfo ? 'MULTI-LOTS' : ''}</div>
-          
           <div class="header">
-            <h1>${parametres.entete || "PHARMACIE - BON DE VENTE"}</h1>
+            <h1>${parametres.entete}</h1>
             <h2>BON DE VENTE N°${vente.id.slice(-6).toUpperCase()}</h2>
-            ${hasLotInfo ? '<div class="multi-lot-indicator">🏷️ Vente avec traçabilité multi-lots</div>' : ''}
+            ${hasLotInfo ? '<div class="multi-lot-indicator">Vente avec traçabilité multi-lots</div>' : ''}
           </div>
           
           <div class="info-section">
-            <div class="info-group">
-              <p><strong>Client:</strong> ${vente.client || "Client comptoir"}</p>
-              <p><strong>Date de vente:</strong> ${vente.date?.toDate().toLocaleDateString('fr-FR', {
-                weekday: 'long',
-                year: 'numeric',
-                month: 'long',
-                day: 'numeric'
-              })}</p>
+            <div>
+              <p><strong>Client:</strong> ${vente.client}</p>
+              <p><strong>Date:</strong> ${formatDateSafe(vente.date)}</p>
             </div>
-            <div class="info-group">
-              <p><strong>Statut paiement:</strong> 
-                <span style="color: ${vente.statutPaiement === 'payé' ? '#16a34a' : vente.statutPaiement === 'partiel' ? '#ea580c' : '#dc2626'};">
-                  ${vente.statutPaiement === 'payé' ? '✅ Payé' : vente.statutPaiement === 'partiel' ? '⏳ Partiel' : '❌ Impayé'}
-                </span>
-              </p>
-              <p><strong>Mode de paiement:</strong> ${vente.modePaiement || "Espèces"}</p>
+            <div>
+              <p><strong>Statut:</strong> ${vente.statutPaiement}</p>
+              <p><strong>Mode:</strong> ${vente.modePaiement || "Espèces"}</p>
             </div>
           </div>
           
           <table>
             <thead>
               <tr>
-                <th style="text-align: left;">Produit${hasLotInfo ? ' / Traçabilité' : ''}</th>
-                <th style="text-align: center; width: 80px;">Quantité</th>
-                <th style="text-align: right; width: 100px;">Prix Unit.</th>
-                <th style="text-align: right; width: 80px;">Remise</th>
-                <th style="text-align: right; width: 100px;">Total</th>
+                <th>Produit${hasLotInfo ? ' / Traçabilité' : ''}</th>
+                <th>Quantité</th>
+                <th>Prix Unit.</th>
+                <th>Remise</th>
+                <th>Total</th>
               </tr>
             </thead>
             <tbody>
-              ${articles.map((a, index) => {
-                const isExpired = a.datePeremption && new Date(a.datePeremption) < new Date();
+              ${articles.map(a => {
+                const isExpired = a.datePeremption && safeParseDate(a.datePeremption) < new Date();
                 const isExpiringSoon = a.datePeremption && !isExpired && 
-                  new Date(a.datePeremption) <= new Date(Date.now() + 30*24*60*60*1000);
+                  safeParseDate(a.datePeremption) <= new Date(Date.now() + 30*24*60*60*1000);
                 
                 return `
                 <tr>
                   <td>
-                    <strong>${a.produit || ""}</strong>
+                    <strong>${a.produit}</strong>
                     ${a.numeroLot || a.fournisseur || a.datePeremption ? `
                       <div class="lot-info">
-                        ${a.numeroLot ? `<span class="lot-badge">Lot: ${a.numeroLot}</span>` : ''}
-                        ${a.fournisseur ? `<span class="supplier-badge">Fournisseur: ${a.fournisseur}</span>` : ''}
+                        ${a.numeroLot ? `<span style="background: #dcfce7; color: #16a34a; padding: 2px 6px; border-radius: 8px; font-size: 10px; margin-right: 4px;">Lot: ${a.numeroLot}</span>` : ''}
+                        ${a.fournisseur ? `<span style="background: #dbeafe; color: #2563eb; padding: 2px 6px; border-radius: 8px; font-size: 10px; margin-right: 4px;">Fournisseur: ${a.fournisseur}</span>` : ''}
                         ${a.datePeremption ? `
                           <div style="margin-top: 4px;">
-                            📅 Expiration: 
-                            <span class="${isExpired ? 'expiry-warning' : isExpiringSoon ? 'expiry-soon' : ''}">
+                            Expiration: 
+                            <span style="color: ${isExpired ? '#dc2626' : isExpiringSoon ? '#d97706' : '#6b7280'}; font-weight: 600;">
                               ${a.datePeremption}
                               ${isExpired ? ' ⚠️ EXPIRÉ' : isExpiringSoon ? ' ⏰ Expire bientôt' : ''}
                             </span>
@@ -1185,67 +701,54 @@ export default function Ventes() {
                       </div>
                     ` : ''}
                   </td>
-                  <td style="text-align: center; font-weight: 600;">${a.quantite || 0}</td>
-                  <td style="text-align: right;">${(a.prixUnitaire || 0).toFixed(2)} DH</td>
-                  <td style="text-align: right; color: #dc2626;">${(a.remise || 0).toFixed(2)} DH</td>
-                  <td style="text-align: right; font-weight: 600; color: #059669;">
+                  <td>${a.quantite || 0}</td>
+                  <td>${(a.prixUnitaire || 0).toFixed(2)} DH</td>
+                  <td>${(a.remise || 0).toFixed(2)} DH</td>
+                  <td style="font-weight: 600;">
                     ${((a.prixUnitaire || 0) * (a.quantite || 0) - (a.remise || 0)).toFixed(2)} DH
                   </td>
                 </tr>`;
-              }).join("")}
+              }).join('')}
             </tbody>
           </table>
           
           <div class="totals">
-            <div class="totals-row">
-              <span>Sous-total articles:</span>
-              <span>${(total + (vente.remiseTotal || 0)).toFixed(2)} DH</span>
-            </div>
             ${vente.remiseTotal ? `
-              <div class="totals-row">
-                <span>Remise totale:</span>
-                <span>-${vente.remiseTotal.toFixed(2)} DH</span>
+              <div style="margin-bottom: 10px;">
+                Sous-total: ${(total + vente.remiseTotal).toFixed(2)} DH
+              </div>
+              <div style="margin-bottom: 10px;">
+                Remise totale: -${vente.remiseTotal.toFixed(2)} DH
               </div>
             ` : ''}
-            <div class="totals-row grand-total">
-              <span>TOTAL À PAYER:</span>
-              <span>${total.toFixed(2)} DH</span>
+            <div style="font-size: 20px; font-weight: bold;">
+              TOTAL: ${total.toFixed(2)} DH
             </div>
           </div>
           
           ${vente.notes ? `
-            <div class="notes-section">
-              <strong>Notes / Observations:</strong>
-              ${vente.notes}
+            <div style="margin-top: 20px; padding: 15px; background: #fef3c7; border-left: 5px solid #f59e0b;">
+              <strong>Notes:</strong> ${vente.notes}
             </div>
           ` : ''}
           
           <div class="signature-section">
             <div class="signature-box">
               <div class="signature-line"></div>
-              <p class="signature-label">Signature Client</p>
+              <p>Signature Client</p>
             </div>
-            
             ${cachetHtml}
-            
             <div class="signature-box">
               <div class="signature-line"></div>
-              <p class="signature-label">Signature Vendeur</p>
+              <p>Signature Vendeur</p>
             </div>
           </div>
           
           <div class="footer">
-            <p style="font-weight: 600; color: #2563eb; font-size: 16px;">
-              ${parametres.pied || "Merci de votre confiance !"}
-            </p>
-            ${hasLotInfo ? `
-              <p style="margin-top: 10px; color: #16a34a; font-size: 14px;">
-                🏷️ Vente avec traçabilité multi-lots • Qualité et sécurité garanties
-              </p>
-            ` : ''}
-            <p class="print-info">
+            <p>${parametres.pied}</p>
+            ${hasLotInfo ? '<p style="margin-top: 10px; color: #16a34a;">Vente avec traçabilité multi-lots • Qualité et sécurité garanties</p>' : ''}
+            <p style="font-size: 12px; color: #6b7280; margin-top: 10px;">
               Document imprimé le ${new Date().toLocaleString('fr-FR')} par ${user.email || 'Utilisateur'}
-              ${hasLotInfo ? ' • Système multi-lots activé' : ''}
             </p>
           </div>
         </body>
@@ -1255,61 +758,25 @@ export default function Ventes() {
     printWindow.print();
   };
 
-  /**
-   * Exporte les ventes en CSV avec informations multi-lots
-   */
-  const handleExportCSV = () => {
-    const csvContent = [
-      ["Date", "Client", "Produits", "Lots", "Fournisseurs", "Quantités", "Total", "Statut", "Mode Paiement"],
-      ...ventesFiltrees.map(v => [
-        v.date?.toDate().toLocaleDateString('fr-FR'),
-        v.client,
-        v.articles.map(a => a.produit).join("; "),
-        v.articles.map(a => a.numeroLot || "N/A").join("; "),
-        v.articles.map(a => a.fournisseur || "N/A").join("; "),
-        v.articles.map(a => a.quantite).join("; "),
-        v.montantTotal || v.articles.reduce((sum, a) => sum + (a.prixUnitaire * a.quantite - a.remise), 0),
-        v.statutPaiement,
-        v.modePaiement || "Espèces"
-      ])
-    ].map(row => row.join(",")).join("\n");
-
-    const blob = new Blob([csvContent], { type: 'text/csv' });
-    const url = window.URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `ventes_multi_lots_${new Date().toISOString().split('T')[0]}.csv`;
-    a.click();
-  };
-
   // ============ UTILITAIRES ============
-  /**
-   * Réinitialise le formulaire
-   */
   const resetForm = () => {
-    setClient("");
-    setDateVente("");
+    setClient("(passant)");
+    setDateVente(new Date().toISOString().split('T')[0]);
     setStatutPaiement("payé");
     setModePaiement("Espèces");
     setNotesVente("");
     setArticles([]);
     setProduit("");
-    setProduitNouveau("");
     setQuantite(1);
     setPrixUnitaire("");
     setRemiseArticle(0);
     setSelectedLot("");
     setAvailableLots([]);
-    setShowLotSelector(false);
     setEditId(null);
     setIsEditing(false);
     setError("");
   };
 
-  // ============ CALCULS ET FILTRAGE ============
-  /**
-   * Calcul du total de la vente en cours
-   */
   const totalVenteCourante = useMemo(() => {
     return articles.reduce(
       (t, a) => t + ((a.prixUnitaire || 0) * (a.quantite || 0) - (a.remise || 0)),
@@ -1317,1089 +784,1576 @@ export default function Ventes() {
     );
   }, [articles]);
 
-  /**
-   * Filtrage des ventes
-   */
   const ventesFiltrees = useMemo(() => {
     return ventes.filter((v) => {
       let keep = true;
       
-      // Filtre par client
-      if (filterClient && v.client !== filterClient) keep = false;
-      
-      // Filtre par date min
-      if (filterDateMin) {
-        const vd = v.date?.toDate?.() || null;
-        if (!vd || vd < new Date(filterDateMin)) keep = false;
-      }
-      
-      // Filtre par date max
-      if (filterDateMax) {
-        const vd = v.date?.toDate?.() || null;
-        if (!vd || vd > new Date(filterDateMax + "T23:59:59")) keep = false;
-      }
-      
-      // Filtre par statut
       if (filterStatut && v.statutPaiement !== filterStatut) keep = false;
       
-      // Recherche textuelle
       if (searchTerm) {
         const search = searchTerm.toLowerCase();
         const clientMatch = v.client?.toLowerCase().includes(search);
         const produitMatch = v.articles?.some(a => 
           a.produit?.toLowerCase().includes(search) ||
-          a.numeroLot?.toLowerCase().includes(search) ||
-          a.fournisseur?.toLowerCase().includes(search)
+          a.numeroLot?.toLowerCase().includes(search)
         );
         keep = keep && (clientMatch || produitMatch);
       }
       
       return keep;
     });
-  }, [ventes, filterClient, filterDateMin, filterDateMax, filterStatut, searchTerm]);
+  }, [ventes, filterStatut, searchTerm]);
 
-  /**
-   * Statistiques des ventes avec informations multi-lots
-   */
-  const stats = useMemo(() => {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    
-    const ventesJour = ventesFiltrees.filter(v => {
-      const vd = v.date?.toDate?.();
-      return vd && vd >= today;
-    });
-    
-    const totalJour = ventesJour.reduce((sum, v) => 
-      sum + (v.montantTotal || v.articles.reduce((s, a) => 
-        s + (a.prixUnitaire * a.quantite - a.remise), 0)), 0
-    );
-    
-    const totalMois = ventesFiltrees.filter(v => {
-      const vd = v.date?.toDate?.();
-      return vd && vd.getMonth() === today.getMonth() && vd.getFullYear() === today.getFullYear();
-    }).reduce((sum, v) => 
-      sum + (v.montantTotal || v.articles.reduce((s, a) => 
-        s + (a.prixUnitaire * a.quantite - a.remise), 0)), 0
-    );
-    
-    // 🆕 Statistiques multi-lots
-    const ventesAvecLots = ventesFiltrees.filter(v => 
-      v.articles?.some(a => a.numeroLot)
-    ).length;
-    
-    const totalArticlesAvecLots = ventesFiltrees.reduce((sum, v) => 
-      sum + (v.articles?.filter(a => a.numeroLot).length || 0), 0
-    );
-    
-    return {
-      ventesJour: ventesJour.length,
-      totalJour,
-      totalMois,
-      totalVentes: ventesFiltrees.length,
-      ventesAvecLots,
-      totalArticlesAvecLots
-    };
-  }, [ventesFiltrees]);
-
-  // ============ HOOKS EFFECTS ============
+  // ============ HOOKS ============
   useEffect(() => {
     fetchVentes();
   }, [fetchVentes]);
 
   useEffect(() => {
     fetchMedicaments();
-    fetchStockEntries(); // 🆕
+    fetchStockEntries();
     fetchParametres();
   }, [fetchMedicaments, fetchStockEntries, fetchParametres]);
 
-  // ============ AFFICHAGE CONDITIONNEL ============
+  useEffect(() => {
+    if (!isEditing) {
+      resetForm();
+    }
+  }, []);
+
+  // ============ RENDU ============
   if (waiting) {
     return (
       <div style={{ 
-        padding: 30, 
-        textAlign: "center", 
-        color: "#1c355e",
-        fontSize: "18px"
+        minHeight: '100vh',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+        color: 'white'
       }}>
-        <div className="spinner"></div>
-        Chargement en cours...
+        <div style={{
+          textAlign: 'center',
+          padding: '40px',
+          borderRadius: '16px',
+          background: 'rgba(255, 255, 255, 0.1)',
+          backdropFilter: 'blur(10px)',
+          border: '1px solid rgba(255, 255, 255, 0.2)'
+        }}>
+          <div style={{
+            width: '50px',
+            height: '50px',
+            border: '4px solid rgba(255, 255, 255, 0.3)',
+            borderTop: '4px solid white',
+            borderRadius: '50%',
+            animation: 'spin 1s linear infinite',
+            margin: '0 auto 20px'
+          }}></div>
+          <h3 style={{ margin: 0, fontSize: '18px' }}>Chargement en cours...</h3>
+          <style>
+            {`@keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }`}
+          </style>
+        </div>
       </div>
     );
   }
 
-  if (!user) {
+  if (!user || !societeId) {
     return (
       <div style={{ 
-        padding: 30, 
-        textAlign: "center", 
-        color: "#dc2626",
-        fontSize: "18px",
-        background: "#fee2e2",
-        borderRadius: "8px",
-        margin: "20px"
+        minHeight: '100vh',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        background: 'linear-gradient(135deg, #f093fb 0%, #f5576c 100%)',
+        color: 'white'
       }}>
-        ⚠️ Utilisateur non connecté. Veuillez vous connecter pour accéder à cette page.
+        <div style={{
+          textAlign: 'center',
+          padding: '40px',
+          borderRadius: '16px',
+          background: 'rgba(255, 255, 255, 0.1)',
+          backdropFilter: 'blur(10px)',
+          border: '1px solid rgba(255, 255, 255, 0.2)'
+        }}>
+          <h3 style={{ margin: '0 0 10px', fontSize: '18px' }}>Accès non autorisé</h3>
+          <p style={{ margin: 0, opacity: 0.9 }}>Utilisateur non connecté ou société non sélectionnée.</p>
+        </div>
       </div>
     );
   }
 
-  if (!societeId) {
-    return (
-      <div style={{ 
-        padding: 30, 
-        textAlign: "center", 
-        color: "#dc2626",
-        fontSize: "18px",
-        background: "#fee2e2",
-        borderRadius: "8px",
-        margin: "20px"
-      }}>
-        ⚠️ Aucune société sélectionnée. Veuillez sélectionner une société.
-      </div>
-    );
-  }
-
-  // ============ RENDU PRINCIPAL ============
   return (
-    <div className="fullscreen-table-wrap">
-      {/* En-tête */}
-      <div className="fullscreen-table-title">
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <span>📊 Gestion des Ventes Multi-Lots</span>
-          <div style={{ display: "flex", gap: "10px" }}>
-            <button 
-              className="btn success"
-              onClick={handleExportCSV}
-              style={{ fontSize: "14px" }}
-            >
-              📥 Exporter CSV
-            </button>
+    <div style={{
+      minHeight: '100vh',
+      background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+      padding: '20px',
+      fontFamily: '"Inter", -apple-system, BlinkMacSystemFont, sans-serif'
+    }}>
+      {/* Header moderne */}
+      <div style={{
+        background: 'rgba(255, 255, 255, 0.95)',
+        backdropFilter: 'blur(20px)',
+        borderRadius: '24px',
+        padding: '30px',
+        marginBottom: '30px',
+        border: '1px solid rgba(255, 255, 255, 0.2)',
+        boxShadow: '0 20px 40px rgba(0, 0, 0, 0.1)'
+      }}>
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          flexWrap: 'wrap',
+          gap: '20px'
+        }}>
+          <div>
+            <h1 style={{
+              margin: 0,
+              fontSize: '32px',
+              fontWeight: '800',
+              background: 'linear-gradient(135deg, #667eea, #764ba2)',
+              WebkitBackgroundClip: 'text',
+              WebkitTextFillColor: 'transparent',
+              backgroundClip: 'text'
+            }}>
+              Gestion des Ventes
+            </h1>
+            <p style={{
+              margin: '8px 0 0',
+              color: '#6b7280',
+              fontSize: '16px'
+            }}>
+              Système de vente multi-lots avec traçabilité complète
+            </p>
           </div>
+          
+          <button
+            onClick={() => {
+              setShowForm(!showForm);
+              if (!showForm) resetForm();
+            }}
+            style={{
+              background: showForm 
+                ? 'linear-gradient(135deg, #ef4444, #dc2626)' 
+                : 'linear-gradient(135deg, #3b82f6, #2563eb)',
+              color: 'white',
+              border: 'none',
+              padding: '16px 32px',
+              borderRadius: '16px',
+              fontSize: '16px',
+              fontWeight: '600',
+              cursor: 'pointer',
+              transition: 'all 0.3s ease',
+              boxShadow: '0 8px 25px rgba(59, 130, 246, 0.3)',
+              transform: 'translateY(0)',
+            }}
+            onMouseEnter={(e) => {
+              e.target.style.transform = 'translateY(-2px)';
+              e.target.style.boxShadow = '0 12px 35px rgba(59, 130, 246, 0.4)';
+            }}
+            onMouseLeave={(e) => {
+              e.target.style.transform = 'translateY(0)';
+              e.target.style.boxShadow = '0 8px 25px rgba(59, 130, 246, 0.3)';
+            }}
+          >
+            {showForm ? '✕ Fermer' : '+ Nouvelle Vente'}
+          </button>
         </div>
       </div>
 
-      {/* Messages d'erreur et de succès */}
+      {/* Notifications modernes */}
       {error && (
         <div style={{
-          padding: "12px 20px",
-          background: "#fee2e2",
-          color: "#dc2626",
-          borderRadius: "6px",
-          margin: "10px 0",
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center"
+          background: 'rgba(254, 226, 226, 0.95)',
+          backdropFilter: 'blur(10px)',
+          color: '#dc2626',
+          padding: '20px',
+          borderRadius: '16px',
+          marginBottom: '24px',
+          border: '1px solid rgba(220, 38, 38, 0.2)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          boxShadow: '0 8px 25px rgba(220, 38, 38, 0.1)'
         }}>
-          <span>❌ {error}</span>
-          <button 
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <div style={{
+              width: '24px',
+              height: '24px',
+              borderRadius: '50%',
+              background: '#dc2626',
+              color: 'white',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              fontSize: '14px',
+              fontWeight: '600'
+            }}>!</div>
+            <span style={{ fontSize: '16px', fontWeight: '500' }}>{error}</span>
+          </div>
+          <button
             onClick={() => setError("")}
-            style={{ background: "none", border: "none", cursor: "pointer", fontSize: "18px" }}
+            style={{
+              background: 'none',
+              border: 'none',
+              color: '#dc2626',
+              cursor: 'pointer',
+              fontSize: '24px',
+              padding: '4px',
+              borderRadius: '8px',
+              transition: 'background 0.2s ease'
+            }}
+            onMouseEnter={(e) => e.target.style.background = 'rgba(220, 38, 38, 0.1)'}
+            onMouseLeave={(e) => e.target.style.background = 'none'}
           >
-            ✕
+            ×
           </button>
         </div>
       )}
 
       {success && (
         <div style={{
-          padding: "12px 20px",
-          background: "#dcfce7",
-          color: "#16a34a",
-          borderRadius: "6px",
-          margin: "10px 0",
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center"
+          background: 'rgba(220, 252, 231, 0.95)',
+          backdropFilter: 'blur(10px)',
+          color: '#16a34a',
+          padding: '20px',
+          borderRadius: '16px',
+          marginBottom: '24px',
+          border: '1px solid rgba(22, 163, 74, 0.2)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          boxShadow: '0 8px 25px rgba(22, 163, 74, 0.1)'
         }}>
-          <span>✅ {success}</span>
-          <button 
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <div style={{
+              width: '24px',
+              height: '24px',
+              borderRadius: '50%',
+              background: '#16a34a',
+              color: 'white',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              fontSize: '14px',
+              fontWeight: '600'
+            }}>✓</div>
+            <span style={{ fontSize: '16px', fontWeight: '500' }}>{success}</span>
+          </div>
+          <button
             onClick={() => setSuccess("")}
-            style={{ background: "none", border: "none", cursor: "pointer", fontSize: "18px" }}
+            style={{
+              background: 'none',
+              border: 'none',
+              color: '#16a34a',
+              cursor: 'pointer',
+              fontSize: '24px',
+              padding: '4px',
+              borderRadius: '8px',
+              transition: 'background 0.2s ease'
+            }}
+            onMouseEnter={(e) => e.target.style.background = 'rgba(22, 163, 74, 0.1)'}
+            onMouseLeave={(e) => e.target.style.background = 'none'}
           >
-            ✕
+            ×
           </button>
         </div>
       )}
 
-      {/* 🆕 Statistiques multi-lots rapides */}
-      {showStats && (
-        <div style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))",
-          gap: "15px",
-          marginBottom: "20px"
-        }}>
-          <div className="stat-card" style={{
-            padding: "15px",
-            background: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
-            color: "white",
-            borderRadius: "8px"
-          }}>
-            <div style={{ fontSize: "14px", opacity: 0.9 }}>Ventes du jour</div>
-            <div style={{ fontSize: "24px", fontWeight: "bold" }}>{stats.ventesJour}</div>
-            <div style={{ fontSize: "16px" }}>{stats.totalJour.toFixed(2)} DH</div>
-          </div>
-          <div className="stat-card" style={{
-            padding: "15px",
-            background: "linear-gradient(135deg, #f093fb 0%, #f5576c 100%)",
-            color: "white",
-            borderRadius: "8px"
-          }}>
-            <div style={{ fontSize: "14px", opacity: 0.9 }}>Total du mois</div>
-            <div style={{ fontSize: "24px", fontWeight: "bold" }}>{stats.totalMois.toFixed(2)} DH</div>
-          </div>
-          <div className="stat-card" style={{
-            padding: "15px",
-            background: "linear-gradient(135deg, #4facfe 0%, #00f2fe 100%)",
-            color: "white",
-            borderRadius: "8px"
-          }}>
-            <div style={{ fontSize: "14px", opacity: 0.9 }}>Total ventes filtrées</div>
-            <div style={{ fontSize: "24px", fontWeight: "bold" }}>{stats.totalVentes}</div>
-          </div>
-          <div className="stat-card" style={{
-            padding: "15px",
-            background: "linear-gradient(135deg, #43e97b 0%, #38f9d7 100%)",
-            color: "white",
-            borderRadius: "8px"
-          }}>
-            <div style={{ fontSize: "14px", opacity: 0.9 }}>Ventes avec traçabilité</div>
-            <div style={{ fontSize: "24px", fontWeight: "bold" }}>{stats.ventesAvecLots}</div>
-            <div style={{ fontSize: "12px", opacity: 0.8 }}>{stats.totalArticlesAvecLots} articles tracés</div>
-          </div>
-        </div>
-      )}
-
-      {/* Boutons de contrôle */}
-      <div style={{ display: "flex", gap: "10px", marginBottom: "15px", flexWrap: "wrap" }}>
-        {/* Toggle Formulaire */}
-        <button
-          className="btn"
-          type="button"
-          style={{
-            background: showForm
-              ? "linear-gradient(90deg,#dc2626 60%,#fca5a5 100%)"
-              : "linear-gradient(90deg,#2563eb 50%,#60a5fa 100%)",
-            display: "flex",
-            alignItems: "center",
-            gap: "8px"
-          }}
-          onClick={() => {
-            setShowForm(!showForm);
-            if (!showForm) resetForm();
-          }}
-        >
-          {showForm ? "➖" : "➕"} 
-          <span>{showForm ? "Masquer" : "Afficher"} le formulaire</span>
-        </button>
-
-        {/* Toggle Filtres */}
-        <button
-          className="btn"
-          type="button"
-          style={{
-            background: showFiltres
-              ? "linear-gradient(90deg,#dc2626 60%,#fca5a5 100%)"
-              : "linear-gradient(90deg,#059669 50%,#34d399 100%)",
-            display: "flex",
-            alignItems: "center",
-            gap: "8px"
-          }}
-          onClick={() => setShowFiltres(!showFiltres)}
-        >
-          {showFiltres ? "➖" : "🔍"} 
-          <span>{showFiltres ? "Masquer" : "Afficher"} les filtres</span>
-        </button>
-
-        {/* Toggle Stats */}
-        <button
-          className="btn"
-          type="button"
-          style={{
-            background: showStats
-              ? "linear-gradient(90deg,#dc2626 60%,#fca5a5 100%)"
-              : "linear-gradient(90deg,#7c3aed 50%,#a78bfa 100%)",
-            display: "flex",
-            alignItems: "center",
-            gap: "8px"
-          }}
-          onClick={() => setShowStats(!showStats)}
-        >
-          {showStats ? "➖" : "📈"} 
-          <span>{showStats ? "Masquer" : "Afficher"} les statistiques</span>
-        </button>
-      </div>
-
-      {/* FORMULAIRE D'AJOUT/MODIFICATION AVEC GESTION MULTI-LOTS */}
+      {/* Formulaire moderne */}
       {showForm && (
-        <div className="form-section" style={{
-          background: "#f9fafb",
-          padding: "20px",
-          borderRadius: "8px",
-          marginBottom: "20px",
-          border: "1px solid #e5e7eb"
+        <div style={{
+          background: 'rgba(255, 255, 255, 0.95)',
+          backdropFilter: 'blur(20px)',
+          borderRadius: '24px',
+          padding: '32px',
+          marginBottom: '30px',
+          border: '1px solid rgba(255, 255, 255, 0.2)',
+          boxShadow: '0 20px 40px rgba(0, 0, 0, 0.1)'
         }}>
-          {/* Titre du formulaire */}
-          <h3 style={{ marginBottom: "15px", color: "#1f2937", fontSize: "18px" }}>
-            {isEditing ? "📝 Modifier la vente" : "➕ Nouvelle vente multi-lots"}
-          </h3>
-
-          {/* 🆕 Formulaire ajout article avec sélection de lots */}
-          <form onSubmit={handleAddArticle} style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
-            gap: '15px',
-            marginBottom: '20px',
-            padding: '15px',
-            background: 'white',
-            borderRadius: '6px',
-            border: '2px solid #e6fffa'
+          <h2 style={{
+            margin: '0 0 32px',
+            fontSize: '28px',
+            fontWeight: '700',
+            color: '#1f2937',
+            textAlign: 'center'
           }}>
-            <div>
-              <label style={{ fontSize: "14px", color: "#4b5563", marginBottom: "4px", display: "block" }}>
-                Médicament *
-              </label>
-              <select 
-                className="w-full" 
-                value={produit} 
-                onChange={(e) => handleProduitChange(e.target.value)} 
-                required
-                style={{ padding: "8px", borderRadius: "4px", border: "1px solid #d1d5db" }}
-              >
-                <option value="">-- Sélectionner --</option>
-                {getAllAvailableMedicaments.map(m => (
-                  <option key={m.nom} value={m.nom}>
-                    {m.nom} ({m.hasLots ? "Lots" : "Stock"}: {m.quantiteTotal})
-                    {m.hasLots ? " 🏷️" : ""}
-                  </option>
-                ))}
-                <option value="_new_">➕ Nouveau médicament</option>
-              </select>
-            </div>
+            {isEditing ? 'Modifier la vente' : 'Nouvelle vente multi-lots'}
+          </h2>
 
-            {/* 🆕 Sélecteur de lots */}
-            {showLotSelector && availableLots.length > 0 && (
-              <div style={{ gridColumn: "1 / -1" }}>
-                <label style={{ fontSize: "14px", color: "#4b5563", marginBottom: "8px", display: "block" }}>
-                  🏷️ Sélectionner un lot spécifique (FIFO recommandé)
-                </label>
-                <div style={{ 
-                  display: "grid", 
-                  gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))",
-                  gap: "10px"
-                }}>
-                  {availableLots.map(lot => {
-                    const isExpired = lot.datePeremption && new Date(lot.datePeremption) < new Date();
-                    const isExpiringSoon = lot.datePeremption && !isExpired && 
-                      new Date(lot.datePeremption) <= new Date(Date.now() + 30*24*60*60*1000);
-                    
-                    return (
-                      <div
-                        key={lot.id}
-                        onClick={() => handleLotSelection(lot.id)}
-                        style={{
-                          padding: "12px",
-                          border: selectedLot === lot.id ? "2px solid #10b981" : "1px solid #d1d5db",
-                          borderRadius: "8px",
-                          cursor: "pointer",
-                          background: selectedLot === lot.id ? "#dcfce7" : "#f9fafb",
-                          transition: "all 0.2s",
-                          ...(isExpired ? { borderColor: "#dc2626", background: "#fee2e2" } :
-                              isExpiringSoon ? { borderColor: "#f59e0b", background: "#fef3c7" } : {})
-                        }}
-                      >
-                        <div style={{ fontWeight: "600", color: "#1f2937" }}>
-                          📦 Lot: {lot.numeroLot} • Qté: {lot.quantite}
-                        </div>
-                        <div style={{ fontSize: "12px", color: "#6b7280", marginTop: "4px" }}>
-                          🏭 {lot.fournisseur} • 💰 {lot.prixVente} DH
-                        </div>
-                        <div style={{ fontSize: "12px", color: isExpired ? "#dc2626" : isExpiringSoon ? "#d97706" : "#6b7280" }}>
-                          📅 Exp: {lot.datePeremption}
-                          {isExpired && " ⚠️ EXPIRÉ"}
-                          {isExpiringSoon && " ⏰ Expire bientôt"}
-                        </div>
-                      </div>
-                    );
-                  })}
+          {/* Section ajout d'articles */}
+          <div style={{
+            background: 'linear-gradient(135deg, #f0f9ff, #e0f2fe)',
+            borderRadius: '20px',
+            padding: '24px',
+            marginBottom: '32px',
+            border: '2px solid #0ea5e9'
+          }}>
+            <h3 style={{
+              margin: '0 0 24px',
+              color: '#0c4a6e',
+              fontSize: '20px',
+              fontWeight: '600'
+            }}>
+              Ajouter des articles
+            </h3>
+
+            <form onSubmit={handleAddArticle}>
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))',
+                gap: '20px',
+                marginBottom: '24px'
+              }}>
+                <div>
+                  <label style={{
+                    display: 'block',
+                    fontSize: '14px',
+                    fontWeight: '600',
+                    color: '#374151',
+                    marginBottom: '8px'
+                  }}>
+                    Médicament *
+                  </label>
+                  <select 
+                    value={produit} 
+                    onChange={(e) => handleProduitChange(e.target.value)} 
+                    required
+                    style={{
+                      width: '100%',
+                      padding: '12px 16px',
+                      borderRadius: '12px',
+                      border: '2px solid #e5e7eb',
+                      fontSize: '16px',
+                      background: 'white',
+                      transition: 'all 0.2s ease',
+                      outline: 'none'
+                    }}
+                    onFocus={(e) => e.target.style.borderColor = '#3b82f6'}
+                    onBlur={(e) => e.target.style.borderColor = '#e5e7eb'}
+                  >
+                    <option value="">-- Sélectionner un médicament --</option>
+                    {getAllAvailableMedicaments.map(m => (
+                      <option key={m.nom} value={m.nom}>
+                        {m.nom} ({m.hasLots ? "Lots" : "Stock"}: {m.quantiteTotal})
+                      </option>
+                    ))}
+                  </select>
                 </div>
-                <div style={{ fontSize: "12px", color: "#6b7280", marginTop: "8px" }}>
-                  💡 Conseil: Sélectionnez le lot avec la date d'expiration la plus proche (FIFO - First In, First Out)
+
+                <div>
+                  <label style={{
+                    display: 'block',
+                    fontSize: '14px',
+                    fontWeight: '600',
+                    color: '#374151',
+                    marginBottom: '8px'
+                  }}>
+                    Quantité *
+                  </label>
+                  <input 
+                    type="number" 
+                    value={quantite} 
+                    onChange={(e) => setQuantite(e.target.value)} 
+                    required 
+                    min={1}
+                    style={{
+                      width: '100%',
+                      padding: '12px 16px',
+                      borderRadius: '12px',
+                      border: '2px solid #e5e7eb',
+                      fontSize: '16px',
+                      background: 'white',
+                      transition: 'all 0.2s ease',
+                      outline: 'none'
+                    }}
+                    onFocus={(e) => e.target.style.borderColor = '#3b82f6'}
+                    onBlur={(e) => e.target.style.borderColor = '#e5e7eb'}
+                  />
+                </div>
+
+                <div>
+                  <label style={{
+                    display: 'block',
+                    fontSize: '14px',
+                    fontWeight: '600',
+                    color: '#374151',
+                    marginBottom: '8px'
+                  }}>
+                    Prix unitaire (DH) *
+                  </label>
+                  <input 
+                    type="number" 
+                    value={prixUnitaire} 
+                    onChange={(e) => setPrixUnitaire(e.target.value)} 
+                    required 
+                    min={0}
+                    step="0.01"
+                    style={{
+                      width: '100%',
+                      padding: '12px 16px',
+                      borderRadius: '12px',
+                      border: '2px solid #e5e7eb',
+                      fontSize: '16px',
+                      background: 'white',
+                      transition: 'all 0.2s ease',
+                      outline: 'none'
+                    }}
+                    onFocus={(e) => e.target.style.borderColor = '#3b82f6'}
+                    onBlur={(e) => e.target.style.borderColor = '#e5e7eb'}
+                  />
+                </div>
+
+                <div>
+                  <label style={{
+                    display: 'block',
+                    fontSize: '14px',
+                    fontWeight: '600',
+                    color: '#374151',
+                    marginBottom: '8px'
+                  }}>
+                    Remise (DH)
+                  </label>
+                  <input 
+                    type="number" 
+                    value={remiseArticle} 
+                    onChange={(e) => setRemiseArticle(e.target.value)} 
+                    min={0}
+                    step="0.01"
+                    style={{
+                      width: '100%',
+                      padding: '12px 16px',
+                      borderRadius: '12px',
+                      border: '2px solid #e5e7eb',
+                      fontSize: '16px',
+                      background: 'white',
+                      transition: 'all 0.2s ease',
+                      outline: 'none'
+                    }}
+                    onFocus={(e) => e.target.style.borderColor = '#3b82f6'}
+                    onBlur={(e) => e.target.style.borderColor = '#e5e7eb'}
+                  />
                 </div>
               </div>
-            )}
 
-            {produit === "_new_" && (
-              <div>
-                <label style={{ fontSize: "14px", color: "#4b5563", marginBottom: "4px", display: "block" }}>
-                  Nom du nouveau médicament *
+              {/* Sélection des lots */}
+              {availableLots.length > 0 && (
+                <div style={{ marginBottom: '24px' }}>
+                  <label style={{
+                    display: 'block',
+                    fontSize: '16px',
+                    fontWeight: '600',
+                    color: '#374151',
+                    marginBottom: '16px'
+                  }}>
+                    Sélectionner un lot spécifique (FIFO recommandé)
+                  </label>
+                  <div style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))',
+                    gap: '16px'
+                  }}>
+                    {availableLots.map(lot => {
+                      const lotDate = safeParseDate(lot.datePeremption);
+                      const isExpired = lotDate && lotDate < new Date();
+                      const isExpiringSoon = lotDate && !isExpired && 
+                        lotDate <= new Date(Date.now() + 30*24*60*60*1000);
+                      
+                      return (
+                        <div
+                          key={lot.id}
+                          onClick={() => handleLotSelection(lot.id)}
+                          style={{
+                            padding: '16px',
+                            borderRadius: '16px',
+                            cursor: 'pointer',
+                            transition: 'all 0.3s ease',
+                            border: selectedLot === lot.id ? '3px solid #10b981' : '2px solid #e5e7eb',
+                            background: selectedLot === lot.id 
+                              ? 'linear-gradient(135deg, #dcfce7, #bbf7d0)' 
+                              : isExpired 
+                              ? 'linear-gradient(135deg, #fee2e2, #fecaca)'
+                              : isExpiringSoon
+                              ? 'linear-gradient(135deg, #fef3c7, #fed7aa)'
+                              : 'linear-gradient(135deg, #f9fafb, #f3f4f6)',
+                            transform: selectedLot === lot.id ? 'scale(1.02)' : 'scale(1)',
+                            boxShadow: selectedLot === lot.id 
+                              ? '0 12px 25px rgba(16, 185, 129, 0.2)' 
+                              : '0 4px 12px rgba(0, 0, 0, 0.05)'
+                          }}
+                        >
+                          <div style={{
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            alignItems: 'center',
+                            marginBottom: '8px'
+                          }}>
+                            <span style={{
+                              fontWeight: '700',
+                              fontSize: '16px',
+                              color: '#1f2937'
+                            }}>
+                              Lot: {lot.numeroLot}
+                            </span>
+                            <span style={{
+                              background: selectedLot === lot.id ? '#10b981' : '#6b7280',
+                              color: 'white',
+                              padding: '4px 12px',
+                              borderRadius: '20px',
+                              fontSize: '12px',
+                              fontWeight: '600'
+                            }}>
+                              Qté: {lot.quantite}
+                            </span>
+                          </div>
+                          
+                          <div style={{
+                            fontSize: '14px',
+                            color: '#6b7280',
+                            marginBottom: '8px'
+                          }}>
+                            <span style={{
+                              background: '#dbeafe',
+                              color: '#2563eb',
+                              padding: '2px 8px',
+                              borderRadius: '12px',
+                              marginRight: '8px',
+                              fontSize: '12px',
+                              fontWeight: '500'
+                            }}>
+                              {lot.fournisseur}
+                            </span>
+                            <span style={{
+                              background: '#f3e8ff',
+                              color: '#7c3aed',
+                              padding: '2px 8px',
+                              borderRadius: '12px',
+                              fontSize: '12px',
+                              fontWeight: '600'
+                            }}>
+                              {lot.prixVente} DH
+                            </span>
+                          </div>
+                          
+                          <div style={{
+                            fontSize: '13px',
+                            fontWeight: '600',
+                            color: isExpired ? '#dc2626' : isExpiringSoon ? '#d97706' : '#16a34a'
+                          }}>
+                            Exp: {lot.datePeremption}
+                            {isExpired && ' ⚠️ EXPIRÉ'}
+                            {isExpiringSoon && ' ⏰ Expire bientôt'}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              <div style={{ display: 'flex', justifyContent: 'center' }}>
+                <button 
+                  type="submit" 
+                  disabled={isSaving}
+                  style={{
+                    background: 'linear-gradient(135deg, #10b981, #059669)',
+                    color: 'white',
+                    border: 'none',
+                    padding: '14px 32px',
+                    borderRadius: '16px',
+                    fontSize: '16px',
+                    fontWeight: '600',
+                    cursor: isSaving ? 'not-allowed' : 'pointer',
+                    opacity: isSaving ? 0.7 : 1,
+                    transition: 'all 0.3s ease',
+                    boxShadow: '0 8px 25px rgba(16, 185, 129, 0.3)',
+                    transform: 'translateY(0)'
+                  }}
+                  onMouseEnter={(e) => {
+                    if (!isSaving) {
+                      e.target.style.transform = 'translateY(-2px)';
+                      e.target.style.boxShadow = '0 12px 35px rgba(16, 185, 129, 0.4)';
+                    }
+                  }}
+                  onMouseLeave={(e) => {
+                    e.target.style.transform = 'translateY(0)';
+                    e.target.style.boxShadow = '0 8px 25px rgba(16, 185, 129, 0.3)';
+                  }}
+                >
+                  {isSaving ? 'Ajout...' : 'Ajouter l\'article'}
+                </button>
+              </div>
+            </form>
+          </div>
+
+          {/* Liste des articles */}
+          {articles.length > 0 && (
+            <div style={{
+              background: 'linear-gradient(135deg, #fff7ed, #fed7aa)',
+              borderRadius: '20px',
+              padding: '24px',
+              marginBottom: '32px',
+              border: '2px solid #f97316'
+            }}>
+              <h3 style={{
+                margin: '0 0 20px',
+                color: '#c2410c',
+                fontSize: '20px',
+                fontWeight: '600',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px'
+              }}>
+                Articles de la vente ({articles.length})
+              </h3>
+
+              <div style={{
+                background: 'white',
+                borderRadius: '16px',
+                overflow: 'hidden',
+                boxShadow: '0 8px 25px rgba(0, 0, 0, 0.1)'
+              }}>
+                <div style={{ overflowX: 'auto' }}>
+                  <table style={{ width: '100%', minWidth: '600px', borderCollapse: 'collapse' }}>
+                    <thead>
+                      <tr style={{
+                        background: 'linear-gradient(135deg, #f97316, #ea580c)',
+                        color: 'white'
+                      }}>
+                        <th style={{ 
+                          padding: '16px',
+                          textAlign: 'left',
+                          fontWeight: '600',
+                          fontSize: '14px',
+                          letterSpacing: '0.5px'
+                        }}>
+                          Produit / Traçabilité
+                        </th>
+                        <th style={{ 
+                          padding: '16px',
+                          textAlign: 'center',
+                          fontWeight: '600',
+                          fontSize: '14px'
+                        }}>
+                          Qté
+                        </th>
+                        <th style={{ 
+                          padding: '16px',
+                          textAlign: 'right',
+                          fontWeight: '600',
+                          fontSize: '14px'
+                        }}>
+                          Prix unit.
+                        </th>
+                        <th style={{ 
+                          padding: '16px',
+                          textAlign: 'right',
+                          fontWeight: '600',
+                          fontSize: '14px'
+                        }}>
+                          Remise
+                        </th>
+                        <th style={{ 
+                          padding: '16px',
+                          textAlign: 'right',
+                          fontWeight: '600',
+                          fontSize: '14px'
+                        }}>
+                          Total
+                        </th>
+                        <th style={{ 
+                          padding: '16px',
+                          textAlign: 'center',
+                          fontWeight: '600',
+                          fontSize: '14px',
+                          width: '60px'
+                        }}>
+                          Action
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {articles.map((a, i) => (
+                        <tr key={i} style={{
+                          borderBottom: '1px solid #f3f4f6',
+                          transition: 'background 0.2s ease'
+                        }}
+                        onMouseEnter={(e) => e.target.closest('tr').style.background = '#fafafa'}
+                        onMouseLeave={(e) => e.target.closest('tr').style.background = 'white'}>
+                          <td style={{ padding: '16px' }}>
+                            <div style={{ fontWeight: '600', color: '#1f2937', marginBottom: '4px' }}>
+                              {a.produit}
+                            </div>
+                            {(a.numeroLot || a.fournisseur || a.datePeremption) && (
+                              <div style={{
+                                fontSize: '12px',
+                                color: '#6b7280',
+                                background: '#f8fafc',
+                                padding: '8px',
+                                borderRadius: '8px',
+                                border: '1px solid #e5e7eb'
+                              }}>
+                                {a.numeroLot && (
+                                  <span style={{
+                                    background: '#dcfce7',
+                                    color: '#16a34a',
+                                    padding: '2px 6px',
+                                    borderRadius: '8px',
+                                    fontSize: '11px',
+                                    fontWeight: '500',
+                                    marginRight: '6px'
+                                  }}>
+                                    Lot: {a.numeroLot}
+                                  </span>
+                                )}
+                                {a.fournisseur && (
+                                  <span style={{
+                                    background: '#dbeafe',
+                                    color: '#2563eb',
+                                    padding: '2px 6px',
+                                    borderRadius: '8px',
+                                    fontSize: '11px',
+                                    fontWeight: '500',
+                                    marginRight: '6px'
+                                  }}>
+                                    {a.fournisseur}
+                                  </span>
+                                )}
+                                {a.datePeremption && (
+                                  <div style={{ marginTop: '4px', fontSize: '11px' }}>
+                                    Exp: {a.datePeremption}
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                          </td>
+                          <td style={{
+                            padding: '16px',
+                            textAlign: 'center',
+                            fontWeight: '600',
+                            fontSize: '16px'
+                          }}>
+                            {a.quantite}
+                          </td>
+                          <td style={{
+                            padding: '16px',
+                            textAlign: 'right',
+                            fontWeight: '500',
+                            fontSize: '15px'
+                          }}>
+                            {a.prixUnitaire.toFixed(2)} DH
+                          </td>
+                          <td style={{
+                            padding: '16px',
+                            textAlign: 'right',
+                            fontWeight: '500',
+                            fontSize: '15px',
+                            color: a.remise > 0 ? '#dc2626' : '#6b7280'
+                          }}>
+                            {a.remise.toFixed(2)} DH
+                          </td>
+                          <td style={{
+                            padding: '16px',
+                            textAlign: 'right',
+                            fontWeight: '700',
+                            fontSize: '16px',
+                            color: '#16a34a'
+                          }}>
+                            {((a.prixUnitaire * a.quantite) - a.remise).toFixed(2)} DH
+                          </td>
+                          <td style={{
+                            padding: '16px',
+                            textAlign: 'center'
+                          }}>
+                            <button 
+                              onClick={() => handleRemoveArticle(i)}
+                              style={{
+                                background: 'linear-gradient(135deg, #ef4444, #dc2626)',
+                                color: 'white',
+                                border: 'none',
+                                borderRadius: '8px',
+                                padding: '6px 12px',
+                                cursor: 'pointer',
+                                fontSize: '12px',
+                                fontWeight: '600',
+                                transition: 'all 0.2s ease'
+                              }}
+                              onMouseEnter={(e) => {
+                                e.target.style.transform = 'scale(1.05)';
+                                e.target.style.boxShadow = '0 4px 12px rgba(239, 68, 68, 0.3)';
+                              }}
+                              onMouseLeave={(e) => {
+                                e.target.style.transform = 'scale(1)';
+                                e.target.style.boxShadow = 'none';
+                              }}
+                            >
+                              Retirer
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                      <tr style={{
+                        background: 'linear-gradient(135deg, #f0fdf4, #dcfce7)',
+                        borderTop: '2px solid #16a34a'
+                      }}>
+                        <td colSpan={4} style={{
+                          padding: '20px',
+                          textAlign: 'right',
+                          fontSize: '18px',
+                          fontWeight: '700',
+                          color: '#15803d'
+                        }}>
+                          TOTAL DE LA VENTE
+                        </td>
+                        <td style={{
+                          padding: '20px',
+                          textAlign: 'right',
+                          fontSize: '22px',
+                          fontWeight: '800',
+                          color: '#16a34a'
+                        }}>
+                          {totalVenteCourante.toFixed(2)} DH
+                        </td>
+                        <td style={{ padding: '20px' }}></td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Section finalisation de la vente */}
+          <div style={{
+            background: 'linear-gradient(135deg, #f3e8ff, #e9d5ff)',
+            borderRadius: '20px',
+            padding: '24px',
+            border: '2px solid #8b5cf6'
+          }}>
+            <h3 style={{
+              margin: '0 0 24px',
+              color: '#581c87',
+              fontSize: '20px',
+              fontWeight: '600'
+            }}>
+              Finaliser la vente
+            </h3>
+
+            <form onSubmit={handleAddVente}>
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))',
+                gap: '20px',
+                marginBottom: '24px'
+              }}>
+                <div>
+                  <label style={{
+                    display: 'block',
+                    fontSize: '14px',
+                    fontWeight: '600',
+                    color: '#374151',
+                    marginBottom: '8px'
+                  }}>
+                    Client *
+                  </label>
+                  <input 
+                    type="text" 
+                    value={client} 
+                    onChange={(e) => setClient(e.target.value)} 
+                    required
+                    placeholder="Nom du client"
+                    list="clients-list"
+                    style={{
+                      width: '100%',
+                      padding: '12px 16px',
+                      borderRadius: '12px',
+                      border: '2px solid #e5e7eb',
+                      fontSize: '16px',
+                      background: 'white',
+                      transition: 'all 0.2s ease',
+                      outline: 'none'
+                    }}
+                    onFocus={(e) => e.target.style.borderColor = '#8b5cf6'}
+                    onBlur={(e) => e.target.style.borderColor = '#e5e7eb'}
+                  />
+                  <datalist id="clients-list">
+                    {clients.map(c => <option key={c} value={c} />)}
+                  </datalist>
+                </div>
+
+                <div>
+                  <label style={{
+                    display: 'block',
+                    fontSize: '14px',
+                    fontWeight: '600',
+                    color: '#374151',
+                    marginBottom: '8px'
+                  }}>
+                    Date de vente *
+                  </label>
+                  <input 
+                    type="date" 
+                    value={dateVente} 
+                    onChange={(e) => setDateVente(e.target.value)} 
+                    required
+                    style={{
+                      width: '100%',
+                      padding: '12px 16px',
+                      borderRadius: '12px',
+                      border: '2px solid #e5e7eb',
+                      fontSize: '16px',
+                      background: 'white',
+                      transition: 'all 0.2s ease',
+                      outline: 'none'
+                    }}
+                    onFocus={(e) => e.target.style.borderColor = '#8b5cf6'}
+                    onBlur={(e) => e.target.style.borderColor = '#e5e7eb'}
+                  />
+                </div>
+
+                <div>
+                  <label style={{
+                    display: 'block',
+                    fontSize: '14px',
+                    fontWeight: '600',
+                    color: '#374151',
+                    marginBottom: '8px'
+                  }}>
+                    Statut de paiement
+                  </label>
+                  <select 
+                    value={statutPaiement} 
+                    onChange={(e) => setStatutPaiement(e.target.value)}
+                    style={{
+                      width: '100%',
+                      padding: '12px 16px',
+                      borderRadius: '12px',
+                      border: '2px solid #e5e7eb',
+                      fontSize: '16px',
+                      background: 'white',
+                      transition: 'all 0.2s ease',
+                      outline: 'none'
+                    }}
+                    onFocus={(e) => e.target.style.borderColor = '#8b5cf6'}
+                    onBlur={(e) => e.target.style.borderColor = '#e5e7eb'}
+                  >
+                    <option value="payé">Payé</option>
+                    <option value="partiel">Partiel</option>
+                    <option value="impayé">Impayé</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label style={{
+                    display: 'block',
+                    fontSize: '14px',
+                    fontWeight: '600',
+                    color: '#374151',
+                    marginBottom: '8px'
+                  }}>
+                    Mode de paiement
+                  </label>
+                  <select 
+                    value={modePaiement} 
+                    onChange={(e) => setModePaiement(e.target.value)}
+                    style={{
+                      width: '100%',
+                      padding: '12px 16px',
+                      borderRadius: '12px',
+                      border: '2px solid #e5e7eb',
+                      fontSize: '16px',
+                      background: 'white',
+                      transition: 'all 0.2s ease',
+                      outline: 'none'
+                    }}
+                    onFocus={(e) => e.target.style.borderColor = '#8b5cf6'}
+                    onBlur={(e) => e.target.style.borderColor = '#e5e7eb'}
+                  >
+                    <option value="Espèces">Espèces</option>
+                    <option value="Carte">Carte bancaire</option>
+                    <option value="Chèque">Chèque</option>
+                    <option value="Virement">Virement</option>
+                    <option value="Crédit">Crédit</option>
+                  </select>
+                </div>
+              </div>
+
+              <div style={{ marginBottom: '24px' }}>
+                <label style={{
+                  display: 'block',
+                  fontSize: '14px',
+                  fontWeight: '600',
+                  color: '#374151',
+                  marginBottom: '8px'
+                }}>
+                  Notes / Observations
                 </label>
-                <input 
-                  className="w-full" 
-                  value={produitNouveau} 
-                  onChange={(e) => setProduitNouveau(e.target.value)} 
-                  required 
-                  style={{ padding: "8px", borderRadius: "4px", border: "1px solid #d1d5db" }}
+                <textarea
+                  value={notesVente}
+                  onChange={(e) => setNotesVente(e.target.value)}
+                  rows={3}
+                  placeholder="Notes optionnelles sur la vente..."
+                  style={{
+                    width: '100%',
+                    padding: '12px 16px',
+                    borderRadius: '12px',
+                    border: '2px solid #e5e7eb',
+                    fontSize: '16px',
+                    background: 'white',
+                    transition: 'all 0.2s ease',
+                    outline: 'none',
+                    resize: 'vertical',
+                    fontFamily: 'inherit'
+                  }}
+                  onFocus={(e) => e.target.style.borderColor = '#8b5cf6'}
+                  onBlur={(e) => e.target.style.borderColor = '#e5e7eb'}
                 />
               </div>
-            )}
 
-            <div>
-              <label style={{ fontSize: "14px", color: "#4b5563", marginBottom: "4px", display: "block" }}>
-                Quantité *
-              </label>
-              <input 
-                type="number" 
-                className="w-full" 
-                value={quantite} 
-                onChange={(e) => setQuantite(e.target.value)} 
-                required 
-                min={1}
-                max={selectedLot ? availableLots.find(l => l.id === selectedLot)?.quantite : undefined}
-                style={{ padding: "8px", borderRadius: "4px", border: "1px solid #d1d5db" }}
-              />
-              {selectedLot && (
-                <div style={{ fontSize: "11px", color: "#6b7280", marginTop: "2px" }}>
-                  Max: {availableLots.find(l => l.id === selectedLot)?.quantite || 0}
-                </div>
-              )}
-            </div>
-
-            <div>
-              <label style={{ fontSize: "14px", color: "#4b5563", marginBottom: "4px", display: "block" }}>
-                Prix unitaire (DH) *
-              </label>
-              <input 
-                type="number" 
-                className="w-full" 
-                value={prixUnitaire} 
-                onChange={(e) => setPrixUnitaire(e.target.value)} 
-                required 
-                min={0}
-                step="0.01"
-                style={{ padding: "8px", borderRadius: "4px", border: "1px solid #d1d5db" }}
-              />
-            </div>
-
-            <div>
-              <label style={{ fontSize: "14px", color: "#4b5563", marginBottom: "4px", display: "block" }}>
-                Remise (DH)
-              </label>
-              <input 
-                type="number" 
-                className="w-full" 
-                value={remiseArticle} 
-                onChange={(e) => setRemiseArticle(e.target.value)} 
-                min={0}
-                step="0.01"
-                style={{ padding: "8px", borderRadius: "4px", border: "1px solid #d1d5db" }}
-              />
-            </div>
-
-            <div style={{ display: "flex", alignItems: "flex-end" }}>
-              <button 
-                type="submit" 
-                className="btn"
-                style={{ 
-                  background: "linear-gradient(90deg, #10b981 0%, #34d399 100%)",
-                  width: "100%"
-                }}
-                disabled={isSaving}
-              >
-                ➕ Ajouter l'article
-              </button>
-            </div>
-          </form>
-
-          {/* 🆕 Tableau des articles de la vente avec informations multi-lots */}
-          {articles.length > 0 && (
-            <div style={{ marginBottom: "20px" }}>
-              <h4 style={{ marginBottom: "10px", color: "#1f2937" }}>
-                Articles de la vente ({articles.length})
-                {articles.some(a => a.numeroLot) && (
-                  <span style={{ 
-                    fontSize: "12px", 
-                    background: "#dcfce7", 
-                    color: "#16a34a",
-                    padding: "4px 8px",
-                    borderRadius: "12px",
-                    marginLeft: "10px"
-                  }}>
-                    🏷️ {articles.filter(a => a.numeroLot).length} avec traçabilité
-                  </span>
+              <div style={{
+                display: 'flex',
+                gap: '16px',
+                justifyContent: 'center',
+                flexWrap: 'wrap'
+              }}>
+                {isEditing && (
+                  <button 
+                    type="button" 
+                    onClick={resetForm}
+                    style={{
+                      background: 'linear-gradient(135deg, #6b7280, #4b5563)',
+                      color: 'white',
+                      border: 'none',
+                      padding: '14px 32px',
+                      borderRadius: '16px',
+                      fontSize: '16px',
+                      fontWeight: '600',
+                      cursor: 'pointer',
+                      transition: 'all 0.3s ease',
+                      boxShadow: '0 8px 25px rgba(107, 114, 128, 0.3)',
+                      transform: 'translateY(0)'
+                    }}
+                    onMouseEnter={(e) => {
+                      e.target.style.transform = 'translateY(-2px)';
+                      e.target.style.boxShadow = '0 12px 35px rgba(107, 114, 128, 0.4)';
+                    }}
+                    onMouseLeave={(e) => {
+                      e.target.style.transform = 'translateY(0)';
+                      e.target.style.boxShadow = '0 8px 25px rgba(107, 114, 128, 0.3)';
+                    }}
+                  >
+                    Annuler
+                  </button>
                 )}
-              </h4>
-              
-              <div className="table-pro-full" style={{ maxHeight: "300px", overflowY: "auto" }}>
-                <table style={{ width: "100%" }}>
-                  <thead style={{ position: "sticky", top: 0, background: "#f3f4f6" }}>
-                    <tr>
-                      <th style={{ padding: "10px", textAlign: "left" }}>Produit / Traçabilité</th>
-                      <th style={{ padding: "10px", textAlign: "center" }}>Quantité</th>
-                      <th style={{ padding: "10px", textAlign: "right" }}>Prix unit.</th>
-                      <th style={{ padding: "10px", textAlign: "right" }}>Remise</th>
-                      <th style={{ padding: "10px", textAlign: "right" }}>Total</th>
-                      <th style={{ padding: "10px", textAlign: "center" }}>Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {articles.map((a, i) => (
-                      <tr key={i} style={{ borderBottom: "1px solid #e5e7eb" }}>
-                        <td style={{ padding: "10px" }}>
-                          <div style={{ fontWeight: "600" }}>{a.produit}</div>
-                          {(a.numeroLot || a.fournisseur || a.datePeremption) && (
-                            <div style={{ 
-                              fontSize: "11px", 
-                              color: "#6b7280", 
-                              marginTop: "4px",
-                              padding: "4px 8px",
-                              background: "#f3f4f6",
-                              borderRadius: "4px",
-                              borderLeft: "3px solid #10b981"
-                            }}>
-                              {a.numeroLot && <span>🏷️ Lot: {a.numeroLot} • </span>}
-                              {a.fournisseur && <span>🏭 {a.fournisseur} • </span>}
-                              {a.datePeremption && <span>📅 Exp: {a.datePeremption}</span>}
-                            </div>
-                          )}
-                        </td>
-                        <td style={{ padding: "10px", textAlign: "center" }}>
-                          <input
-                            type="number"
-                            value={a.quantite}
-                            onChange={(e) => handleUpdateArticleQuantity(i, e.target.value)}
-                            min={1}
-                            max={a.stockSource?.data?.quantite || undefined}
-                            style={{ 
-                              width: "80px", 
-                              textAlign: "center",
-                              padding: "4px",
-                              borderRadius: "4px",
-                              border: "1px solid #d1d5db"
-                            }}
-                          />
-                        </td>
-                        <td style={{ padding: "10px", textAlign: "right" }}>{a.prixUnitaire.toFixed(2)} DH</td>
-                        <td style={{ padding: "10px", textAlign: "right" }}>{a.remise.toFixed(2)} DH</td>
-                        <td style={{ padding: "10px", textAlign: "right", fontWeight: "600" }}>
-                          {((a.prixUnitaire * a.quantite) - a.remise).toFixed(2)} DH
-                        </td>
-                        <td style={{ padding: "10px", textAlign: "center" }}>
-                          <button 
-                            className="btn danger" 
-                            type="button" 
-                            onClick={() => handleRemoveArticle(i)}
-                            style={{ padding: "4px 8px", fontSize: "12px" }}
-                          >
-                            🗑️ Retirer
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                    <tr style={{ background: "#f9fafb", fontWeight: "bold" }}>
-                      <td colSpan={4} style={{ padding: "12px", textAlign: "right" }}>
-                        TOTAL DE LA VENTE
-                      </td>
-                      <td colSpan={2} style={{ 
-                        padding: "12px", 
-                        textAlign: "center",
-                        fontSize: "18px",
-                        color: "#059669"
-                      }}>
-                        {totalVenteCourante.toFixed(2)} DH
-                      </td>
-                    </tr>
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          )}
-
-          {/* Formulaire informations de la vente */}
-          <form onSubmit={handleAddVente} style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
-            gap: '15px',
-            padding: '20px',
-            background: 'white',
-            borderRadius: '6px'
-          }}>
-            <div>
-              <label style={{ fontSize: "14px", color: "#4b5563", marginBottom: "4px", display: "block" }}>
-                Client *
-              </label>
-              <input 
-                className="w-full" 
-                type="text" 
-                value={client} 
-                onChange={(e) => setClient(e.target.value)} 
-                required
-                placeholder="Nom du client"
-                list="clients-list"
-                style={{ padding: "8px", borderRadius: "4px", border: "1px solid #d1d5db" }}
-              />
-              <datalist id="clients-list">
-                {clients.map(c => <option key={c} value={c} />)}
-              </datalist>
-            </div>
-
-            <div>
-              <label style={{ fontSize: "14px", color: "#4b5563", marginBottom: "4px", display: "block" }}>
-                Date de vente *
-              </label>
-              <input 
-                className="w-full" 
-                type="date" 
-                value={dateVente} 
-                onChange={(e) => setDateVente(e.target.value)} 
-                required
-                style={{ padding: "8px", borderRadius: "4px", border: "1px solid #d1d5db" }}
-              />
-            </div>
-
-            <div>
-              <label style={{ fontSize: "14px", color: "#4b5563", marginBottom: "4px", display: "block" }}>
-                Statut de paiement
-              </label>
-              <select 
-                className="w-full" 
-                value={statutPaiement} 
-                onChange={(e) => setStatutPaiement(e.target.value)}
-                style={{ padding: "8px", borderRadius: "4px", border: "1px solid #d1d5db" }}
-              >
-                <option value="payé">✅ Payé</option>
-                <option value="partiel">⏳ Partiel</option>
-                <option value="impayé">❌ Impayé</option>
-              </select>
-            </div>
-
-            <div>
-              <label style={{ fontSize: "14px", color: "#4b5563", marginBottom: "4px", display: "block" }}>
-                Mode de paiement
-              </label>
-              <select 
-                className="w-full" 
-                value={modePaiement} 
-                onChange={(e) => setModePaiement(e.target.value)}
-                style={{ padding: "8px", borderRadius: "4px", border: "1px solid #d1d5db" }}
-              >
-                <option value="Espèces">💵 Espèces</option>
-                <option value="Carte">💳 Carte bancaire</option>
-                <option value="Chèque">📝 Chèque</option>
-                <option value="Virement">🏦 Virement</option>
-                <option value="Crédit">📋 Crédit</option>
-              </select>
-            </div>
-
-            <div style={{ gridColumn: "1 / -1" }}>
-              <label style={{ fontSize: "14px", color: "#4b5563", marginBottom: "4px", display: "block" }}>
-                Notes / Observations
-              </label>
-              <textarea
-                className="w-full"
-                value={notesVente}
-                onChange={(e) => setNotesVente(e.target.value)}
-                rows={2}
-                placeholder="Notes optionnelles..."
-                style={{ 
-                  padding: "8px", 
-                  borderRadius: "4px", 
-                  border: "1px solid #d1d5db",
-                  width: "100%",
-                  resize: "vertical"
-                }}
-              />
-            </div>
-
-            <div style={{ 
-              gridColumn: "1 / -1", 
-              display: "flex", 
-              gap: "10px", 
-              justifyContent: "flex-end" 
-            }}>
-              {isEditing && (
+                
                 <button 
-                  type="button" 
-                  className="btn" 
-                  onClick={resetForm}
-                  style={{ background: "#6b7280" }}
+                  type="submit" 
+                  disabled={isSaving || articles.length === 0}
+                  style={{
+                    background: isEditing 
+                      ? 'linear-gradient(135deg, #f59e0b, #d97706)' 
+                      : 'linear-gradient(135deg, #8b5cf6, #7c3aed)',
+                    color: 'white',
+                    border: 'none',
+                    padding: '16px 40px',
+                    borderRadius: '16px',
+                    fontSize: '18px',
+                    fontWeight: '700',
+                    cursor: (isSaving || articles.length === 0) ? 'not-allowed' : 'pointer',
+                    opacity: (isSaving || articles.length === 0) ? 0.6 : 1,
+                    transition: 'all 0.3s ease',
+                    boxShadow: '0 12px 35px rgba(139, 92, 246, 0.4)',
+                    transform: 'translateY(0)'
+                  }}
+                  onMouseEnter={(e) => {
+                    if (!isSaving && articles.length > 0) {
+                      e.target.style.transform = 'translateY(-3px)';
+                      e.target.style.boxShadow = '0 16px 45px rgba(139, 92, 246, 0.5)';
+                    }
+                  }}
+                  onMouseLeave={(e) => {
+                    e.target.style.transform = 'translateY(0)';
+                    e.target.style.boxShadow = '0 12px 35px rgba(139, 92, 246, 0.4)';
+                  }}
                 >
-                  ❌ Annuler
+                  {isSaving ? 'Enregistrement...' : (isEditing ? 'Modifier la vente' : 'Enregistrer la vente')}
                 </button>
-              )}
-              <button 
-                type="submit" 
-                className="btn"
-                disabled={isSaving || articles.length === 0}
-                style={{ 
-                  background: isEditing 
-                    ? "linear-gradient(90deg, #f59e0b 0%, #fbbf24 100%)"
-                    : "linear-gradient(90deg, #2563eb 0%, #60a5fa 100%)",
-                  opacity: (isSaving || articles.length === 0) ? 0.5 : 1,
-                  cursor: (isSaving || articles.length === 0) ? "not-allowed" : "pointer"
-                }}
-              >
-                {isSaving ? "⏳ Enregistrement..." : (isEditing ? "📝 Modifier la vente" : "💾 Enregistrer la vente multi-lots")}
-              </button>
-            </div>
-          </form>
+              </div>
+            </form>
+          </div>
         </div>
       )}
 
-      {/* SECTION FILTRES */}
-      {showFiltres && (
-        <div className="filter-section" style={{
-          background: "#f9fafb",
-          padding: "15px",
-          borderRadius: "8px",
-          marginBottom: "20px",
-          border: "1px solid #e5e7eb"
+      {/* Section des filtres */}
+      <div style={{
+        background: 'rgba(255, 255, 255, 0.95)',
+        backdropFilter: 'blur(20px)',
+        borderRadius: '20px',
+        padding: '24px',
+        marginBottom: '24px',
+        border: '1px solid rgba(255, 255, 255, 0.2)',
+        boxShadow: '0 12px 30px rgba(0, 0, 0, 0.08)'
+      }}>
+        <div style={{
+          display: 'flex',
+          gap: '16px',
+          alignItems: 'center',
+          flexWrap: 'wrap'
         }}>
-          <h3 style={{ marginBottom: "15px", color: "#1f2937", fontSize: "16px" }}>
-            🔍 Filtrer les ventes multi-lots
-          </h3>
-          <div style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
-            gap: "15px",
-            alignItems: "end"
-          }}>
-            <div>
-              <label style={{ fontSize: "14px", color: "#4b5563", marginBottom: "4px", display: "block" }}>
-                Recherche
-              </label>
-              <input
-                type="text"
-                value={searchTerm}
-                onChange={e => setSearchTerm(e.target.value)}
-                placeholder="Client, produit, lot, fournisseur..."
-                style={{ 
-                  padding: "8px", 
-                  borderRadius: "4px", 
-                  border: "1px solid #d1d5db",
-                  width: "100%"
-                }}
-              />
-            </div>
-
-            
-
-            
-
-            <div>
-              <label style={{ fontSize: "14px", color: "#4b5563", marginBottom: "4px", display: "block" }}>
-                Statut
-              </label>
-              <select 
-                value={filterStatut} 
-                onChange={e => setFilterStatut(e.target.value)}
-                style={{ 
-                  padding: "8px", 
-                  borderRadius: "4px", 
-                  border: "1px solid #d1d5db",
-                  width: "100%"
-                }}
-              >
-                <option value="">Tous les statuts</option>
-                <option value="payé">✅ Payé</option>
-                <option value="partiel">⏳ Partiel</option>
-                <option value="impayé">❌ Impayé</option>
-              </select>
-            </div>
-
-            <div>
-              <label style={{ fontSize: "14px", color: "#4b5563", marginBottom: "4px", display: "block" }}>
-                Date début
-              </label>
-              <input 
-                type="date" 
-                value={filterDateMin} 
-                onChange={e => setFilterDateMin(e.target.value)}
-                style={{ 
-                  padding: "8px", 
-                  borderRadius: "4px", 
-                  border: "1px solid #d1d5db",
-                  width: "100%"
-                }}
-              />
-            </div>
-
-            <div>
-              <label style={{ fontSize: "14px", color: "#4b5563", marginBottom: "4px", display: "block" }}>
-                Date fin
-              </label>
-              <input 
-                type="date" 
-                value={filterDateMax} 
-                onChange={e => setFilterDateMax(e.target.value)}
-                style={{ 
-                  padding: "8px", 
-                  borderRadius: "4px", 
-                  border: "1px solid #d1d5db",
-                  width: "100%"
-                }}
-              />
-            </div>
-
-            {(filterClient || filterDateMin || filterDateMax || filterStatut || searchTerm) && (
-              <button 
-                className="btn danger" 
-                type="button" 
-                onClick={() => {
-                  setFilterClient("");
-                  setFilterDateMin("");
-                  setFilterDateMax("");
-                  setFilterStatut("");
-                  setSearchTerm("");
-                }}
-                style={{ alignSelf: "stretch" }}
-              >
-                🔄 Réinitialiser les filtres
-              </button>
-            )}
+          <div style={{ flex: '1', minWidth: '250px' }}>
+            <input
+              type="text"
+              value={searchTerm}
+              onChange={e => setSearchTerm(e.target.value)}
+              placeholder="Rechercher client, produit, numéro de lot..."
+              style={{
+                width: '100%',
+                padding: '12px 20px',
+                borderRadius: '25px',
+                border: '2px solid #e5e7eb',
+                fontSize: '16px',
+                background: 'white',
+                transition: 'all 0.3s ease',
+                outline: 'none'
+              }}
+              onFocus={(e) => {
+                e.target.style.borderColor = '#3b82f6';
+                e.target.style.boxShadow = '0 0 0 3px rgba(59, 130, 246, 0.1)';
+              }}
+              onBlur={(e) => {
+                e.target.style.borderColor = '#e5e7eb';
+                e.target.style.boxShadow = 'none';
+              }}
+            />
           </div>
 
-          {ventesFiltrees.length !== ventes.length && (
-            <div style={{ 
-              marginTop: "10px", 
-              padding: "8px", 
-              background: "#dbeafe", 
-              borderRadius: "4px",
-              color: "#1e40af"
-            }}>
-              📊 {ventesFiltrees.length} vente(s) sur {ventes.length} au total
-            </div>
+          <select 
+            value={filterStatut} 
+            onChange={e => setFilterStatut(e.target.value)}
+            style={{
+              padding: '12px 20px',
+              borderRadius: '25px',
+              border: '2px solid #e5e7eb',
+              fontSize: '16px',
+              background: 'white',
+              transition: 'all 0.3s ease',
+              outline: 'none',
+              minWidth: '180px'
+            }}
+            onFocus={(e) => {
+              e.target.style.borderColor = '#3b82f6';
+              e.target.style.boxShadow = '0 0 0 3px rgba(59, 130, 246, 0.1)';
+            }}
+            onBlur={(e) => {
+              e.target.style.borderColor = '#e5e7eb';
+              e.target.style.boxShadow = 'none';
+            }}
+          >
+            <option value="">Tous les statuts</option>
+            <option value="payé">Payé</option>
+            <option value="partiel">Partiel</option>
+            <option value="impayé">Impayé</option>
+          </select>
+
+          {(searchTerm || filterStatut) && (
+            <button 
+              onClick={() => {
+                setSearchTerm("");
+                setFilterStatut("");
+              }}
+              style={{
+                background: 'linear-gradient(135deg, #ef4444, #dc2626)',
+                color: 'white',
+                border: 'none',
+                padding: '12px 20px',
+                borderRadius: '25px',
+                fontSize: '14px',
+                fontWeight: '600',
+                cursor: 'pointer',
+                transition: 'all 0.3s ease',
+                boxShadow: '0 6px 20px rgba(239, 68, 68, 0.3)'
+              }}
+              onMouseEnter={(e) => {
+                e.target.style.transform = 'translateY(-2px)';
+                e.target.style.boxShadow = '0 8px 25px rgba(239, 68, 68, 0.4)';
+              }}
+              onMouseLeave={(e) => {
+                e.target.style.transform = 'translateY(0)';
+                e.target.style.boxShadow = '0 6px 20px rgba(239, 68, 68, 0.3)';
+              }}
+            >
+              Réinitialiser
+            </button>
           )}
         </div>
-      )}
-
-
-      {/* TABLEAU DES VENTES MULTI-LOTS - VERSION MOBILE OPTIMISÉE */}
-      <div className="fullscreen-table-title" style={{ 
-        marginTop: "20px", 
-        fontSize: '1.3rem',
-        display: "flex",
-        justifyContent: "space-between",
-        alignItems: "center",
-        flexWrap: "wrap",
-        gap: "10px"
-      }}>
-        <span>📋 Historique des ventes multi-lots ({ventesFiltrees.length})</span>
-        <span style={{ 
-          fontSize: "14px", 
-          color: "#6b7280",
-          whiteSpace: "nowrap"
-        }}>
-          Total: {ventesFiltrees.reduce((sum, v) => 
-            sum + (v.montantTotal || v.articles?.reduce((s, a) => 
-              s + (a.prixUnitaire * a.quantite - a.remise), 0) || 0), 0
-          ).toFixed(2)} DH
-        </span>
       </div>
 
-      <div className="table-pro-full" style={{ 
-        flex: '1 1 0%', 
-        minHeight: '400px',
-        maxHeight: 'calc(100vh - 400px)',
-        overflowY: 'auto',
-        overflowX: 'auto', // Important pour mobile
-        border: '1px solid #e5e7eb',
-        borderRadius: '8px',
-        background: 'white'
+      {/* Tableau des ventes */}
+      <div style={{
+        background: 'rgba(255, 255, 255, 0.95)',
+        backdropFilter: 'blur(20px)',
+        borderRadius: '24px',
+        overflow: 'hidden',
+        border: '1px solid rgba(255, 255, 255, 0.2)',
+        boxShadow: '0 20px 40px rgba(0, 0, 0, 0.1)'
       }}>
-        {/* Version bureau - tableau classique */}
-        <div className="desktop-table" style={{
-          display: window.innerWidth > 768 ? 'block' : 'none'
+        <div style={{ 
+          overflowX: 'auto',
+          maxHeight: '70vh',
+          overflowY: 'auto'
         }}>
-          <table style={{ width: "100%", minWidth: "900px" }}>
-            <thead style={{ 
-              position: 'sticky', 
-              top: 0, 
-              background: 'linear-gradient(90deg, #1e40af 0%, #3b82f6 100%)',
+          <table style={{ 
+            width: '100%', 
+            minWidth: '1000px',
+            borderCollapse: 'collapse'
+          }}>
+            <thead style={{
+              position: 'sticky',
+              top: 0,
+              background: 'linear-gradient(135deg, #1e293b, #334155)',
               color: 'white',
               zIndex: 10
             }}>
               <tr>
-                <th style={{ padding: "12px", textAlign: "left", width: "80px" }}>N°</th>
-                <th style={{ padding: "12px", textAlign: "left", width: "150px" }}>Client</th>
-                <th style={{ padding: "12px", textAlign: "center", width: "100px" }}>Date</th>
-                <th style={{ padding: "12px", textAlign: "center", width: "80px" }}>Articles</th>
-                <th style={{ padding: "12px", textAlign: "center", width: "100px" }}>Traçabilité</th>
-                <th style={{ padding: "12px", textAlign: "center", width: "80px" }}>Statut</th>
-                <th style={{ padding: "12px", textAlign: "right", width: "100px" }}>Total</th>
-                <th style={{ padding: "12px", textAlign: "center", width: "200px" }}>Actions</th>
+                <th style={{
+                  padding: '20px',
+                  textAlign: 'left',
+                  fontWeight: '700',
+                  fontSize: '14px',
+                  letterSpacing: '0.5px',
+                  borderRight: '1px solid rgba(255, 255, 255, 0.1)'
+                }}>
+                  N° VENTE
+                </th>
+                <th style={{
+                  padding: '20px',
+                  textAlign: 'left',
+                  fontWeight: '700',
+                  fontSize: '14px',
+                  letterSpacing: '0.5px',
+                  borderRight: '1px solid rgba(255, 255, 255, 0.1)'
+                }}>
+                  CLIENT
+                </th>
+                <th style={{
+                  padding: '20px',
+                  textAlign: 'center',
+                  fontWeight: '700',
+                  fontSize: '14px',
+                  letterSpacing: '0.5px',
+                  borderRight: '1px solid rgba(255, 255, 255, 0.1)'
+                }}>
+                  DATE
+                </th>
+                <th style={{
+                  padding: '20px',
+                  textAlign: 'center',
+                  fontWeight: '700',
+                  fontSize: '14px',
+                  letterSpacing: '0.5px',
+                  borderRight: '1px solid rgba(255, 255, 255, 0.1)'
+                }}>
+                  ARTICLES
+                </th>
+                <th style={{
+                  padding: '20px',
+                  textAlign: 'center',
+                  fontWeight: '700',
+                  fontSize: '14px',
+                  letterSpacing: '0.5px',
+                  borderRight: '1px solid rgba(255, 255, 255, 0.1)'
+                }}>
+                  STATUT
+                </th>
+                <th style={{
+                  padding: '20px',
+                  textAlign: 'right',
+                  fontWeight: '700',
+                  fontSize: '14px',
+                  letterSpacing: '0.5px',
+                  borderRight: '1px solid rgba(255, 255, 255, 0.1)'
+                }}>
+                  TOTAL
+                </th>
+                <th style={{
+                  padding: '20px',
+                  textAlign: 'center',
+                  fontWeight: '700',
+                  fontSize: '14px',
+                  letterSpacing: '0.5px',
+                  width: '220px'
+                }}>
+                  ACTIONS
+                </th>
               </tr>
             </thead>
             <tbody>
               {ventesFiltrees.length === 0 ? (
                 <tr>
-                  <td colSpan={8} style={{ 
-                    padding: "40px", 
-                    textAlign: "center",
-                    color: "#6b7280",
-                    fontSize: "16px"
+                  <td colSpan={7} style={{
+                    padding: '60px 20px',
+                    textAlign: 'center',
+                    color: '#6b7280',
+                    fontSize: '18px',
+                    fontWeight: '500'
                   }}>
-                    {ventes.length === 0 
-                      ? "Aucune vente enregistrée pour le moment"
-                      : "Aucune vente ne correspond aux critères de filtrage"}
+                    <div style={{
+                      display: 'flex',
+                      flexDirection: 'column',
+                      alignItems: 'center',
+                      gap: '16px'
+                    }}>
+                      <div style={{
+                        width: '64px',
+                        height: '64px',
+                        borderRadius: '50%',
+                        background: 'linear-gradient(135deg, #e5e7eb, #d1d5db)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        fontSize: '24px'
+                      }}>
+                        📊
+                      </div>
+                      <div>
+                        <h3 style={{ margin: '0 0 8px', color: '#374151' }}>
+                          {ventes.length === 0 ? 'Aucune vente enregistrée' : 'Aucun résultat'}
+                        </h3>
+                        <p style={{ margin: 0, color: '#9ca3af' }}>
+                          {ventes.length === 0 
+                            ? 'Commencez par créer votre première vente'
+                            : 'Aucune vente ne correspond aux critères de filtrage'}
+                        </p>
+                      </div>
+                    </div>
                   </td>
                 </tr>
               ) : (
-                ventesFiltrees.map((v) => {
+                ventesFiltrees.map((v, index) => {
                   const total = v.montantTotal || (Array.isArray(v.articles) ? v.articles : [])
-                    .reduce((sum, a) => sum + (a.prixUnitaire * a.quantite - a.remise), 0);
+                    .reduce((sum, a) => sum + (a.prixUnitaire * a.quantite - (a.remise || 0)), 0);
                   
                   const articlesAvecLots = (v.articles || []).filter(a => a.numeroLot).length;
                   const totalArticles = (v.articles || []).length;
                   
                   return (
-                    <tr key={v.id} style={{ 
-                      borderBottom: "1px solid #e5e7eb",
-                      transition: "background 0.2s"
+                    <tr key={v.id} style={{
+                      borderBottom: '1px solid #f1f5f9',
+                      transition: 'all 0.3s ease',
+                      background: index % 2 === 0 ? 'rgba(248, 250, 252, 0.5)' : 'white'
                     }}
-                    onMouseEnter={(e) => e.currentTarget.style.background = "#f9fafb"}
-                    onMouseLeave={(e) => e.currentTarget.style.background = "white"}
-                    >
-                      <td style={{ padding: "10px", fontWeight: "600", color: "#4b5563" }}>
-                        #{v.id.slice(-6).toUpperCase()}
-                      </td>
+                    onMouseEnter={(e) => {
+                      const tr = e.target.closest('tr');
+                      tr.style.background = 'linear-gradient(135deg, #f0f9ff, #e0f2fe)';
+                      tr.style.transform = 'scale(1.001)';
+                      tr.style.boxShadow = '0 4px 20px rgba(59, 130, 246, 0.1)';
+                    }}
+                    onMouseLeave={(e) => {
+                      const tr = e.target.closest('tr');
+                      tr.style.background = index % 2 === 0 ? 'rgba(248, 250, 252, 0.5)' : 'white';
+                      tr.style.transform = 'scale(1)';
+                      tr.style.boxShadow = 'none';
+                    }}>
                       <td style={{ 
-                        padding: "10px", 
-                        fontWeight: "500",
-                        maxWidth: "150px",
-                        overflow: "hidden",
-                        textOverflow: "ellipsis",
-                        whiteSpace: "nowrap"
-                      }}>{v.client}</td>
-                      <td style={{ padding: "10px", textAlign: "center", fontSize: "12px" }}>
-                        {v.date?.toDate().toLocaleDateString('fr-FR')}
-                      </td>
-                      <td style={{ padding: "10px", textAlign: "center" }}>
-                        <span style={{ 
-                          background: "#e0e7ff",
-                          color: "#3730a3",
-                          padding: "4px 8px",
-                          borderRadius: "12px",
-                          fontSize: "11px",
-                          whiteSpace: "nowrap"
-                        }}>
-                          {totalArticles}
-                        </span>
-                      </td>
-                      <td style={{ padding: "10px", textAlign: "center" }}>
-                        {articlesAvecLots > 0 ? (
-                          <span style={{ 
-                            background: "#dcfce7",
-                            color: "#16a34a",
-                            padding: "4px 8px",
-                            borderRadius: "12px",
-                            fontSize: "10px",
-                            fontWeight: "600",
-                            whiteSpace: "nowrap"
-                          }}>
-                            {articlesAvecLots}/{totalArticles}
-                          </span>
-                        ) : (
-                          <span style={{ 
-                            background: "#f3f4f6",
-                            color: "#6b7280",
-                            padding: "4px 8px",
-                            borderRadius: "12px",
-                            fontSize: "10px"
-                          }}>
-                            Standard
-                          </span>
-                        )}
-                      </td>
-                      <td style={{ padding: "10px", textAlign: "center" }}>
-                        <span style={{
-                          padding: "3px 6px",
-                          borderRadius: "4px",
-                          fontSize: "10px",
-                          fontWeight: "600",
-                          whiteSpace: "nowrap",
-                          ...(v.statutPaiement === "payé" ? {
-                            background: "#dcfce7",
-                            color: "#16a34a"
-                          } : v.statutPaiement === "partiel" ? {
-                            background: "#fed7aa",
-                            color: "#ea580c"
-                          } : {
-                            background: "#fee2e2",
-                            color: "#dc2626"
-                          })
-                        }}>
-                          {v.statutPaiement === "payé" ? "Payé" : 
-                           v.statutPaiement === "partiel" ? "Partiel" : 
-                           "Impayé"}
-                        </span>
-                      </td>
-                      <td style={{ 
-                        padding: "10px", 
-                        textAlign: "right",
-                        fontSize: "14px",
-                        fontWeight: "bold",
-                        color: "#059669",
-                        whiteSpace: "nowrap"
+                        padding: '20px',
+                        borderRight: '1px solid #f1f5f9'
                       }}>
-                        {total.toFixed(2)} DH
+                        <div style={{
+                          background: 'linear-gradient(135deg, #3b82f6, #2563eb)',
+                          color: 'white',
+                          padding: '6px 12px',
+                          borderRadius: '12px',
+                          fontSize: '12px',
+                          fontWeight: '700',
+                          letterSpacing: '0.5px',
+                          display: 'inline-block'
+                        }}>
+                          #{v.id.slice(-6).toUpperCase()}
+                        </div>
                       </td>
-                      <td style={{ padding: "8px" }}>
-                        <div style={{ display: "flex", gap: "3px", justifyContent: "center", flexWrap: "wrap" }}>
-                          <button 
-                            className="btn info" 
-                            onClick={() => {
-                              setSelectedVente(v);
-                              setShowDetails(true);
-                            }}
-                            style={{ padding: "4px 6px", fontSize: "10px", minWidth: "28px" }}
-                            title="Voir les détails"
-                          >
-                            👁
-                          </button>
-                          <button 
-                            className="btn" 
-                            onClick={() => handleEditVente(v)}
-                            style={{ 
-                              padding: "4px 6px", 
-                              fontSize: "10px",
-                              background: "#f59e0b",
-                              minWidth: "28px"
-                            }}
-                            title="Modifier"
-                          >
-                            ✏
-                          </button>
-                          <button 
-                            className="btn success" 
-                            onClick={() => handleDuplicateVente(v)}
-                            style={{ padding: "4px 6px", fontSize: "10px", minWidth: "28px" }}
-                            title="Dupliquer"
-                          >
-                            📋
-                          </button>
-                          <button 
-                            className="btn print" 
-                            onClick={() => handlePrintVente(v)}
-                            style={{ 
-                              padding: "4px 6px", 
-                              fontSize: "10px",
-                              background: "#8b5cf6",
-                              minWidth: "28px"
-                            }}
-                            title="Imprimer"
-                          >
-                            🖨
-                          </button>
-                          <button 
-                            className="btn danger" 
-                            onClick={() => handleDeleteVente(v)}
-                            style={{ padding: "4px 6px", fontSize: "10px", minWidth: "28px" }}
-                            title="Supprimer"
-                          >
-                            🗑
-                          </button>
+                      <td style={{ 
+                        padding: '20px',
+                        borderRight: '1px solid #f1f5f9'
+                      }}>
+                        <div style={{
+                          fontWeight: '600',
+                          fontSize: '16px',
+                          color: '#1f2937',
+                          marginBottom: '4px'
+                        }}>
+                          {v.client}
+                        </div>
+                        <div style={{
+                          fontSize: '12px',
+                          color: '#6b7280',
+                          background: '#f8fafc',
+                          padding: '2px 8px',
+                          borderRadius: '8px',
+                          display: 'inline-block'
+                        }}>
+                          {v.modePaiement || 'Espèces'}
+                        </div>
+                      </td>
+                      <td style={{ 
+                        padding: '20px',
+                        textAlign: 'center',
+                        borderRight: '1px solid #f1f5f9'
+                      }}>
+                        <div style={{
+                          fontSize: '14px',
+                          fontWeight: '600',
+                          color: '#374151'
+                        }}>
+                          {formatDateSafe(v.date)}
+                        </div>
+                      </td>
+                      <td style={{ 
+                        padding: '20px',
+                        textAlign: 'center',
+                        borderRight: '1px solid #f1f5f9'
+                      }}>
+                        <div style={{ display: 'flex', gap: '8px', justifyContent: 'center', alignItems: 'center' }}>
+                          <span style={{
+                            background: 'linear-gradient(135deg, #8b5cf6, #7c3aed)',
+                            color: 'white',
+                            padding: '6px 12px',
+                            borderRadius: '20px',
+                            fontSize: '12px',
+                            fontWeight: '600'
+                          }}>
+                            {totalArticles}
+                          </span>
+                          {articlesAvecLots > 0 && (
+                            <span style={{
+                              background: 'linear-gradient(135deg, #10b981, #059669)',
+                              color: 'white',
+                              padding: '4px 8px',
+                              borderRadius: '12px',
+                              fontSize: '10px',
+                              fontWeight: '600'
+                            }}>
+                              {articlesAvecLots} tracés
+                            </span>
+                          )}
+                        </div>
+                      </td>
+                      <td style={{ 
+                        padding: '20px',
+                        textAlign: 'center',
+                        borderRight: '1px solid #f1f5f9'
+                      }}>
+                        <span style={{
+                          background: v.statutPaiement === 'payé' 
+                            ? 'linear-gradient(135deg, #22c55e, #16a34a)' 
+                            : v.statutPaiement === 'partiel' 
+                            ? 'linear-gradient(135deg, #eab308, #ca8a04)' 
+                            : 'linear-gradient(135deg, #ef4444, #dc2626)',
+                          color: 'white',
+                          padding: '6px 16px',
+                          borderRadius: '20px',
+                          fontSize: '12px',
+                          fontWeight: '600',
+                          textTransform: 'capitalize'
+                        }}>
+                          {v.statutPaiement}
+                        </span>
+                      </td>
+                      <td style={{ 
+                        padding: '20px',
+                        textAlign: 'right',
+                        borderRight: '1px solid #f1f5f9'
+                      }}>
+                        <div style={{
+                          fontSize: '16px',
+                          fontWeight: '700',
+                          color: '#16a34a'
+                        }}>
+                          {total.toFixed(2)} DH
+                        </div>
+                      </td>
+                      <td style={{ 
+                        padding: '20px',
+                        textAlign: 'center'
+                      }}>
+                        <div style={{
+                          display: 'flex',
+                          gap: '8px',
+                          justifyContent: 'center'
+                        }}>
+                         <span
+  onClick={() => handleViewDetails(v)}
+  style={{
+    cursor: "pointer",
+    fontSize: "18px",
+    transition: "transform 0.2s ease"
+  }}
+  onMouseEnter={(e) => {
+    e.target.style.transform = "scale(1.2)";
+  }}
+  onMouseLeave={(e) => {
+    e.target.style.transform = "scale(1)";
+  }}
+>
+  👁️
+</span>
+
+                        
+<span
+  onClick={() => handleEditVente(v)}
+  style={{
+    cursor: "pointer",
+    fontSize: "18px",
+    marginRight: "10px",
+    transition: "transform 0.2s ease"
+  }}
+  onMouseEnter={(e) => {
+    e.target.style.transform = "scale(1.2)";
+  }}
+  onMouseLeave={(e) => {
+    e.target.style.transform = "scale(1)";
+  }}
+>
+  ✏️
+</span>
+
+{/* Icône Imprimer 🖨️ */}
+<span
+  onClick={() => handlePrintVente(v)}
+  style={{
+    cursor: "pointer",
+    fontSize: "18px",
+    marginRight: "10px",
+    transition: "transform 0.2s ease"
+  }}
+  onMouseEnter={(e) => {
+    e.target.style.transform = "scale(1.2)";
+  }}
+  onMouseLeave={(e) => {
+    e.target.style.transform = "scale(1)";
+  }}
+>
+  🖨️
+</span>
+
+{/* Icône Supprimer 🗑️ */}
+<span
+  onClick={() => handleDeleteVente(v)}
+  style={{
+    cursor: "pointer",
+    fontSize: "18px",
+    transition: "transform 0.2s ease"
+  }}
+  onMouseEnter={(e) => {
+    e.target.style.transform = "scale(1.2)";
+  }}
+  onMouseLeave={(e) => {
+    e.target.style.transform = "scale(1)";
+  }}
+>
+  🗑️
+</span>
+
                         </div>
                       </td>
                     </tr>
@@ -2409,449 +2363,252 @@ export default function Ventes() {
             </tbody>
           </table>
         </div>
-
-        {/* Version mobile - cartes empilées */}
-        <div className="mobile-cards" style={{
-          display: window.innerWidth <= 768 ? 'block' : 'none',
-          padding: '10px'
-        }}>
-          {ventesFiltrees.length === 0 ? (
-            <div style={{ 
-              padding: "40px", 
-              textAlign: "center",
-              color: "#6b7280",
-              fontSize: "16px"
-            }}>
-              {ventes.length === 0 
-                ? "Aucune vente enregistrée"
-                : "Aucune vente trouvée"}
-            </div>
-          ) : (
-            ventesFiltrees.map((v) => {
-              const total = v.montantTotal || (Array.isArray(v.articles) ? v.articles : [])
-                .reduce((sum, a) => sum + (a.prixUnitaire * a.quantite - a.remise), 0);
-              
-              const articlesAvecLots = (v.articles || []).filter(a => a.numeroLot).length;
-              const totalArticles = (v.articles || []).length;
-              
-              return (
-                <div key={v.id} style={{
-                  background: 'white',
-                  border: '1px solid #e5e7eb',
-                  borderRadius: '8px',
-                  padding: '15px',
-                  marginBottom: '12px',
-                  boxShadow: '0 1px 3px rgba(0,0,0,0.1)'
-                }}>
-                  {/* En-tête de la carte */}
-                  <div style={{
-                    display: 'flex',
-                    justifyContent: 'space-between',
-                    alignItems: 'flex-start',
-                    marginBottom: '12px',
-                    flexWrap: 'wrap',
-                    gap: '8px'
-                  }}>
-                    <div>
-                      <div style={{ 
-                        fontWeight: '600', 
-                        fontSize: '16px',
-                        color: '#1f2937',
-                        marginBottom: '4px'
-                      }}>
-                        {v.client}
-                      </div>
-                      <div style={{ 
-                        fontSize: '12px', 
-                        color: '#6b7280'
-                      }}>
-                        #{v.id.slice(-6).toUpperCase()} • {v.date?.toDate().toLocaleDateString('fr-FR')}
-                      </div>
-                    </div>
-                    <div style={{ 
-                      fontSize: '18px',
-                      fontWeight: 'bold',
-                      color: '#059669',
-                      whiteSpace: 'nowrap'
-                    }}>
-                      {total.toFixed(2)} DH
-                    </div>
-                  </div>
-
-                  {/* Informations de la vente */}
-                  <div style={{
-                    display: 'grid',
-                    gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))',
-                    gap: '8px',
-                    marginBottom: '12px'
-                  }}>
-                    <div>
-                      <div style={{ fontSize: '11px', color: '#6b7280', marginBottom: '2px' }}>
-                        Articles
-                      </div>
-                      <span style={{ 
-                        background: "#e0e7ff",
-                        color: "#3730a3",
-                        padding: "4px 8px",
-                        borderRadius: "12px",
-                        fontSize: "12px"
-                      }}>
-                        {totalArticles} article(s)
-                      </span>
-                    </div>
-
-                    <div>
-                      <div style={{ fontSize: '11px', color: '#6b7280', marginBottom: '2px' }}>
-                        Traçabilité
-                      </div>
-                      {articlesAvecLots > 0 ? (
-                        <span style={{ 
-                          background: "#dcfce7",
-                          color: "#16a34a",
-                          padding: "4px 8px",
-                          borderRadius: "12px",
-                          fontSize: "12px",
-                          fontWeight: "600"
-                        }}>
-                          {articlesAvecLots}/{totalArticles} tracés
-                        </span>
-                      ) : (
-                        <span style={{ 
-                          background: "#f3f4f6",
-                          color: "#6b7280",
-                          padding: "4px 8px",
-                          borderRadius: "12px",
-                          fontSize: "12px"
-                        }}>
-                          Standard
-                        </span>
-                      )}
-                    </div>
-
-                    <div>
-                      <div style={{ fontSize: '11px', color: '#6b7280', marginBottom: '2px' }}>
-                        Statut
-                      </div>
-                      <span style={{
-                        padding: "4px 8px",
-                        borderRadius: "4px",
-                        fontSize: "12px",
-                        fontWeight: "600",
-                        ...(v.statutPaiement === "payé" ? {
-                          background: "#dcfce7",
-                          color: "#16a34a"
-                        } : v.statutPaiement === "partiel" ? {
-                          background: "#fed7aa",
-                          color: "#ea580c"
-                        } : {
-                          background: "#fee2e2",
-                          color: "#dc2626"
-                        })
-                      }}>
-                        {v.statutPaiement === "payé" ? "✅ Payé" : 
-                         v.statutPaiement === "partiel" ? "⏳ Partiel" : 
-                         "❌ Impayé"}
-                      </span>
-                    </div>
-                  </div>
-
-                  {/* Actions */}
-                  <div style={{ 
-                    display: "flex", 
-                    gap: "6px", 
-                    flexWrap: "wrap",
-                    paddingTop: '8px',
-                    borderTop: '1px solid #f3f4f6'
-                  }}>
-                    <button 
-                      className="btn info" 
-                      onClick={() => {
-                        setSelectedVente(v);
-                        setShowDetails(true);
-                      }}
-                      style={{ 
-                        padding: "6px 10px", 
-                        fontSize: "12px",
-                        flex: '1',
-                        minWidth: '60px'
-                      }}
-                    >
-                      👁️ Détails
-                    </button>
-                    <button 
-                      className="btn" 
-                      onClick={() => handleEditVente(v)}
-                      style={{ 
-                        padding: "6px 10px", 
-                        fontSize: "12px",
-                        background: "#f59e0b",
-                        flex: '1',
-                        minWidth: '60px'
-                      }}
-                    >
-                      ✏️ Modifier
-                    </button>
-                    <button 
-                      className="btn print" 
-                      onClick={() => handlePrintVente(v)}
-                      style={{ 
-                        padding: "6px 10px", 
-                        fontSize: "12px",
-                        background: "#8b5cf6",
-                        flex: '1',
-                        minWidth: '60px'
-                      }}
-                    >
-                      🖨️ Imprimer
-                    </button>
-                    <button 
-                      className="btn danger" 
-                      onClick={() => handleDeleteVente(v)}
-                      style={{ 
-                        padding: "6px 10px", 
-                        fontSize: "12px",
-                        flex: '1',
-                        minWidth: '60px'
-                      }}
-                    >
-                      🗑️ Supprimer
-                    </button>
-                  </div>
-                </div>
-              );
-            })
-          )}
-        </div>
       </div>
-      {/* MODAL DÉTAILS VENTE MULTI-LOTS */}
+
+      {/* Modal de détails */}
       {showDetails && selectedVente && (
         <div style={{
-          position: "fixed",
+          position: 'fixed',
           top: 0,
           left: 0,
-          right: 0,
-          bottom: 0,
-          background: "rgba(0,0,0,0.5)",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          zIndex: 1000
+          width: '100%',
+          height: '100%',
+          background: 'rgba(0, 0, 0, 0.5)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 1000,
+          backdropFilter: 'blur(5px)'
         }}>
           <div style={{
-            background: "white",
-            borderRadius: "12px",
-            padding: "25px",
-            maxWidth: "800px",
-            width: "90%",
-            maxHeight: "80vh",
-            overflowY: "auto"
+            background: 'linear-gradient(135deg, #ffffff, #f9fafb)',
+            borderRadius: '24px',
+            padding: '32px',
+            maxWidth: '90%',
+            maxHeight: '%',
+            overflowY: 'auto',
+            boxShadow: '0 20px 50px rgba(0, 0, 0, 0.2)',
+            border: '1px solid rgba(0, 0, 0, 0.05)'
           }}>
-            <div style={{ 
-              display: "flex", 
-              justifyContent: "space-between", 
-              alignItems: "center",
-              marginBottom: "20px"
+            <div style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              marginBottom: '24px'
             }}>
-              <h2 style={{ color: "#1f2937", fontSize: "20px" }}>
-                📋 Détails de la vente multi-lots #{selectedVente.id.slice(-6).toUpperCase()}
+              <h2 style={{
+                margin: 0,
+                fontSize: '28px',
+                fontWeight: '700',
+                color: '#1f2937'
+              }}>
+                Détails de la vente #{selectedVente.id.slice(-6).toUpperCase()}
               </h2>
               <button
-                onClick={() => {
-                  setShowDetails(false);
-                  setSelectedVente(null);
-                }}
+                onClick={() => setShowDetails(false)}
                 style={{
-                  background: "none",
-                  border: "none",
-                  fontSize: "24px",
-                  cursor: "pointer",
-                  color: "#6b7280",
-                  marginTop: "13%"
+                  background: 'none',
+                  border: 'none',
+                  color: '#6b7280',
+                  cursor: 'pointer',
+                  fontSize: '24px',
+                  padding: '8px',
+                  borderRadius: '12px',
+                  transition: 'all 0.2s ease'
                 }}
+                onMouseEnter={(e) => e.target.style.background = '#f3f4f6'}
+                onMouseLeave={(e) => e.target.style.background = 'none'}
               >
-                ✕
+                ×
               </button>
             </div>
 
-            <div style={{ 
-              display: "grid", 
-              gridTemplateColumns: "repeat(2, 1fr)",
-              gap: "15px",
-              marginBottom: "20px"
+            {/* Cartes d'informations générales */}
+            <div style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
+              gap: '16px',
+              marginBottom: '32px'
             }}>
-              <div>
-                <strong style={{ color: "#6b7280", fontSize: "14px" }}>Client:</strong>
-                <p style={{ fontSize: "16px", marginTop: "4px" }}>{selectedVente.client}</p>
+              <div style={{
+                background: 'linear-gradient(135deg, #dbeafe, #bfdbfe)',
+                borderRadius: '16px',
+                padding: '20px',
+                boxShadow: '0 4px 15px rgba(59, 130, 246, 0.1)'
+              }}>
+                <h4 style={{ margin: '0 0 8px', color: '#1d4ed8', fontSize: '16px', fontWeight: '600' }}>Client</h4>
+                <p style={{ margin: 0, fontSize: '18px', fontWeight: '700', color: '#1f2937' }}>{selectedVente.client}</p>
               </div>
-              <div>
-                <strong style={{ color: "#6b7280", fontSize: "14px" }}>Date:</strong>
-                <p style={{ fontSize: "16px", marginTop: "4px" }}>
-                  {selectedVente.date?.toDate().toLocaleString('fr-FR')}
-                </p>
+              <div style={{
+                background: 'linear-gradient(135deg, #dcfce7, #bbf7d0)',
+                borderRadius: '16px',
+                padding: '20px',
+                boxShadow: '0 4px 15px rgba(34, 197, 94, 0.1)'
+              }}>
+                <h4 style={{ margin: '0 0 8px', color: '#15803d', fontSize: '16px', fontWeight: '600' }}>Date</h4>
+                <p style={{ margin: 0, fontSize: '18px', fontWeight: '700', color: '#1f2937' }}>{formatDateSafe(selectedVente.date)}</p>
               </div>
-              <div>
-                <strong style={{ color: "#6b7280", fontSize: "14px" }}>Statut:</strong>
-                <p style={{ fontSize: "16px", marginTop: "4px" }}>{selectedVente.statutPaiement}</p>
+              <div style={{
+                background: 'linear-gradient(135deg, #fef3c7, #fde68a)',
+                borderRadius: '16px',
+                padding: '20px',
+                boxShadow: '0 4px 15px rgba(245, 158, 11, 0.1)'
+              }}>
+                <h4 style={{ margin: '0 0 8px', color: '#b45309', fontSize: '16px', fontWeight: '600' }}>Statut</h4>
+                <p style={{ margin: 0, fontSize: '18px', fontWeight: '700', color: '#1f2937' }}>{selectedVente.statutPaiement}</p>
               </div>
-              <div>
-                <strong style={{ color: "#6b7280", fontSize: "14px" }}>Mode de paiement:</strong>
-                <p style={{ fontSize: "16px", marginTop: "4px" }}>
-                  {selectedVente.modePaiement || "Espèces"}
-                </p>
+              <div style={{
+                background: 'linear-gradient(135deg, #f3e8ff, #e9d5ff)',
+                borderRadius: '16px',
+                padding: '20px',
+                boxShadow: '0 4px 15px rgba(168, 85, 247, 0.1)'
+              }}>
+                <h4 style={{ margin: '0 0 8px', color: '#7e22ce', fontSize: '16px', fontWeight: '600' }}>Mode</h4>
+                <p style={{ margin: 0, fontSize: '18px', fontWeight: '700', color: '#1f2937' }}>{selectedVente.modePaiement || 'Espèces'}</p>
+              </div>
+              <div style={{
+                background: 'linear-gradient(135deg, #d1fae5, #a7f3d0)',
+                borderRadius: '16px',
+                padding: '20px',
+                boxShadow: '0 4px 15px rgba(16, 185, 129, 0.1)'
+              }}>
+                <h4 style={{ margin: '0 0 8px', color: '#065f46', fontSize: '16px', fontWeight: '600' }}>Total</h4>
+                <p style={{ margin: 0, fontSize: '18px', fontWeight: '700', color: '#1f2937' }}>{selectedVente.montantTotal.toFixed(2)} DH</p>
               </div>
             </div>
 
-            {/* 🆕 Indicateur de traçabilité */}
-            {selectedVente.articles?.some(a => a.numeroLot) && (
-              <div style={{
-                background: "#dcfce7",
-                padding: "12px",
-                borderRadius: "6px",
-                marginBottom: "20px",
-                borderLeft: "4px solid #16a34a"
-              }}>
-                <strong style={{ color: "#16a34a" }}>🏷️ Vente avec traçabilité multi-lots:</strong>
-                <span style={{ marginLeft: "8px" }}>
-                  {selectedVente.articles.filter(a => a.numeroLot).length} article(s) tracé(s) sur {selectedVente.articles.length}
-                </span>
-              </div>
-            )}
+            {/* Tableau des articles */}
+            <h3 style={{
+              margin: '0 0 16px',
+              fontSize: '20px',
+              fontWeight: '600',
+              color: '#374151'
+            }}>
+              Articles ({selectedVente.articles.length})
+            </h3>
+            <div style={{
+              background: 'white',
+              borderRadius: '16px',
+              overflow: 'hidden',
+              boxShadow: '0 8px 25px rgba(0, 0, 0, 0.05)',
+              marginBottom: '24px'
+            }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                <thead>
+                  <tr style={{
+                    background: 'linear-gradient(135deg, #6d28d9, #5b21b6)',
+                    color: 'white'
+                  }}>
+                    <th style={{ padding: '16px', textAlign: 'left' }}>Produit / Traçabilité</th>
+                    <th style={{ padding: '16px', textAlign: 'center' }}>Qté</th>
+                    <th style={{ padding: '16px', textAlign: 'right' }}>Prix Unit.</th>
+                    <th style={{ padding: '16px', textAlign: 'right' }}>Remise</th>
+                    <th style={{ padding: '16px', textAlign: 'right' }}>Total</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {selectedVente.articles.map((a, i) => (
+                    <tr key={i} style={{
+                      borderBottom: '1px solid #f1f5f9'
+                    }}>
+                      <td style={{ padding: '16px' }}>
+                        <strong>{a.produit}</strong>
+                        {(a.numeroLot || a.fournisseur || a.datePeremption) && (
+                          <div style={{
+                            fontSize: '12px',
+                            color: '#6b7280',
+                            marginTop: '4px'
+                          }}>
+                            {a.numeroLot && `Lot: ${a.numeroLot} | `}
+                            {a.fournisseur && `Fournisseur: ${a.fournisseur} | `}
+                            {a.datePeremption && `Exp: ${a.datePeremption}`}
+                          </div>
+                        )}
+                      </td>
+                      <td style={{ padding: '16px', textAlign: 'center' }}>{a.quantite}</td>
+                      <td style={{ padding: '16px', textAlign: 'right' }}>{a.prixUnitaire.toFixed(2)} DH</td>
+                      <td style={{ padding: '16px', textAlign: 'right' }}>{a.remise.toFixed(2)} DH</td>
+                      <td style={{ padding: '16px', textAlign: 'right', fontWeight: '600' }}>
+                        {((a.prixUnitaire * a.quantite) - a.remise).toFixed(2)} DH
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
 
+            {/* Notes */}
             {selectedVente.notes && (
               <div style={{
-                background: "#fef3c7",
-                padding: "12px",
-                borderRadius: "6px",
-                marginBottom: "20px",
-                borderLeft: "4px solid #f59e0b"
+                background: 'linear-gradient(135deg, #fef3c7, #fde68a)',
+                borderRadius: '16px',
+                padding: '20px',
+                marginBottom: '24px'
               }}>
-                <strong>Notes:</strong> {selectedVente.notes}
+                <h4 style={{ margin: '0 0 8px', color: '#92400e', fontSize: '16px', fontWeight: '600' }}>Notes</h4>
+                <p style={{ margin: 0, color: '#713f12' }}>{selectedVente.notes}</p>
               </div>
             )}
 
-            <h3 style={{ marginBottom: "10px", color: "#1f2937" }}>Articles vendus avec traçabilité:</h3>
-            <table style={{ width: "100%", marginBottom: "20px" }}>
-              <thead>
-                <tr style={{ background: "#f3f4f6" }}>
-                  <th style={{ padding: "8px", textAlign: "left" }}>Produit / Traçabilité</th>
-                  <th style={{ padding: "8px", textAlign: "center" }}>Qté</th>
-                  <th style={{ padding: "8px", textAlign: "right" }}>Prix</th>
-                  <th style={{ padding: "8px", textAlign: "right" }}>Remise</th>
-                  <th style={{ padding: "8px", textAlign: "right" }}>Total</th>
-                </tr>
-              </thead>
-              <tbody>
-                {selectedVente.articles?.map((a, i) => (
-                  <tr key={i} style={{ borderBottom: "1px solid #e5e7eb" }}>
-                    <td style={{ padding: "8px" }}>
-                      <div style={{ fontWeight: "600", marginBottom: "4px" }}>{a.produit}</div>
-                      {(a.numeroLot || a.fournisseur || a.datePeremption) && (
-                        <div style={{ 
-                          fontSize: "12px", 
-                          color: "#6b7280",
-                          padding: "6px 8px",
-                          background: "#f3f4f6",
-                          borderRadius: "4px",
-                          borderLeft: "3px solid #10b981"
-                        }}>
-                          {a.numeroLot && (
-                            <div>
-                              <span style={{ 
-                                background: "#dcfce7", 
-                                color: "#16a34a", 
-                                padding: "2px 6px", 
-                                borderRadius: "8px",
-                                marginRight: "6px",
-                                fontSize: "10px",
-                                fontWeight: "600"
-                              }}>
-                                LOT
-                              </span>
-                              {a.numeroLot}
-                            </div>
-                          )}
-                          {a.fournisseur && (
-                            <div style={{ marginTop: "2px" }}>
-                              <span style={{ 
-                                background: "#dbeafe", 
-                                color: "#2563eb", 
-                                padding: "2px 6px", 
-                                borderRadius: "8px",
-                                marginRight: "6px",
-                                fontSize: "10px",
-                                fontWeight: "600"
-                              }}>
-                                FOURN
-                              </span>
-                              {a.fournisseur}
-                            </div>
-                          )}
-                          {a.datePeremption && (
-                            <div style={{ marginTop: "2px" }}>
-                              <span style={{ 
-                                background: "#fef3c7", 
-                                color: "#d97706", 
-                                padding: "2px 6px", 
-                                borderRadius: "8px",
-                                marginRight: "6px",
-                                fontSize: "10px",
-                                fontWeight: "600"
-                              }}>
-                                EXP
-                              </span>
-                              {a.datePeremption}
-                            </div>
-                          )}
-                        </div>
-                      )}
-                    </td>
-                    <td style={{ padding: "8px", textAlign: "center" }}>{a.quantite}</td>
-                    <td style={{ padding: "8px", textAlign: "right" }}>{a.prixUnitaire} DH</td>
-                    <td style={{ padding: "8px", textAlign: "right" }}>{a.remise} DH</td>
-                    <td style={{ padding: "8px", textAlign: "right", fontWeight: "600" }}>
-                      {(a.prixUnitaire * a.quantite - a.remise).toFixed(2)} DH
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-
+            {/* Actions rapides */}
             <div style={{
-              background: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
-              color: "white",
-              padding: "15px",
-              borderRadius: "6px",
-              textAlign: "right",
-              fontSize: "18px",
-              fontWeight: "bold"
+              display: 'flex',
+              gap: '16px',
+              justifyContent: 'flex-end'
             }}>
-              Total: {(selectedVente.montantTotal || selectedVente.articles?.reduce(
-                (sum, a) => sum + (a.prixUnitaire * a.quantite - a.remise), 0
-              ) || 0).toFixed(2)} DH
-            </div>
-
-            <div style={{ 
-              display: "flex", 
-              gap: "10px", 
-              justifyContent: "flex-end",
-              marginTop: "20px"
-            }}>
-              <button
-                className="btn"
-                onClick={() => handlePrintVente(selectedVente)}
-                style={{ background: "#8b5cf6" }}
-              >
-                🖨️ Imprimer avec cachet {parametres.typeCachet === "image" ? "image" : "texte"}
-              </button>
-              <button
-                className="btn"
+              <button 
                 onClick={() => {
-                  handleEditVente(selectedVente);
                   setShowDetails(false);
+                  handleEditVente(selectedVente);
                 }}
-                style={{ background: "#f59e0b" }}
+                style={{
+                  background: 'linear-gradient(135deg, #f59e0b, #d97706)',
+                  color: 'white',
+                  border: 'none',
+                  padding: '12px 24px',
+                  borderRadius: '12px',
+                  fontSize: '14px',
+                  fontWeight: '600',
+                  cursor: 'pointer',
+                  transition: 'all 0.3s ease'
+                }}
+                onMouseEnter={(e) => {
+                  e.target.style.transform = 'translateY(-2px)';
+                  e.target.style.boxShadow = '0 8px 20px rgba(245, 158, 11, 0.3)';
+                }}
+                onMouseLeave={(e) => {
+                  e.target.style.transform = 'translateY(0)';
+                  e.target.style.boxShadow = 'none';
+                }}
               >
-                ✏️ Modifier
+                Modifier
+              </button>
+              <button 
+                onClick={() => {
+                  setShowDetails(false);
+                  handlePrintVente(selectedVente);
+                }}
+                style={{
+                  background: 'linear-gradient(135deg, #6d28d9, #5b21b6)',
+                  color: 'white',
+                  border: 'none',
+                  padding: '12px 24px',
+                  borderRadius: '12px',
+                  fontSize: '14px',
+                  fontWeight: '600',
+                  cursor: 'pointer',
+                  transition: 'all 0.3s ease'
+                }}
+                onMouseEnter={(e) => {
+                  e.target.style.transform = 'translateY(-2px)';
+                  e.target.style.boxShadow = '0 8px 20px rgba(109, 40, 217, 0.3)';
+                }}
+                onMouseLeave={(e) => {
+                  e.target.style.transform = 'translateY(0)';
+                  e.target.style.boxShadow = 'none';
+                }}
+              >
+                Imprimer
               </button>
             </div>
           </div>

@@ -1,4 +1,4 @@
-// src/App.js - Version avec page d'accueil au démarrage
+// src/App.js - Version avec page d'accueil au démarrage et import de sauvegarde
 
 import React from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate, useLocation } from 'react-router-dom';
@@ -14,49 +14,139 @@ import Parametres from './components/parametres/Parametres';
 import DevisFactures from './components/devisFactures/DevisFactures';
 import Paiements from './components/paiements/Paiements';
 import BackupExport from './components/BackupExport';
+import ImportBackup from './components/ImportBackup'; // Nouveau composant d'import
 import UsersManagement from './components/users/UsersManagement';
 import GestionUtilisateurs from './components/admin/GestionUtilisateurs';
-import Homepage from './components/Homepage'; // Nouveau composant
+import Homepage from './components/Homepage';
 import { UserRoleProvider } from './contexts/UserRoleContext';
 import Protected from './components/Protected';
 import AddSocieteIdToAllUsers from './components/admin/AddSocieteIdToAllUsers';
 import InitOwner from './components/admin/InitOwner';
 import './styles/main.css';
 
-// Page dédiée aux sauvegardes
+// Page dédiée aux sauvegardes - Version complète avec export et import
 function BackupPage() {
+  const [currentTab, setCurrentTab] = React.useState('export');
+
   return (
     <div className="fullscreen-table-wrap">
       <div className="fullscreen-table-title">💾 Gestion des Sauvegardes</div>
-      <BackupExport />
       
-      <div className="paper-card" style={{ maxWidth: 700, margin: '20px auto' }}>
-        <h4 style={{ color: '#e4edfa', marginBottom: 15 }}>📋 Guide d'utilisation</h4>
-        <div style={{ color: '#99b2d4', lineHeight: 1.8 }}>
-          <div style={{ display: 'grid', gap: 12 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              <span style={{ fontSize: '1.2rem' }}>🔒</span>
-              <span><strong>Sécurité :</strong> Seul le propriétaire peut créer des sauvegardes complètes de toutes les données.</span>
-            </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              <span style={{ fontSize: '1.2rem' }}>📁</span>
-              <span><strong>Localisation :</strong> Les fichiers JSON sont téléchargés dans votre dossier "Téléchargements".</span>
-            </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              <span style={{ fontSize: '1.2rem' }}>📅</span>
-              <span><strong>Fréquence :</strong> Sauvegarde complète 1x/semaine, sauvegarde rapide quotidienne recommandée.</span>
-            </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              <span style={{ fontSize: '1.2rem' }}>💾</span>
-              <span><strong>Format :</strong> Données exportées en JSON (lisible, réimportable, compatible).</span>
-            </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              <span style={{ fontSize: '1.2rem' }}>🔄</span>
-              <span><strong>Restauration :</strong> Gardez vos fichiers de sauvegarde en sécurité pour une restauration future.</span>
+      {/* Navigation entre les onglets */}
+      <div style={{ 
+        display: 'flex', 
+        justifyContent: 'center', 
+        marginBottom: 20,
+        background: '#2d3748',
+        borderRadius: 10,
+        padding: 5,
+        maxWidth: 400,
+        margin: '0 auto 20px'
+      }}>
+        <button
+          onClick={() => setCurrentTab('export')}
+          style={{
+            flex: 1,
+            padding: '12px 20px',
+            background: currentTab === 'export' ? '#4CAF50' : 'transparent',
+            color: '#fff',
+            border: 'none',
+            borderRadius: 8,
+            cursor: 'pointer',
+            fontWeight: currentTab === 'export' ? 'bold' : 'normal',
+            transition: 'all 0.3s ease'
+          }}
+        >
+          📤 Export
+        </button>
+        <button
+          onClick={() => setCurrentTab('import')}
+          style={{
+            flex: 1,
+            padding: '12px 20px',
+            background: currentTab === 'import' ? '#2196F3' : 'transparent',
+            color: '#fff',
+            border: 'none',
+            borderRadius: 8,
+            cursor: 'pointer',
+            fontWeight: currentTab === 'import' ? 'bold' : 'normal',
+            transition: 'all 0.3s ease'
+          }}
+        >
+          📥 Import
+        </button>
+      </div>
+
+      {/* Contenu selon l'onglet sélectionné */}
+      {currentTab === 'export' ? (
+        <>
+          <BackupExport />
+          
+          <div className="paper-card" style={{ maxWidth: 700, margin: '20px auto' }}>
+            <h4 style={{ color: '#e4edfa', marginBottom: 15 }}>📋 Guide Export</h4>
+            <div style={{ color: '#99b2d4', lineHeight: 1.8 }}>
+              <div style={{ display: 'grid', gap: 12 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <span style={{ fontSize: '1.2rem' }}>🔒</span>
+                  <span><strong>Sécurité :</strong> Seul le propriétaire peut créer des sauvegardes complètes de toutes les données.</span>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <span style={{ fontSize: '1.2rem' }}>📁</span>
+                  <span><strong>Localisation :</strong> Les fichiers JSON sont téléchargés dans votre dossier "Téléchargements".</span>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <span style={{ fontSize: '1.2rem' }}>📅</span>
+                  <span><strong>Fréquence :</strong> Sauvegarde complète 1x/semaine, sauvegarde rapide quotidienne recommandée.</span>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <span style={{ fontSize: '1.2rem' }}>💾</span>
+                  <span><strong>Format :</strong> Données exportées en JSON (lisible, réimportable, compatible).</span>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <span style={{ fontSize: '1.2rem' }}>🔄</span>
+                  <span><strong>Restauration :</strong> Gardez vos fichiers de sauvegarde en sécurité pour une restauration future.</span>
+                </div>
+              </div>
             </div>
           </div>
-        </div>
-      </div>
+        </>
+      ) : (
+        <>
+          <ImportBackup />
+          
+          <div className="paper-card" style={{ maxWidth: 700, margin: '20px auto' }}>
+            <h4 style={{ color: '#e4edfa', marginBottom: 15 }}>📋 Guide Import</h4>
+            <div style={{ color: '#99b2d4', lineHeight: 1.8 }}>
+              <div style={{ display: 'grid', gap: 12 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <span style={{ fontSize: '1.2rem' }}>⚠️</span>
+                  <span><strong>Attention :</strong> L'import remplace ou fusionne les données selon le mode choisi.</span>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <span style={{ fontSize: '1.2rem' }}>📄</span>
+                  <span><strong>Format accepté :</strong> Fichiers JSON générés par l'export de cette application.</span>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <span style={{ fontSize: '1.2rem' }}>🔄</span>
+                  <span><strong>Mode Remplacement :</strong> Supprime toutes les données existantes avant l'import.</span>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <span style={{ fontSize: '1.2rem' }}>➕</span>
+                  <span><strong>Mode Fusion :</strong> Ajoute les données sans supprimer l'existant.</span>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <span style={{ fontSize: '1.2rem' }}>💾</span>
+                  <span><strong>Recommandation :</strong> Créez une sauvegarde avant tout import en mode remplacement.</span>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <span style={{ fontSize: '1.2rem' }}>🔒</span>
+                  <span><strong>Sécurité :</strong> Seul le propriétaire peut importer des sauvegardes complètes.</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -178,12 +268,25 @@ function AppWrapper() {
             }
           />
 
-          {/* Gestion des sauvegardes */}
+          {/* Gestion des sauvegardes avec import/export */}
           <Route
             path="/backup"
             element={
               <Protected permission="voir_dashboard">
                 <BackupPage />
+              </Protected>
+            }
+          />
+
+          {/* Page d'import dédiée (alternative) */}
+          <Route
+            path="/import"
+            element={
+              <Protected permission="voir_dashboard">
+                <div className="fullscreen-table-wrap">
+                  <div className="fullscreen-table-title">📥 Import de Sauvegarde</div>
+                  <ImportBackup />
+                </div>
               </Protected>
             }
           />

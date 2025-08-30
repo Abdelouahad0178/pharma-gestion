@@ -4,6 +4,82 @@ import { db } from '../firebase/config';
 import { collection, getDocs, doc, getDoc } from 'firebase/firestore';
 import { useUserRole } from '../contexts/UserRoleContext';
 
+/* =========================
+   🔧 Helpers dates & JSON
+========================= */
+// Détecte un Timestamp Firestore (v9+) ou un objet {seconds, nanoseconds}
+const isFirestoreTimestamp = (v) =>
+  !!v && typeof v === 'object' &&
+  (
+    typeof v.toDate === 'function' ||
+    (typeof v.seconds === 'number' && typeof v.nanoseconds === 'number')
+  );
+
+// Convertit en Date JS (ou null si impossible)
+const toJsDate = (value) => {
+  try {
+    if (!value) return null;
+    if (value instanceof Date) return value;
+    if (isFirestoreTimestamp(value)) {
+      if (typeof value.toDate === 'function') return value.toDate();
+      // Objet “timestamp-like”
+      return new Date(value.seconds * 1000 + Math.floor((value.nanoseconds || 0) / 1e6));
+    }
+    // NE PAS “deviner” les nombres (risque de casser des prix/quantités)
+    // NE PAS forcer les strings → on laisse tel quel si ce n'est pas déjà une Date.
+    return null;
+  } catch {
+    return null;
+  }
+};
+
+// Normalisation profonde: Dates/Timestamps → ISO8601 ; undefined → null ; obj/array traités récursivement
+const normalizeForExport = (data) => {
+  const seen = new WeakSet();
+
+  const _walk = (val) => {
+    // Null, primitives
+    if (val === null) return null;
+    const t = typeof val;
+    if (t === 'string' || t === 'number' || t === 'boolean') return val;
+    if (val === undefined) return null;
+
+    // Date / Timestamp Firestore
+    const asDate = toJsDate(val);
+    if (asDate) return asDate.toISOString();
+
+    // Tableaux
+    if (Array.isArray(val)) {
+      return val.map((item) => _walk(item));
+    }
+
+    // Objets
+    if (t === 'object') {
+      if (seen.has(val)) return null; // évite cycles improbables
+      seen.add(val);
+      const out = {};
+      for (const k of Object.keys(val)) {
+        out[k] = _walk(val[k]);
+      }
+      return out;
+    }
+
+    // Fallback
+    return val;
+  };
+
+  return _walk(data);
+};
+
+// Format lisible taille fichier
+const formatFileSize = (bytes) => {
+  if (!bytes) return '0 Bytes';
+  const k = 1024;
+  const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return `${parseFloat((bytes / Math.pow(k, i)).toFixed(2))} ${sizes[i]}`;
+};
+
 export default function BackupExport() {
   const { user, societeId, isOwner, role, societeName } = useUserRole();
   const [loading, setLoading] = useState(false);
@@ -11,45 +87,10 @@ export default function BackupExport() {
   const [progress, setProgress] = useState(0);
   const [exportStats, setExportStats] = useState(null);
 
-  // Utilitaire pour convertir les Timestamps Firestore
-  const convertFirestoreData = (data) => {
-    return JSON.parse(JSON.stringify(data, (key, value) => {
-      // Conversion des Timestamps Firestore
-      if (value && typeof value === 'object' && value.seconds && value.nanoseconds !== undefined) {
-        return new Date(value.seconds * 1000).toISOString();
-      }
-      // Conversion des dates JavaScript
-      if (value instanceof Date) {
-        return value.toISOString();
-      }
-      // Gérer les valeurs null/undefined
-      if (value === undefined) {
-        return null;
-      }
-      return value;
-    }));
-  };
-
-  // Fonction pour formater les tailles de fichiers
-  const formatFileSize = (bytes) => {
-    if (bytes === 0) return '0 Bytes';
-    const k = 1024;
-    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
-  };
-
-  // Exporter toutes les données de la société
+  // Export complet (opérations + documents + métadonnées)
   const exportAllData = async () => {
-    if (!user) {
-      setStatus('❌ Utilisateur non connecté');
-      return;
-    }
-
-    if (!societeId) {
-      setStatus('❌ Aucune société assignée');
-      return;
-    }
+    if (!user) { setStatus('❌ Utilisateur non connecté'); return; }
+    if (!societeId) { setStatus('❌ Aucune société assignée'); return; }
 
     setLoading(true);
     setProgress(0);
@@ -57,26 +98,25 @@ export default function BackupExport() {
     setExportStats(null);
 
     try {
-      const startTime = Date.now();
-      
-      // Métadonnées de la sauvegarde
+      const start = Date.now();
+      const exportDate = new Date();
+
+      // Métadonnées d’export enrichies (ISO + FR + ms)
       const backup = {
         metadata: {
-          exportDate: new Date().toISOString(),
-          exportDateFr: new Date().toLocaleDateString('fr-FR', {
-            year: 'numeric',
-            month: 'long', 
-            day: 'numeric',
-            hour: '2-digit',
-            minute: '2-digit'
+          exportDateIso: exportDate.toISOString(),
+          exportDateFr: exportDate.toLocaleDateString('fr-FR', {
+            year: 'numeric', month: 'long', day: 'numeric',
+            hour: '2-digit', minute: '2-digit'
           }),
-          societeId: societeId,
+          exportDateMs: exportDate.getTime(),
+          societeId,
           societeName: societeName || 'Pharmacie',
           exportedBy: user.email,
           exportedByRole: role,
           exportedByName: user.displayName || user.email,
-          isOwner: isOwner,
-          version: '1.2',
+          isOwner: !!isOwner,
+          version: '1.3',
           appName: 'Pharma Gestion',
           type: 'complete_backup'
         },
@@ -92,21 +132,20 @@ export default function BackupExport() {
 
       // Collections selon les permissions
       let collections = [];
-      
       if (isOwner || role === 'docteur') {
         collections = [
-          { name: 'achats', label: '🛒 Achats', priority: 'high' },
-          { name: 'ventes', label: '💰 Ventes', priority: 'high' },
-          { name: 'stock', label: '📦 Stock', priority: 'high' },
-          { name: 'devisFactures', label: '📄 Devis & Factures', priority: 'medium' },
-          { name: 'paiements', label: '💳 Paiements', priority: 'medium' },
-          { name: 'retours', label: '↩️ Retours', priority: 'low' },
-          { name: 'parametres', label: '⚙️ Paramètres', priority: 'low' }
+          { name: 'achats',        label: '🛒 Achats',            priority: 'high'   },
+          { name: 'ventes',        label: '💰 Ventes',            priority: 'high'   },
+          { name: 'stock',         label: '📦 Stock',             priority: 'high'   },
+          { name: 'devisFactures', label: '📄 Devis & Factures',  priority: 'medium' },
+          { name: 'paiements',     label: '💳 Paiements',         priority: 'medium' },
+          { name: 'retours',       label: '↩️ Retours',           priority: 'low'    },
+          { name: 'parametres',    label: '⚙️ Paramètres',        priority: 'low'    },
         ];
       } else {
         collections = [
-          { name: 'ventes', label: '💰 Ventes', priority: 'high' },
-          { name: 'stock', label: '📦 Stock (lecture)', priority: 'medium' }
+          { name: 'ventes',        label: '💰 Ventes',            priority: 'high'   },
+          { name: 'stock',         label: '📦 Stock (lecture)',   priority: 'medium' },
         ];
       }
 
@@ -116,81 +155,77 @@ export default function BackupExport() {
 
       // Exporter chaque collection
       for (const coll of collections) {
-        const collectionProgress = Math.round((currentCollection / totalCollections) * 100);
-        setProgress(collectionProgress);
+        setProgress(Math.round((currentCollection / totalCollections) * 100));
         setStatus(`🔄 Export ${coll.label}...`);
 
         try {
-          const collectionRef = collection(db, 'societe', societeId, coll.name);
-          const snapshot = await getDocs(collectionRef);
-          
-          backup.data[coll.name] = [];
-          let collectionDocCount = 0;
+          const ref = collection(db, 'societe', societeId, coll.name);
+          const snap = await getDocs(ref);
 
-          snapshot.forEach(docSnap => {
+          backup.data[coll.name] = [];
+          let count = 0;
+
+          snap.forEach((docSnap) => {
             try {
-              const data = docSnap.data();
-              const cleanData = convertFirestoreData(data);
+              const raw = docSnap.data();
+              const clean = normalizeForExport(raw);
 
               backup.data[coll.name].push({
                 id: docSnap.id,
-                ...cleanData,
+                ...clean,
                 _exportedAt: new Date().toISOString(),
-                _collection: coll.name
+                _collection: coll.name,
               });
-              
-              collectionDocCount++;
+
+              count++;
               totalDocuments++;
-            } catch (docError) {
-              console.warn(`⚠️ Erreur document ${docSnap.id}:`, docError);
+            } catch (e) {
+              console.warn(`⚠️ Erreur document ${docSnap.id}:`, e);
             }
           });
 
-          // Statistiques de la collection
           backup.statistics.collectionsDetails[coll.name] = {
             label: coll.label,
-            count: collectionDocCount,
+            count,
             priority: coll.priority,
             exported: true,
-            exportedAt: new Date().toISOString()
+            exportedAt: new Date().toISOString(),
           };
 
-          console.log(`✅ ${coll.label}: ${collectionDocCount} documents exportés`);
-          
-        } catch (collError) {
-          console.error(`❌ Erreur collection ${coll.name}:`, collError);
+          console.log(`✅ ${coll.label}: ${count} doc(s) exporté(s)`);
+        } catch (err) {
+          console.error(`❌ Erreur collection ${coll.name}:`, err);
           backup.data[coll.name] = [];
           backup.statistics.collectionsDetails[coll.name] = {
             label: coll.label,
             count: 0,
             priority: coll.priority,
             exported: false,
-            error: collError.message,
-            exportedAt: new Date().toISOString()
+            error: err?.message || String(err),
+            exportedAt: new Date().toISOString(),
           };
         }
 
         currentCollection++;
       }
 
-      // Exporter les informations utilisateurs (si propriétaire)
+      // Export utilisateurs (propriétaire uniquement)
       if (isOwner) {
         setStatus('🔄 Export utilisateurs...');
         try {
           const usersRef = collection(db, 'users');
-          const usersSnapshot = await getDocs(usersRef);
+          const usersSnap = await getDocs(usersRef);
           backup.data.users = [];
-          
-          usersSnapshot.forEach(userDoc => {
-            const userData = userDoc.data();
-            if (userData.societeId === societeId) { // Seulement les utilisateurs de cette société
-              const cleanUserData = convertFirestoreData(userData);
+
+          usersSnap.forEach((userDoc) => {
+            const u = userDoc.data();
+            if (u?.societeId === societeId) {
+              const clean = normalizeForExport(u);
               backup.data.users.push({
                 id: userDoc.id,
-                ...cleanUserData,
-                // Masquer les données sensibles
-                password: undefined,
-                _exportedAt: new Date().toISOString()
+                ...clean,
+                password: undefined, // sera supprimé au stringify
+                _exportedAt: new Date().toISOString(),
               });
               totalDocuments++;
             }
@@ -201,27 +236,34 @@ export default function BackupExport() {
             count: backup.data.users.length,
             priority: 'high',
             exported: true,
-            exportedAt: new Date().toISOString()
+            exportedAt: new Date().toISOString(),
           };
-        } catch (userError) {
-          console.warn('⚠️ Erreur export utilisateurs:', userError);
+        } catch (err) {
+          console.warn('⚠️ Erreur export utilisateurs:', err);
           backup.data.users = [];
+          backup.statistics.collectionsDetails.users = {
+            label: '👥 Utilisateurs',
+            count: 0,
+            priority: 'high',
+            exported: false,
+            error: err?.message || String(err),
+            exportedAt: new Date().toISOString(),
+          };
         }
       }
 
-      // Exporter les informations de la société
+      // Export infos société
       if (societeId) {
         setStatus('🔄 Export informations société...');
         try {
-          const societeRef = doc(db, 'societe', societeId);
-          const societeSnap = await getDoc(societeRef);
-          
-          if (societeSnap.exists()) {
-            const societeData = convertFirestoreData(societeSnap.data());
+          const sRef = doc(db, 'societe', societeId);
+          const sSnap = await getDoc(sRef);
+          if (sSnap.exists()) {
+            const clean = normalizeForExport(sSnap.data());
             backup.data.societeInfo = {
               id: societeId,
-              ...societeData,
-              _exportedAt: new Date().toISOString()
+              ...clean,
+              _exportedAt: new Date().toISOString(),
             };
             totalDocuments++;
 
@@ -230,34 +272,43 @@ export default function BackupExport() {
               count: 1,
               priority: 'high',
               exported: true,
-              exportedAt: new Date().toISOString()
+              exportedAt: new Date().toISOString(),
             };
           }
-        } catch (societeError) {
-          console.warn('⚠️ Erreur export société:', societeError);
+        } catch (err) {
+          console.warn('⚠️ Erreur export société:', err);
+          backup.data.societeInfo = null;
+          backup.statistics.collectionsDetails.societeInfo = {
+            label: '🏥 Société',
+            count: 0,
+            priority: 'high',
+            exported: false,
+            error: err?.message || String(err),
+            exportedAt: new Date().toISOString(),
+          };
         }
       }
 
-      // Finaliser les statistiques
-      const endTime = Date.now();
+      // Stats finales
+      const end = Date.now();
       backup.statistics.totalDocuments = totalDocuments;
       backup.statistics.totalCollections = Object.keys(backup.data).length;
-      backup.statistics.exportDuration = endTime - startTime;
+      backup.statistics.exportDuration = end - start;
 
       setProgress(100);
       setStatus('📁 Génération du fichier JSON...');
 
-      // Créer le fichier JSON
+      // JSON final
       const jsonString = JSON.stringify(backup, null, 2);
       const fileSize = new Blob([jsonString]).size;
       backup.statistics.fileSize = fileSize;
 
-      // Nom du fichier avec timestamp
-      const timestamp = new Date().toISOString().slice(0, 19).replace(/[T:]/g, '-');
-      const societeName_clean = (societeName || 'pharma').replace(/[^a-zA-Z0-9]/g, '').substring(0, 10);
-      const fileName = `backup-${societeName_clean}-${timestamp}.json`;
-      
-      // Télécharger le fichier
+      // Nom de fichier
+      const ts = new Date().toISOString().slice(0, 19).replace(/[T:]/g, '-');
+      const safeName = (societeName || 'pharma').replace(/[^a-zA-Z0-9]/g, '').substring(0, 18) || 'pharma';
+      const fileName = `backup-${safeName}-${ts}.json`;
+
+      // Téléchargement
       const blob = new Blob([jsonString], { type: 'application/json' });
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -269,31 +320,27 @@ export default function BackupExport() {
       window.URL.revokeObjectURL(url);
       document.body.removeChild(a);
 
-      // Statistiques finales
+      // Statistiques à l’écran
       setExportStats({
-        fileName: fileName,
-        totalDocuments: totalDocuments,
+        fileName,
+        totalDocuments,
         totalCollections: backup.statistics.totalCollections,
         fileSize: formatFileSize(fileSize),
         duration: Math.round(backup.statistics.exportDuration / 1000),
-        collections: backup.statistics.collectionsDetails
+        collections: backup.statistics.collectionsDetails,
       });
 
       setStatus(`✅ Sauvegarde créée : ${fileName}`);
-      
     } catch (error) {
       console.error('❌ Erreur export complète:', error);
-      setStatus(`❌ Erreur: ${error.message}`);
+      setStatus(`❌ Erreur: ${error.message || String(error)}`);
     }
 
     setLoading(false);
-    setTimeout(() => {
-      setStatus('');
-      setProgress(0);
-    }, 10000);
+    setTimeout(() => { setStatus(''); setProgress(0); }, 10000);
   };
 
-  // Export rapide (données essentielles)
+  // Export rapide (essentiel)
   const exportQuickBackup = async () => {
     if (!user || !societeId) {
       setStatus('❌ Données utilisateur manquantes');
@@ -304,61 +351,54 @@ export default function BackupExport() {
     setStatus('🚀 Export rapide en cours...');
 
     try {
-      const quickBackup = {
+      const quick = {
         metadata: {
           type: 'quick_backup',
-          exportDate: new Date().toISOString(),
+          exportDateIso: new Date().toISOString(),
           exportDateFr: new Date().toLocaleDateString('fr-FR'),
-          societeId: societeId,
+          exportDateMs: Date.now(),
+          societeId,
           societeName: societeName || 'Pharmacie',
           exportedBy: user.email,
-          version: '1.2'
+          version: '1.3',
         },
         data: {},
         statistics: {
           totalDocuments: 0,
-          priority: 'essential_only'
-        }
+          priority: 'essential_only',
+        },
       };
 
-      // Collections essentielles
-      const essentialCollections = [
+      const essentials = [
         { name: 'ventes', label: 'Ventes' },
-        { name: 'stock', label: 'Stock' }
+        { name: 'stock',  label: 'Stock'  },
       ];
-      
+
       let totalDocs = 0;
 
-      for (const coll of essentialCollections) {
+      for (const coll of essentials) {
         try {
-          const collectionRef = collection(db, 'societe', societeId, coll.name);
-          const snapshot = await getDocs(collectionRef);
-          quickBackup.data[coll.name] = [];
+          const ref = collection(db, 'societe', societeId, coll.name);
+          const snap = await getDocs(ref);
+          quick.data[coll.name] = [];
 
-          snapshot.forEach(docSnap => {
-            const data = convertFirestoreData(docSnap.data());
-            quickBackup.data[coll.name].push({
-              id: docSnap.id,
-              ...data
-            });
+          snap.forEach((docSnap) => {
+            const clean = normalizeForExport(docSnap.data());
+            quick.data[coll.name].push({ id: docSnap.id, ...clean });
             totalDocs++;
           });
-        } catch (error) {
-          console.warn(`Erreur ${coll.name}:`, error);
-          quickBackup.data[coll.name] = [];
+        } catch (err) {
+          console.warn(`Erreur ${coll.name}:`, err);
+          quick.data[coll.name] = [];
         }
       }
 
-      quickBackup.statistics.totalDocuments = totalDocs;
+      quick.statistics.totalDocuments = totalDocs;
 
-      // Télécharger
-      const timestamp = new Date().toISOString().split('T')[0];
-      const fileName = `quick-backup-${timestamp}.json`;
-      
-      const blob = new Blob([JSON.stringify(quickBackup, null, 2)], { 
-        type: 'application/json' 
-      });
-      
+      const day = new Date().toISOString().split('T')[0];
+      const fileName = `quick-backup-${day}.json`;
+
+      const blob = new Blob([JSON.stringify(quick, null, 2)], { type: 'application/json' });
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
@@ -369,10 +409,9 @@ export default function BackupExport() {
       document.body.removeChild(a);
 
       setStatus(`✅ Sauvegarde rapide créée : ${fileName} (${totalDocs} documents)`);
-      
     } catch (error) {
       console.error('❌ Erreur export rapide:', error);
-      setStatus(`❌ Erreur: ${error.message}`);
+      setStatus(`❌ Erreur: ${error.message || String(error)}`);
     }
 
     setLoading(false);
@@ -401,7 +440,7 @@ export default function BackupExport() {
     );
   }
 
-  // Interface utilisateur
+  // UI
   return (
     <div className="paper-card" style={{ maxWidth: 700, margin: '20px auto' }}>
       <div style={{ textAlign: 'center', marginBottom: 25 }}>
@@ -411,15 +450,9 @@ export default function BackupExport() {
         </p>
       </div>
 
-      {/* Informations utilisateur */}
-      <div style={{ 
-        display: 'flex', 
-        justifyContent: 'space-between', 
-        marginBottom: 20,
-        padding: 15,
-        background: '#2b3951',
-        borderRadius: 8,
-        fontSize: '0.9rem'
+      <div style={{
+        display: 'flex', justifyContent: 'space-between', marginBottom: 20,
+        padding: 15, background: '#2b3951', borderRadius: 8, fontSize: '0.9rem'
       }}>
         <div>
           <span style={{ color: '#99b2d4' }}>👤 Utilisateur : </span>
@@ -427,55 +460,39 @@ export default function BackupExport() {
         </div>
         <div>
           <span style={{ color: '#99b2d4' }}>🔑 Rôle : </span>
-          <span style={{ 
+          <span style={{
             color: isOwner ? '#28a745' : role === 'docteur' ? '#ffc107' : '#17a2b8',
-            fontWeight: 600 
+            fontWeight: 600
           }}>
             {isOwner ? '👑 Propriétaire' : role === 'docteur' ? '⚕️ Docteur' : '👩‍💼 Vendeuse'}
           </span>
         </div>
       </div>
 
-      {/* Barre de progression */}
       {loading && progress > 0 && (
         <div style={{ marginBottom: 25 }}>
-          <div style={{ 
-            background: '#34518b', 
-            borderRadius: 12, 
-            height: 10, 
-            overflow: 'hidden',
+          <div style={{
+            background: '#34518b', borderRadius: 12, height: 10, overflow: 'hidden',
             boxShadow: 'inset 0 2px 4px rgba(0,0,0,0.1)'
           }}>
             <div style={{
               background: 'linear-gradient(90deg, #28a745, #20c997)',
-              height: '100%',
-              width: `${progress}%`,
-              transition: 'width 0.3s ease',
-              borderRadius: '12px'
+              height: '100%', width: `${progress}%`, transition: 'width 0.3s ease', borderRadius: '12px'
             }} />
           </div>
-          <p style={{ 
-            textAlign: 'center', 
-            margin: '10px 0', 
-            fontSize: '0.85rem', 
-            color: '#99b2d4',
-            fontWeight: 600
-          }}>
+          <p style={{ textAlign: 'center', margin: '10px 0', fontSize: '0.85rem', color: '#99b2d4', fontWeight: 600 }}>
             {progress}% terminé
           </p>
         </div>
       )}
 
-      {/* Boutons d'export */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 15 }}>
-        
-        {/* Export complet */}
-        <button 
+        <button
           onClick={exportAllData}
           disabled={loading}
           className="btn"
-          style={{ 
-            width: '100%', 
+          style={{
+            width: '100%',
             background: loading ? '#555' : 'linear-gradient(90deg, #28a745, #20c997)',
             fontSize: '1.1rem',
             padding: '16px',
@@ -486,13 +503,12 @@ export default function BackupExport() {
           {loading ? '🔄 Export en cours...' : '💾 Sauvegarde Complète'}
         </button>
 
-        {/* Export rapide */}
-        <button 
+        <button
           onClick={exportQuickBackup}
           disabled={loading}
           className="btn"
-          style={{ 
-            width: '100%', 
+          style={{
+            width: '100%',
             background: loading ? '#555' : 'linear-gradient(90deg, #007bff, #17a2b8)',
             fontSize: '1rem',
             padding: '14px',
@@ -503,20 +519,15 @@ export default function BackupExport() {
         </button>
       </div>
 
-      {/* Status */}
       {status && (
-        <div style={{ 
-          marginTop: 20, 
-          padding: 15, 
-          background: status.includes('✅') ? '#155724' : 
-                     status.includes('❌') ? '#721c24' : 
-                     '#0c5460',
-          borderRadius: 10,
-          color: '#fff',
+        <div style={{
+          marginTop: 20, padding: 15,
+          background: status.includes('✅') ? '#155724' :
+                     status.includes('❌') ? '#721c24' : '#0c5460',
+          borderRadius: 10, color: '#fff',
           borderLeft: `5px solid ${
-            status.includes('✅') ? '#28a745' : 
-            status.includes('❌') ? '#dc3545' : 
-            '#17a2b8'
+            status.includes('✅') ? '#28a745' :
+            status.includes('❌') ? '#dc3545' : '#17a2b8'
           }`,
           fontWeight: 500
         }}>
@@ -524,49 +535,24 @@ export default function BackupExport() {
         </div>
       )}
 
-      {/* Statistiques d'export */}
       {exportStats && (
-        <div style={{ 
-          marginTop: 20, 
-          padding: 20, 
-          background: '#155724', 
-          borderRadius: 10,
-          color: '#fff'
-        }}>
+        <div style={{ marginTop: 20, padding: 20, background: '#155724', borderRadius: 10, color: '#fff' }}>
           <h4 style={{ marginBottom: 15, color: '#28a745' }}>📊 Statistiques d'export</h4>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12 }}>
-            <div>
-              <span style={{ color: '#d4edda' }}>📁 Fichier : </span>
-              <span style={{ fontWeight: 600 }}>{exportStats.fileName}</span>
-            </div>
-            <div>
-              <span style={{ color: '#d4edda' }}>📄 Documents : </span>
-              <span style={{ fontWeight: 600 }}>{exportStats.totalDocuments}</span>
-            </div>
-            <div>
-              <span style={{ color: '#d4edda' }}>📂 Collections : </span>
-              <span style={{ fontWeight: 600 }}>{exportStats.totalCollections}</span>
-            </div>
-            <div>
-              <span style={{ color: '#d4edda' }}>💾 Taille : </span>
-              <span style={{ fontWeight: 600 }}>{exportStats.fileSize}</span>
-            </div>
-            <div>
-              <span style={{ color: '#d4edda' }}>⏱️ Durée : </span>
-              <span style={{ fontWeight: 600 }}>{exportStats.duration}s</span>
-            </div>
+            <div><span style={{ color: '#d4edda' }}>📁 Fichier : </span><span style={{ fontWeight: 600 }}>{exportStats.fileName}</span></div>
+            <div><span style={{ color: '#d4edda' }}>📄 Documents : </span><span style={{ fontWeight: 600 }}>{exportStats.totalDocuments}</span></div>
+            <div><span style={{ color: '#d4edda' }}>📂 Collections : </span><span style={{ fontWeight: 600 }}>{exportStats.totalCollections}</span></div>
+            <div><span style={{ color: '#d4edda' }}>💾 Taille : </span><span style={{ fontWeight: 600 }}>{exportStats.fileSize}</span></div>
+            <div><span style={{ color: '#d4edda' }}>⏱️ Durée : </span><span style={{ fontWeight: 600 }}>{exportStats.duration}s</span></div>
           </div>
-          
-          {/* Détail des collections */}
+
           <div style={{ marginTop: 15 }}>
             <h5 style={{ color: '#d4edda', marginBottom: 10 }}>📋 Détail des collections :</h5>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', gap: 8 }}>
               {Object.entries(exportStats.collections).map(([name, info]) => (
-                <div key={name} style={{ 
-                  background: info.exported ? '#1e7e34' : '#721c24', 
-                  padding: '8px 12px', 
-                  borderRadius: 6,
-                  fontSize: '0.85rem'
+                <div key={name} style={{
+                  background: info.exported ? '#1e7e34' : '#721c24',
+                  padding: '8px 12px', borderRadius: 6, fontSize: '0.85rem'
                 }}>
                   <span>{info.label} : </span>
                   <span style={{ fontWeight: 600 }}>
@@ -579,53 +565,30 @@ export default function BackupExport() {
         </div>
       )}
 
-      {/* Informations détaillées */}
-      <div style={{ 
-        marginTop: 25, 
-        padding: 20, 
-        background: '#2b3951', 
-        borderRadius: 10,
-        fontSize: '0.9rem',
-        color: '#99b2d4'
-      }}>
+      <div style={{ marginTop: 25, padding: 20, background: '#2b3951', borderRadius: 10, fontSize: '0.9rem', color: '#99b2d4' }}>
         <h4 style={{ color: '#e4edfa', marginBottom: 15 }}>📋 Contenu des sauvegardes</h4>
-        
-        <div style={{ display: 'grid', gap: 15 }}>
-         {/* Sauvegarde complète */}
-<div>
-  <h5 style={{ color: '#28a745', marginBottom: 8 }}>💾 Sauvegarde Complète</h5>
-  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 8 }}>
-    {((isOwner || role === 'docteur') ? [
-      '🛒 Achats', '💰 Ventes', '📦 Stock', 
-      '📄 Devis/Factures', '💳 Paiements', '↩️ Retours', 
-      '⚙️ Paramètres', '👥 Utilisateurs', '🏥 Société'
-    ] : ['💰 Ventes', '📦 Stock (lecture)']).map((item, index) => (
-      <div key={index} style={{ 
-        background: '#34518b', 
-        padding: '8px 10px', 
-        borderRadius: 6, 
-        textAlign: 'center',
-        fontSize: '0.8rem',
-        fontWeight: 500
-      }}>
-        {item}
-      </div>
-    ))}
-  </div>
-</div>
 
-          {/* Sauvegarde rapide */}
+        <div style={{ display: 'grid', gap: 15 }}>
+          <div>
+            <h5 style={{ color: '#28a745', marginBottom: 8 }}>💾 Sauvegarde Complète</h5>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 8 }}>
+              {((isOwner || role === 'docteur') ? [
+                '🛒 Achats', '💰 Ventes', '📦 Stock',
+                '📄 Devis/Factures', '💳 Paiements', '↩️ Retours',
+                '⚙️ Paramètres', '👥 Utilisateurs', '🏥 Société'
+              ] : ['💰 Ventes', '📦 Stock (lecture)']).map((item, i) => (
+                <div key={i} style={{ background: '#34518b', padding: '8px 10px', borderRadius: 6, textAlign: 'center', fontSize: '0.8rem', fontWeight: 500 }}>
+                  {item}
+                </div>
+              ))}
+            </div>
+          </div>
+
           <div>
             <h5 style={{ color: '#17a2b8', marginBottom: 8 }}>🚀 Sauvegarde Rapide</h5>
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-              {['💰 Ventes', '📦 Stock'].map((item, index) => (
-                <div key={index} style={{ 
-                  background: '#0c5460', 
-                  padding: '8px 12px', 
-                  borderRadius: 6,
-                  fontSize: '0.8rem',
-                  fontWeight: 500
-                }}>
+              {['💰 Ventes', '📦 Stock'].map((item, i) => (
+                <div key={i} style={{ background: '#0c5460', padding: '8px 12px', borderRadius: 6, fontSize: '0.8rem', fontWeight: 500 }}>
                   {item}
                 </div>
               ))}
@@ -633,13 +596,7 @@ export default function BackupExport() {
           </div>
         </div>
 
-        <div style={{ 
-          marginTop: 20, 
-          padding: 15, 
-          background: '#1c3353', 
-          borderRadius: 8,
-          borderLeft: '4px solid #17a2b8'
-        }}>
+        <div style={{ marginTop: 20, padding: 15, background: '#1c3353', borderRadius: 8, borderLeft: '4px solid #17a2b8' }}>
           <p style={{ margin: 0, fontStyle: 'italic', color: '#7aa3ff' }}>
             💡 <strong>Conseils :</strong>
           </p>
@@ -652,16 +609,10 @@ export default function BackupExport() {
         </div>
       </div>
 
-      {/* Permissions */}
       {!isOwner && role !== 'docteur' && (
-        <div style={{ 
-          marginTop: 20, 
-          padding: 15, 
-          background: '#856404', 
-          borderRadius: 8, 
-          color: '#fff3cd',
-          fontSize: '0.9rem',
-          borderLeft: '4px solid #ffc107'
+        <div style={{
+          marginTop: 20, padding: 15, background: '#856404', borderRadius: 8,
+          color: '#fff3cd', fontSize: '0.9rem', borderLeft: '4px solid #ffc107'
         }}>
           ⚠️ <strong>Accès limité :</strong> En tant que vendeuse, vous pouvez exporter uniquement les ventes et le stock.
         </div>

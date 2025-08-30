@@ -12,33 +12,43 @@ import { signOut } from "firebase/auth";
 import { auth } from "../../firebase/config";
 import { useNavigate } from "react-router-dom";
 
-// Fonction de formatage des dates
-function formatActivityDate(dateInput) {
-  let date;
-  
-  if (!dateInput) {
-    return "Date non spécifiée";
-  }
+// ========== FONCTIONS UTILITAIRES POUR DATES ==========
+// Fonction robuste pour convertir différents formats de date
+function parseDate(dateInput) {
+  if (!dateInput) return null;
   
   try {
+    // Timestamp Firestore
     if (dateInput?.toDate && typeof dateInput.toDate === 'function') {
-      date = dateInput.toDate();
-    } else if (dateInput?.seconds) {
-      date = new Date(dateInput.seconds * 1000);
-    } else if (dateInput instanceof Date) {
-      date = dateInput;
-    } else if (typeof dateInput === 'string') {
-      date = new Date(dateInput);
-    } else if (typeof dateInput === 'number') {
-      date = new Date(dateInput);
-    } else {
-      return "Format de date invalide";
+      return dateInput.toDate();
     }
-
-    if (isNaN(date.getTime())) {
-      return "Date invalide";
+    // Objet avec propriété seconds (Timestamp sérialisé)
+    if (dateInput?.seconds) {
+      return new Date(dateInput.seconds * 1000);
     }
+    // Objet Date JavaScript
+    if (dateInput instanceof Date) {
+      return dateInput;
+    }
+    // String ISO ou timestamp
+    if (typeof dateInput === 'string' || typeof dateInput === 'number') {
+      const date = new Date(dateInput);
+      return isNaN(date.getTime()) ? null : date;
+    }
+    
+    return null;
+  } catch (error) {
+    console.warn("Erreur parsing date:", dateInput, error);
+    return null;
+  }
+}
 
+// Fonction de formatage des dates avec gestion robuste
+function formatActivityDate(dateInput) {
+  const date = parseDate(dateInput);
+  if (!date) return "Date non spécifiée";
+
+  try {
     const now = new Date();
     const diffMs = now - date;
     const diffSeconds = Math.floor(diffMs / 1000);
@@ -74,8 +84,43 @@ function formatActivityDate(dateInput) {
       return `${formatFullDate(date)} ${formatTime(date)}`;
     }
   } catch (error) {
-    console.error("Erreur de formatage de date:", error);
+    console.error("Erreur formatage date:", error);
     return "Date invalide";
+  }
+}
+
+// Fonction pour vérifier si une date correspond à une période
+function isDateInPeriod(dateInput, period, minDate = null, maxDate = null) {
+  const date = parseDate(dateInput);
+  if (!date) return false;
+
+  try {
+    // Vérification des limites personnalisées
+    if (minDate && date < new Date(minDate)) return false;
+    if (maxDate && date > new Date(maxDate + "T23:59:59")) return false;
+
+    // Si pas de dates personnalisées, utiliser la période
+    if (!minDate && !maxDate) {
+      const now = new Date();
+      switch (period) {
+        case "jour": 
+          return date.toDateString() === now.toDateString();
+        case "semaine": 
+          const weekAgo = new Date(now);
+          weekAgo.setDate(now.getDate() - 7);
+          return date >= weekAgo;
+        case "mois": 
+          return date.getMonth() === now.getMonth() && date.getFullYear() === now.getFullYear();
+        case "annee": 
+          return date.getFullYear() === now.getFullYear();
+        default: 
+          return true;
+      }
+    }
+    return true;
+  } catch (error) {
+    console.warn("Erreur vérification période:", dateInput, error);
+    return false;
   }
 }
 
@@ -89,7 +134,7 @@ export default function Dashboard() {
   
   const navigate = useNavigate();
   
-  // États principaux
+  // États statistiques
   const [totalVentes, setTotalVentes] = useState(0);
   const [totalAchats, setTotalAchats] = useState(0);
   const [totalPaiements, setTotalPaiements] = useState(0);
@@ -97,31 +142,32 @@ export default function Dashboard() {
   const [documentsImpayes, setDocumentsImpayes] = useState(0);
   const [soldeCaisse, setSoldeCaisse] = useState(0);
   const [alertes, setAlertes] = useState([]);
+
+  // États filtres
   const [periode, setPeriode] = useState("mois");
   const [dateMin, setDateMin] = useState("");
   const [dateMax, setDateMax] = useState("");
   const [showFilters, setShowFilters] = useState(false);
+
+  // États UI
   const [notification, setNotification] = useState(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isMobile, setIsMobile] = useState(false);
+  const [isTablet, setIsTablet] = useState(false);
 
-  // NOUVEL ÉTAT POUR LES INFORMATIONS DE LA SOCIÉTÉ
+  // États données
   const [societeInfo, setSocieteInfo] = useState(null);
   const [societeLoading, setSocieteLoading] = useState(false);
-
-  // États pour les données
   const [ventes, setVentes] = useState([]);
   const [achats, setAchats] = useState([]);
   const [stock, setStock] = useState([]);
+  const [stockEntries, setStockEntries] = useState([]); // Stock multi-lots
   const [paiements, setPaiements] = useState([]);
   const [retours, setRetours] = useState([]);
   const [dataLoading, setDataLoading] = useState(true);
   const [dataError, setDataError] = useState(null);
 
-  // États pour responsive
-  const [isMobile, setIsMobile] = useState(false);
-  const [isTablet, setIsTablet] = useState(false);
-
-  // Hook pour détecter la taille d'écran
+  // Détection responsive
   useEffect(() => {
     const checkScreenSize = () => {
       const width = window.innerWidth;
@@ -134,25 +180,25 @@ export default function Dashboard() {
     return () => window.removeEventListener('resize', checkScreenSize);
   }, []);
 
-  // Fonction pour afficher les notifications
+  // Notifications
   const showNotification = (message, type = 'success') => {
     setNotification({ message, type });
     setTimeout(() => setNotification(null), 3000);
   };
 
-  // Fonction de déconnexion
+  // Déconnexion
   const handleLogout = async () => {
     try {
       await signOut(auth);
       navigate("/login");
       showNotification("Déconnexion réussie !", "success");
     } catch (error) {
-      console.error("Erreur lors de la déconnexion:", error);
+      console.error("Erreur déconnexion:", error);
       showNotification("Erreur lors de la déconnexion", "error");
     }
   };
 
-  // NOUVELLE FONCTION POUR CHARGER LES INFORMATIONS DE LA SOCIÉTÉ
+  // Chargement des informations société
   const fetchSocieteInfo = async () => {
     if (!societeId) {
       setSocieteInfo(null);
@@ -161,7 +207,7 @@ export default function Dashboard() {
 
     try {
       setSocieteLoading(true);
-      console.log("🔄 Chargement des informations de la société:", societeId);
+      console.log("Chargement société:", societeId);
 
       const societeDocRef = doc(db, "societe", societeId);
       const societeDocSnap = await getDoc(societeDocRef);
@@ -169,25 +215,26 @@ export default function Dashboard() {
       if (societeDocSnap.exists()) {
         const societeData = societeDocSnap.data();
         setSocieteInfo(societeData);
-        console.log("✅ Informations société chargées:", societeData);
+        console.log("Société chargée:", societeData);
       } else {
-        console.warn("❌ Document société introuvable:", societeId);
+        console.warn("Société introuvable:", societeId);
         setSocieteInfo({ nom: "Société inconnue" });
       }
     } catch (error) {
-      console.error("❌ Erreur lors du chargement des informations société:", error);
+      console.error("Erreur chargement société:", error);
       setSocieteInfo({ nom: "Erreur de chargement" });
     } finally {
       setSocieteLoading(false);
     }
   };
 
-  // Fonction pour charger les données depuis la NOUVELLE structure (multi-société)
+  // Chargement des données avec gestion des imports JSON
   const fetchAllData = async () => {
     if (!societeId) {
       setVentes([]);
       setAchats([]);
       setStock([]);
+      setStockEntries([]);
       setPaiements([]);
       setRetours([]);
       setDataLoading(false);
@@ -198,43 +245,80 @@ export default function Dashboard() {
       setDataLoading(true);
       setDataError(null);
 
-      console.log("🔄 Chargement des données pour la société:", societeId);
+      console.log("Chargement données société:", societeId);
 
-      // Charger toutes les collections depuis la NOUVELLE structure (societe/id/collections)
-      const [ventesSnap, achatsSnap, stockSnap, paiementsSnap, retoursSnap] = await Promise.all([
+      // Charger toutes les collections avec gestion d'erreur individuelle
+      const [
+        ventesSnap, 
+        achatsSnap, 
+        stockSnap, 
+        stockEntriesSnap,
+        paiementsSnap, 
+        retoursSnap
+      ] = await Promise.all([
         getDocs(collection(db, "societe", societeId, "ventes")).catch(() => ({ docs: [] })),
         getDocs(collection(db, "societe", societeId, "achats")).catch(() => ({ docs: [] })),
         getDocs(collection(db, "societe", societeId, "stock")).catch(() => ({ docs: [] })),
+        getDocs(collection(db, "societe", societeId, "stock_entries")).catch(() => ({ docs: [] })),
         getDocs(collection(db, "societe", societeId, "paiements")).catch(() => ({ docs: [] })),
         getDocs(collection(db, "societe", societeId, "retours")).catch(() => ({ docs: [] }))
       ]);
 
-      // Convertir les snapshots en arrays
+      // Conversion avec nettoyage des données importées
       const ventesArr = [];
       const achatsArr = [];
       const stockArr = [];
+      const stockEntriesArr = [];
       const paiementsArr = [];
       const retoursArr = [];
 
-      ventesSnap.docs.forEach((doc) => ventesArr.push({ id: doc.id, ...doc.data() }));
-      achatsSnap.docs.forEach((doc) => achatsArr.push({ id: doc.id, ...doc.data() }));
-      stockSnap.docs.forEach((doc) => stockArr.push({ id: doc.id, ...doc.data() }));
-      paiementsSnap.docs.forEach((doc) => paiementsArr.push({ id: doc.id, ...doc.data() }));
-      retoursSnap.docs.forEach((doc) => retoursArr.push({ id: doc.id, ...doc.data() }));
+      // Fonction pour nettoyer les données importées
+      const cleanImportedData = (data) => {
+        const cleaned = { ...data };
+        // Supprimer les métadonnées d'export si présentes
+        delete cleaned._exportedAt;
+        delete cleaned._collection;
+        return cleaned;
+      };
 
-      console.log(`📊 Données chargées: ${ventesArr.length} ventes, ${achatsArr.length} achats, ${stockArr.length} stock, ${paiementsArr.length} paiements, ${retoursArr.length} retours`);
+      ventesSnap.docs.forEach((doc) => {
+        ventesArr.push({ id: doc.id, ...cleanImportedData(doc.data()) });
+      });
+      
+      achatsSnap.docs.forEach((doc) => {
+        achatsArr.push({ id: doc.id, ...cleanImportedData(doc.data()) });
+      });
+      
+      stockSnap.docs.forEach((doc) => {
+        stockArr.push({ id: doc.id, ...cleanImportedData(doc.data()) });
+      });
 
-      // Mettre à jour les états
+      stockEntriesSnap.docs.forEach((doc) => {
+        stockEntriesArr.push({ id: doc.id, ...cleanImportedData(doc.data()) });
+      });
+      
+      paiementsSnap.docs.forEach((doc) => {
+        paiementsArr.push({ id: doc.id, ...cleanImportedData(doc.data()) });
+      });
+      
+      retoursSnap.docs.forEach((doc) => {
+        retoursArr.push({ id: doc.id, ...cleanImportedData(doc.data()) });
+      });
+
+      console.log(`Données chargées: ${ventesArr.length} ventes, ${achatsArr.length} achats, ${stockArr.length} stock, ${stockEntriesArr.length} lots, ${paiementsArr.length} paiements, ${retoursArr.length} retours`);
+
+      // Mise à jour des états
       setVentes(ventesArr);
       setAchats(achatsArr);
       setStock(stockArr);
+      setStockEntries(stockEntriesArr);
       setPaiements(paiementsArr);
       setRetours(retoursArr);
 
       showNotification("Données chargées avec succès !", "success");
 
     } catch (error) {
-      console.error("Erreur lors du chargement des données:", error);
+      console.error("Erreur chargement données:", error);
       setDataError(error);
       showNotification("Erreur lors du chargement des données", "error");
     } finally {
@@ -242,38 +326,47 @@ export default function Dashboard() {
     }
   };
 
-  // CHARGER LES INFORMATIONS DE LA SOCIÉTÉ À L'INITIALISATION
+  // Chargement initial
   useEffect(() => {
     if (!loading && user && societeId) {
       fetchSocieteInfo();
-    }
-  }, [loading, user, societeId]);
-
-  // Charger les données à l'initialisation
-  useEffect(() => {
-    if (!loading && user && societeId) {
       fetchAllData();
     }
   }, [loading, user, societeId]);
 
-  // Calculer les statistiques basées sur les données
+  // Calcul des statistiques avec gestion robuste des dates
   useEffect(() => {
     if (dataLoading) return;
 
     try {
-      console.log("🔄 Calcul des statistiques...");
+      console.log("Calcul statistiques...");
 
-      // Filtrer les données par période
-      const filteredVentes = filterByPeriodeOuDates(ventes, periode, dateMin, dateMax);
-      const filteredAchats = filterByPeriodeOuDates(achats, periode, dateMin, dateMax);
-      const filteredPaiements = filterByPeriodeOuDates(paiements, periode, dateMin, dateMax);
+      // Filtrage des données par période avec gestion robuste
+      const filteredVentes = ventes.filter(v => 
+        isDateInPeriod(v.date || v.timestamp, periode, dateMin, dateMax)
+      );
+      
+      const filteredAchats = achats.filter(a => 
+        isDateInPeriod(a.date || a.timestamp, periode, dateMin, dateMax)
+      );
+      
+      const filteredPaiements = paiements.filter(p => 
+        isDateInPeriod(p.date || p.timestamp, periode, dateMin, dateMax)
+      );
 
-      setProduitsStock(stock.length);
+      // Calculer total stock (traditionnel + lots)
+      const stockTraditional = stock.length;
+      const stockLots = stockEntries.filter(e => e.quantite > 0).length;
+      setProduitsStock(stockTraditional + stockLots);
 
-      // Calculer les totaux
+      // Calculer les totaux avec gestion d'erreurs
       const calculateVentesTotal = () => {
         try {
           return filteredVentes.reduce((total, vente) => {
+            if (vente.montantTotal && !isNaN(vente.montantTotal)) {
+              return total + Number(vente.montantTotal);
+            }
+            
             const articles = Array.isArray(vente.articles) ? vente.articles : [];
             const totalArticles = articles.reduce((sum, a) => {
               const prixUnitaire = Number(a.prixUnitaire) || 0;
@@ -293,6 +386,10 @@ export default function Dashboard() {
       const calculateAchatsTotal = () => {
         try {
           return filteredAchats.reduce((total, achat) => {
+            if (achat.montantTotal && !isNaN(achat.montantTotal)) {
+              return total + Number(achat.montantTotal);
+            }
+            
             const articles = Array.isArray(achat.articles) ? achat.articles : [];
             const totalArticles = articles.reduce((sum, a) => {
               const prixUnitaire = Number(a.prixUnitaire) || Number(a.prixAchat) || 0;
@@ -325,36 +422,27 @@ export default function Dashboard() {
       setTotalAchats(calculateAchatsTotal());
       setTotalPaiements(calculatePaiementsTotal());
 
-      // Calculer le solde de caisse
+      // Calcul du solde de caisse avec gestion robuste des dates
       const calculateSoldeCaisse = () => {
         try {
           const today = new Date();
           const todayStr = today.toDateString();
 
           const ventesAujourdhui = ventes.filter(vente => {
-            if (!vente.date && !vente.timestamp) return false;
-            
-            try {
-              const venteDate = vente.date?.toDate ? vente.date.toDate() : 
-                              vente.timestamp?.toDate ? vente.timestamp.toDate() :
-                              new Date(vente.date || vente.timestamp);
-              
-              return venteDate.toDateString() === todayStr;
-            } catch (dateError) {
-              return false;
-            }
+            const venteDate = parseDate(vente.date || vente.timestamp);
+            return venteDate && venteDate.toDateString() === todayStr;
           });
 
           return ventesAujourdhui.reduce((total, vente) => {
             try {
               const modePaiement = (vente.modePaiement || '').toLowerCase();
-              const isEspeces = modePaiement === 'especes' || 
-                              modePaiement === 'espèces' || 
-                              modePaiement === 'cash' ||
-                              modePaiement === '' || 
-                              !vente.modePaiement;
+              const isEspeces = ['especes', 'espèces', 'cash', ''].includes(modePaiement) || !vente.modePaiement;
 
               if (isEspeces) {
+                if (vente.montantTotal && !isNaN(vente.montantTotal)) {
+                  return total + Number(vente.montantTotal);
+                }
+                
                 const articles = Array.isArray(vente.articles) ? vente.articles : [];
                 const totalArticles = articles.reduce((sum, a) => {
                   const prixUnitaire = Number(a.prixUnitaire) || 0;
@@ -363,8 +451,7 @@ export default function Dashboard() {
                   return sum + (prixUnitaire * quantite - remise);
                 }, 0);
                 const remiseGlobale = Number(vente.remiseGlobale) || 0;
-                const totalVente = Math.max(0, totalArticles - remiseGlobale);
-                return total + totalVente;
+                return total + Math.max(0, totalArticles - remiseGlobale);
               }
               return total;
             } catch (venteError) {
@@ -388,17 +475,17 @@ export default function Dashboard() {
           }
         });
       } catch (error) {
-        console.error("Erreur calcul documents impayés:", error);
+        console.error("Erreur calcul impayés:", error);
       }
       setDocumentsImpayes(impayes);
 
-      // Générer les alertes
+      // Générer alertes avec stock multi-lots
       const generateAlertes = () => {
         const alertList = [];
         const today = new Date();
         
         try {
-          // Alertes stock
+          // Alertes stock traditionnel
           stock.forEach((item) => {
             try {
               const quantite = Number(item.quantite) || 0;
@@ -415,45 +502,80 @@ export default function Dashboard() {
               }
               
               if (item.datePeremption) {
-                try {
-                  const expDate = new Date(item.datePeremption);
-                  if (!isNaN(expDate.getTime())) {
-                    const diffDays = Math.ceil((expDate - today) / (1000 * 3600 * 24));
-                    
-                    if (diffDays <= 0) {
-                      alertList.push({ 
-                        type: "Produit périmé", 
-                        message: `${nom} est périmé !`,
-                        severity: "critical",
-                        icon: "🚫"
-                      });
-                    } else if (diffDays <= 180) {
-                      alertList.push({ 
-                        type: "Péremption proche", 
-                        message: `${nom} (${diffDays} j)`,
-                        severity: "danger",
-                        icon: "⚠️"
-                      });
-                    }
+                const expDate = parseDate(item.datePeremption);
+                if (expDate) {
+                  const diffDays = Math.ceil((expDate - today) / (1000 * 3600 * 24));
+                  
+                  if (diffDays <= 0) {
+                    alertList.push({ 
+                      type: "Produit périmé", 
+                      message: `${nom} est périmé !`,
+                      severity: "critical",
+                      icon: "🚫"
+                    });
+                  } else if (diffDays <= 180) {
+                    alertList.push({ 
+                      type: "Péremption proche", 
+                      message: `${nom} (${diffDays} j)`,
+                      severity: "danger",
+                      icon: "⚠️"
+                    });
                   }
-                } catch (dateError) {
-                  console.warn("Erreur date péremption:", item.id, dateError);
                 }
               }
             } catch (itemError) {
-              console.warn("Erreur traitement item:", item.id, itemError);
+              console.warn("Erreur item stock:", item.id, itemError);
+            }
+          });
+
+          // Alertes stock multi-lots
+          stockEntries.forEach((entry) => {
+            try {
+              const quantite = Number(entry.quantite) || 0;
+              const seuil = Number(entry.seuil) || 5;
+              const nom = entry.nom || "Produit sans nom";
+
+              if (quantite <= seuil && quantite > 0) {
+                alertList.push({ 
+                  type: "Stock bas (Lot)", 
+                  message: `${nom} - Lot ${entry.numeroLot || 'N/A'} (Qté: ${quantite})`,
+                  severity: "warning",
+                  icon: "🏷️"
+                });
+              }
+              
+              if (entry.datePeremption) {
+                const expDate = parseDate(entry.datePeremption);
+                if (expDate) {
+                  const diffDays = Math.ceil((expDate - today) / (1000 * 3600 * 24));
+                  
+                  if (diffDays <= 0) {
+                    alertList.push({ 
+                      type: "Lot périmé", 
+                      message: `${nom} - Lot ${entry.numeroLot || 'N/A'} périmé !`,
+                      severity: "critical",
+                      icon: "🚫"
+                    });
+                  } else if (diffDays <= 180) {
+                    alertList.push({ 
+                      type: "Lot péremption proche", 
+                      message: `${nom} - Lot ${entry.numeroLot || 'N/A'} (${diffDays} j)`,
+                      severity: "danger",
+                      icon: "⚠️"
+                    });
+                  }
+                }
+              }
+            } catch (entryError) {
+              console.warn("Erreur entry stock:", entry.id, entryError);
             }
           });
 
           // Alertes retours récents
           const recent24h = new Date(Date.now() - 24*60*60*1000);
           const retoursRecents = retours.filter(r => {
-            try {
-              const retourDate = r.date?.seconds ? new Date(r.date.seconds * 1000) : null;
-              return retourDate && retourDate >= recent24h;
-            } catch {
-              return false;
-            }
+            const retourDate = parseDate(r.date || r.timestamp);
+            return retourDate && retourDate >= recent24h;
           });
 
           if (retoursRecents.length > 0) {
@@ -474,56 +596,14 @@ export default function Dashboard() {
       };
       
       setAlertes(generateAlertes());
-      console.log("✅ Statistiques calculées avec succès !");
+      console.log("Statistiques calculées avec succès !");
       
     } catch (error) {
-      console.error("Erreur lors du calcul des statistiques:", error);
+      console.error("Erreur calcul statistiques:", error);
     }
-  }, [ventes, achats, stock, paiements, retours, periode, dateMin, dateMax, dataLoading]);
+  }, [ventes, achats, stock, stockEntries, paiements, retours, periode, dateMin, dateMax, dataLoading]);
 
-  // Filtrer par période
-  const filterByPeriodeOuDates = (data, period, min, max) => {
-    if (!data) return [];
-    
-    const now = new Date();
-    return data.filter((item) => {
-      try {
-        if (!item.date && !item.timestamp) return false;
-        
-        const d = item.date?.toDate ? item.date.toDate() : 
-                  item.timestamp?.toDate ? item.timestamp.toDate() :
-                  new Date(item.date || item.timestamp);
-
-        if (isNaN(d.getTime())) return false;
-
-        if (min && d < new Date(min)) return false;
-        if (max && d > new Date(max + "T23:59:59")) return false;
-
-        if (!min && !max) {
-          switch (period) {
-            case "jour": 
-              return d.toDateString() === now.toDateString();
-            case "semaine": 
-              const weekAgo = new Date(now);
-              weekAgo.setDate(now.getDate() - 7);
-              return d >= weekAgo;
-            case "mois": 
-              return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
-            case "annee": 
-              return d.getFullYear() === now.getFullYear();
-            default: 
-              return true;
-          }
-        }
-        return true;
-      } catch (error) {
-        console.warn("Erreur filtrage date:", item.id, error);
-        return false;
-      }
-    });
-  };
-
-  // Fonction de refresh manual
+  // Fonction refresh
   const handleRefresh = async () => {
     setIsRefreshing(true);
     try {
@@ -533,19 +613,18 @@ export default function Dashboard() {
       ]);
       showNotification("Données actualisées avec succès !", "success");
     } catch (error) {
-      console.error("Erreur lors de l'actualisation:", error);
+      console.error("Erreur actualisation:", error);
       showNotification("Erreur lors de l'actualisation", "error");
     } finally {
       setIsRefreshing(false);
     }
   };
 
-  // FONCTION POUR OBTENIR LE NOM D'AFFICHAGE DE LA SOCIÉTÉ
+  // Nom d'affichage société
   const getSocieteDisplayName = () => {
     if (societeLoading) return "Chargement...";
     if (!societeInfo) return "Société inconnue";
     
-    // Essayer différents champs possibles pour le nom
     return societeInfo.nom || 
            societeInfo.nomSociete || 
            societeInfo.name || 
@@ -642,7 +721,7 @@ export default function Dashboard() {
     }
   });
 
-  // Gestion des états de chargement et d'erreur
+  // États de chargement et erreurs
   if (loading) {
     return (
       <div style={{ 
@@ -650,8 +729,7 @@ export default function Dashboard() {
         minHeight: "100vh",
         display: "flex",
         alignItems: "center",
-        justifyContent: "center",
-        fontFamily: "'Inter', Arial, sans-serif"
+        justifyContent: "center"
       }}>
         <div style={{
           background: "white",
@@ -660,29 +738,23 @@ export default function Dashboard() {
           textAlign: "center",
           boxShadow: "0 30px 60px rgba(0,0,0,0.15)"
         }}>
-          <div style={{ 
-            fontSize: "2em",
-            marginBottom: "20px"
-          }}>🔄</div>
-          <div style={{ 
-            color: "#667eea",
-            fontSize: "1.3em",
-            fontWeight: 600
-          }}>Chargement du tableau de bord...</div>
+          <div style={{ fontSize: "2em", marginBottom: "20px" }}>🔄</div>
+          <div style={{ color: "#667eea", fontSize: "1.3em", fontWeight: 600 }}>
+            Chargement du tableau de bord...
+          </div>
         </div>
       </div>
     );
   }
 
-  if (!user) {
+  if (!user || !societeId) {
     return (
       <div style={{ 
         background: "linear-gradient(135deg, #f56565 0%, #e53e3e 100%)",
         minHeight: "100vh",
         display: "flex",
         alignItems: "center",
-        justifyContent: "center",
-        fontFamily: "'Inter', Arial, sans-serif"
+        justifyContent: "center"
       }}>
         <div style={{
           background: "white",
@@ -691,15 +763,10 @@ export default function Dashboard() {
           textAlign: "center",
           boxShadow: "0 30px 60px rgba(0,0,0,0.15)"
         }}>
-          <div style={{ 
-            fontSize: "2em",
-            marginBottom: "20px"
-          }}>❌</div>
-          <div style={{ 
-            color: "#e53e3e",
-            fontSize: "1.3em",
-            fontWeight: 600
-          }}>Utilisateur non connecté</div>
+          <div style={{ fontSize: "2em", marginBottom: "20px" }}>❌</div>
+          <div style={{ color: "#e53e3e", fontSize: "1.3em", fontWeight: 600 }}>
+            {!user ? "Utilisateur non connecté" : "Aucune société assignée"}
+          </div>
           <button
             onClick={handleLogout}
             style={{
@@ -713,50 +780,13 @@ export default function Dashboard() {
               fontWeight: 600
             }}
           >
-            Se déconnecter
+            {!user ? "Se connecter" : "Contacter l'administrateur"}
           </button>
         </div>
       </div>
     );
   }
 
-  if (!societeId) {
-    return (
-      <div style={{ 
-        background: "linear-gradient(135deg, #f59e0b 0%, #d97706 100%)",
-        minHeight: "100vh",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        fontFamily: "'Inter', Arial, sans-serif"
-      }}>
-        <div style={{
-          background: "white",
-          borderRadius: "25px",
-          padding: "40px",
-          textAlign: "center",
-          boxShadow: "0 30px 60px rgba(0,0,0,0.15)"
-        }}>
-          <div style={{ 
-            fontSize: "2em",
-            marginBottom: "20px"
-          }}>🏢</div>
-          <div style={{ 
-            color: "#d97706",
-            fontSize: "1.3em",
-            fontWeight: 600
-          }}>Aucune société assignée</div>
-          <div style={{ 
-            color: "#6b7280",
-            fontSize: "1em",
-            marginTop: "10px"
-          }}>Veuillez contacter l'administrateur</div>
-        </div>
-      </div>
-    );
-  }
-
-  // Affichage des erreurs de chargement
   if (dataError) {
     return (
       <div style={{ 
@@ -764,8 +794,7 @@ export default function Dashboard() {
         minHeight: "100vh",
         display: "flex",
         alignItems: "center",
-        justifyContent: "center",
-        fontFamily: "'Inter', Arial, sans-serif"
+        justifyContent: "center"
       }}>
         <div style={{
           background: "white",
@@ -774,20 +803,11 @@ export default function Dashboard() {
           textAlign: "center",
           boxShadow: "0 30px 60px rgba(0,0,0,0.15)"
         }}>
-          <div style={{ 
-            fontSize: "2em",
-            marginBottom: "20px"
-          }}>⚠️</div>
-          <div style={{ 
-            color: "#e53e3e",
-            fontSize: "1.3em",
-            fontWeight: 600
-          }}>Erreur de chargement des données</div>
-          <div style={{ 
-            color: "#6b7280",
-            fontSize: "0.9em",
-            marginTop: "10px"
-          }}>
+          <div style={{ fontSize: "2em", marginBottom: "20px" }}>⚠️</div>
+          <div style={{ color: "#e53e3e", fontSize: "1.3em", fontWeight: 600 }}>
+            Erreur de chargement des données
+          </div>
+          <div style={{ color: "#6b7280", fontSize: "0.9em", marginTop: "10px" }}>
             {dataError.message}
           </div>
           <button
@@ -815,7 +835,7 @@ export default function Dashboard() {
   return (
     <div style={styles.container}>
       <div style={styles.mainCard}>
-        {/* Loading Overlay */}
+        {/* Overlay de chargement */}
         {(isRefreshing || dataLoading) && (
           <div style={{
             position: "fixed",
@@ -831,15 +851,13 @@ export default function Dashboard() {
             color: "white",
             fontSize: isMobile ? "1.3em" : "1.8em",
             fontWeight: 700,
-            backdropFilter: "blur(5px)",
-            padding: "20px",
-            textAlign: "center"
+            backdropFilter: "blur(5px)"
           }}>
             🔄 {dataLoading ? "Chargement des données..." : "Actualisation en cours..."}
           </div>
         )}
 
-        {/* En-tête moderne */}
+        {/* En-tête */}
         <div style={styles.header}>
           <h1 style={styles.title}>📊 Tableau de Bord</h1>
           <p style={styles.subtitle}>
@@ -862,7 +880,7 @@ export default function Dashboard() {
             </div>
           )}
 
-          {/* INDICATEUR STRUCTURE MULTI-SOCIÉTÉ AVEC LE VRAI NOM */}
+          {/* Indicateur société multi-lots */}
           <div style={{
             background: "linear-gradient(135deg, #d4edda 0%, #c3e6cb 100%)",
             padding: "15px",
@@ -877,14 +895,18 @@ export default function Dashboard() {
               fontWeight: 700,
               margin: "0 0 5px 0"
             }}>
-              🏢 Structure Multi-Société Active
+              🏢 Structure Multi-Société & Multi-Lots Active
             </p>
             <p style={{ 
               color: "#4a5568", 
               fontSize: "0.9em", 
               margin: 0
             }}>
-              🏢 Société: <strong>{getSocieteDisplayName()}</strong> • 👤 {user?.email} • 📦 {produitsStock} produits • 🚨 {alertes.length} alertes • 💵 {soldeCaisse.toFixed(2)} DH en caisse
+              🏢 Société: <strong>{getSocieteDisplayName()}</strong> • 
+              👤 {user?.email} • 
+              📦 {produitsStock} produits • 
+              🚨 {alertes.length} alertes • 
+              💵 {soldeCaisse.toFixed(2)} DH en caisse
             </p>
             {societeLoading && (
               <p style={{ 
@@ -896,293 +918,6 @@ export default function Dashboard() {
                 Chargement des informations société...
               </p>
             )}
-          </div>
-
-          {/* SECTION RACCOURCIS RAPIDES DÉPLACÉE EN HAUT */}
-          <div style={{
-            background: "linear-gradient(135deg, #e3f2fd 0%, #bbdefb 100%)",
-            borderRadius: isMobile ? "15px" : "25px",
-            padding: isMobile ? "25px 20px" : "35px 30px",
-            marginBottom: isMobile ? "25px" : "35px",
-            border: "3px solid #42a5f5",
-            boxShadow: "0 20px 50px rgba(66, 165, 245, 0.2)"
-          }}>
-            <h3 style={{
-              color: "#1565c0",
-              fontSize: isMobile ? "1.4em" : "1.8em",
-              fontWeight: 800,
-              marginBottom: isMobile ? "25px" : "30px",
-              textAlign: "center",
-              textTransform: "uppercase",
-              letterSpacing: "2px",
-              textShadow: "2px 2px 4px rgba(21, 101, 192, 0.2)"
-            }}>
-              🚀 Raccourcis Rapides
-            </h3>
-            
-            <div style={{
-              display: "grid",
-              gridTemplateColumns: isMobile ? "1fr" : isTablet ? "1fr 1fr" : "repeat(auto-fit, minmax(280px, 1fr))",
-              gap: isMobile ? "15px" : "20px"
-            }}>
-              {/* VENTE - Raccourci principal */}
-              <button
-                onClick={() => navigate('/ventes')}
-                style={{
-                  background: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
-                  border: "none",
-                  borderRadius: isMobile ? "15px" : "20px",
-                  padding: isMobile ? "20px 15px" : "25px 20px",
-                  color: "white",
-                  fontWeight: 800,
-                  fontSize: isMobile ? "1.1em" : "1.2em",
-                  cursor: "pointer",
-                  boxShadow: "0 15px 40px rgba(102, 126, 234, 0.4)",
-                  transition: "all 0.3s ease",
-                  textTransform: "uppercase",
-                  letterSpacing: "1px",
-                  display: "flex",
-                  flexDirection: "column",
-                  alignItems: "center",
-                  gap: "10px",
-                  position: "relative",
-                  overflow: "hidden"
-                }}
-                onMouseEnter={e => {
-                  e.currentTarget.style.transform = "translateY(-8px)";
-                  e.currentTarget.style.boxShadow = "0 25px 60px rgba(102, 126, 234, 0.6)";
-                }}
-                onMouseLeave={e => {
-                  e.currentTarget.style.transform = "translateY(0)";
-                  e.currentTarget.style.boxShadow = "0 15px 40px rgba(102, 126, 234, 0.4)";
-                }}
-              >
-                <div style={{ fontSize: isMobile ? "2.5em" : "3em" }}>💰</div>
-                <div>Nouvelle Vente</div>
-                <div style={{ 
-                  fontSize: "0.7em", 
-                  opacity: 0.9, 
-                  fontWeight: 600,
-                  textTransform: "none"
-                }}>
-                  Enregistrer une vente rapidement
-                </div>
-              </button>
-
-              {/* STOCK */}
-              <button
-                onClick={() => navigate('/stock')}
-                style={{
-                  background: "linear-gradient(135deg, #48bb78 0%, #38a169 100%)",
-                  border: "none",
-                  borderRadius: isMobile ? "15px" : "20px",
-                  padding: isMobile ? "20px 15px" : "25px 20px",
-                  color: "white",
-                  fontWeight: 800,
-                  fontSize: isMobile ? "1.1em" : "1.2em",
-                  cursor: "pointer",
-                  boxShadow: "0 15px 40px rgba(72, 187, 120, 0.4)",
-                  transition: "all 0.3s ease",
-                  textTransform: "uppercase",
-                  letterSpacing: "1px",
-                  display: "flex",
-                  flexDirection: "column",
-                  alignItems: "center",
-                  gap: "10px"
-                }}
-                onMouseEnter={e => {
-                  e.currentTarget.style.transform = "translateY(-8px)";
-                  e.currentTarget.style.boxShadow = "0 25px 60px rgba(72, 187, 120, 0.6)";
-                }}
-                onMouseLeave={e => {
-                  e.currentTarget.style.transform = "translateY(0)";
-                  e.currentTarget.style.boxShadow = "0 15px 40px rgba(72, 187, 120, 0.4)";
-                }}
-              >
-                <div style={{ fontSize: isMobile ? "2.5em" : "3em" }}>📦</div>
-                <div>Gérer Stock</div>
-                <div style={{ 
-                  fontSize: "0.7em", 
-                  opacity: 0.9, 
-                  fontWeight: 600,
-                  textTransform: "none"
-                }}>
-                  Consulter et modifier l'inventaire
-                </div>
-              </button>
-
-              {/* ACHATS - Seulement pour docteur */}
-              {role === 'docteur' && (
-                <button
-                  onClick={() => navigate('/achats')}
-                  style={{
-                    background: "linear-gradient(135deg, #4299e1 0%, #3182ce 100%)",
-                    border: "none",
-                    borderRadius: isMobile ? "15px" : "20px",
-                    padding: isMobile ? "20px 15px" : "25px 20px",
-                    color: "white",
-                    fontWeight: 800,
-                    fontSize: isMobile ? "1.1em" : "1.2em",
-                    cursor: "pointer",
-                    boxShadow: "0 15px 40px rgba(66, 153, 225, 0.4)",
-                    transition: "all 0.3s ease",
-                    textTransform: "uppercase",
-                    letterSpacing: "1px",
-                    display: "flex",
-                    flexDirection: "column",
-                    alignItems: "center",
-                    gap: "10px"
-                  }}
-                  onMouseEnter={e => {
-                    e.currentTarget.style.transform = "translateY(-8px)";
-                    e.currentTarget.style.boxShadow = "0 25px 60px rgba(66, 153, 225, 0.6)";
-                  }}
-                  onMouseLeave={e => {
-                    e.currentTarget.style.transform = "translateY(0)";
-                    e.currentTarget.style.boxShadow = "0 15px 40px rgba(66, 153, 225, 0.4)";
-                  }}
-                >
-                  <div style={{ fontSize: isMobile ? "2.5em" : "3em" }}>🛒</div>
-                  <div>Nouvel Achat</div>
-                  <div style={{ 
-                    fontSize: "0.7em", 
-                    opacity: 0.9, 
-                    fontWeight: 600,
-                    textTransform: "none"
-                  }}>
-                    Enregistrer un achat fournisseur
-                  </div>
-                </button>
-              )}
-
-              {/* DEVIS & FACTURES */}
-              <button
-                onClick={() => navigate('/devis-factures')}
-                style={{
-                  background: "linear-gradient(135deg, #ed8936 0%, #dd6b20 100%)",
-                  border: "none",
-                  borderRadius: isMobile ? "15px" : "20px",
-                  padding: isMobile ? "20px 15px" : "25px 20px",
-                  color: "white",
-                  fontWeight: 800,
-                  fontSize: isMobile ? "1.1em" : "1.2em",
-                  cursor: "pointer",
-                  boxShadow: "0 15px 40px rgba(237, 137, 54, 0.4)",
-                  transition: "all 0.3s ease",
-                  textTransform: "uppercase",
-                  letterSpacing: "1px",
-                  display: "flex",
-                  flexDirection: "column",
-                  alignItems: "center",
-                  gap: "10px"
-                }}
-                onMouseEnter={e => {
-                  e.currentTarget.style.transform = "translateY(-8px)";
-                  e.currentTarget.style.boxShadow = "0 25px 60px rgba(237, 137, 54, 0.6)";
-                }}
-                onMouseLeave={e => {
-                  e.currentTarget.style.transform = "translateY(0)";
-                  e.currentTarget.style.boxShadow = "0 15px 40px rgba(237, 137, 54, 0.4)";
-                }}
-              >
-                <div style={{ fontSize: isMobile ? "2.5em" : "3em" }}>🧾</div>
-                <div>Devis & Factures</div>
-                <div style={{ 
-                  fontSize: "0.7em", 
-                  opacity: 0.9, 
-                  fontWeight: 600,
-                  textTransform: "none"
-                }}>
-                  Créer devis et factures
-                </div>
-              </button>
-
-              {/* PAIEMENTS */}
-              <button
-                onClick={() => navigate('/paiements')}
-                style={{
-                  background: "linear-gradient(135deg, #ab47bc 0%, #8e24aa 100%)",
-                  border: "none",
-                  borderRadius: isMobile ? "15px" : "20px",
-                  padding: isMobile ? "20px 15px" : "25px 20px",
-                  color: "white",
-                  fontWeight: 800,
-                  fontSize: isMobile ? "1.1em" : "1.2em",
-                  cursor: "pointer",
-                  boxShadow: "0 15px 40px rgba(171, 71, 188, 0.4)",
-                  transition: "all 0.3s ease",
-                  textTransform: "uppercase",
-                  letterSpacing: "1px",
-                  display: "flex",
-                  flexDirection: "column",
-                  alignItems: "center",
-                  gap: "10px"
-                }}
-                onMouseEnter={e => {
-                  e.currentTarget.style.transform = "translateY(-8px)";
-                  e.currentTarget.style.boxShadow = "0 25px 60px rgba(171, 71, 188, 0.6)";
-                }}
-                onMouseLeave={e => {
-                  e.currentTarget.style.transform = "translateY(0)";
-                  e.currentTarget.style.boxShadow = "0 15px 40px rgba(171, 71, 188, 0.4)";
-                }}
-              >
-                <div style={{ fontSize: isMobile ? "2.5em" : "3em" }}>💳</div>
-                <div>Paiements</div>
-                <div style={{ 
-                  fontSize: "0.7em", 
-                  opacity: 0.9, 
-                  fontWeight: 600,
-                  textTransform: "none"
-                }}>
-                  Gérer les paiements clients
-                </div>
-              </button>
-
-              {/* PARAMÈTRES - Seulement pour docteur */}
-              {role === 'docteur' && (
-                <button
-                  onClick={() => navigate('/parametres')}
-                  style={{
-                    background: "linear-gradient(135deg, #718096 0%, #4a5568 100%)",
-                    border: "none",
-                    borderRadius: isMobile ? "15px" : "20px",
-                    padding: isMobile ? "20px 15px" : "25px 20px",
-                    color: "white",
-                    fontWeight: 800,
-                    fontSize: isMobile ? "1.1em" : "1.2em",
-                    cursor: "pointer",
-                    boxShadow: "0 15px 40px rgba(113, 128, 150, 0.4)",
-                    transition: "all 0.3s ease",
-                    textTransform: "uppercase",
-                    letterSpacing: "1px",
-                    display: "flex",
-                    flexDirection: "column",
-                    alignItems: "center",
-                    gap: "10px"
-                  }}
-                  onMouseEnter={e => {
-                    e.currentTarget.style.transform = "translateY(-8px)";
-                    e.currentTarget.style.boxShadow = "0 25px 60px rgba(113, 128, 150, 0.6)";
-                  }}
-                  onMouseLeave={e => {
-                    e.currentTarget.style.transform = "translateY(0)";
-                    e.currentTarget.style.boxShadow = "0 15px 40px rgba(113, 128, 150, 0.4)";
-                  }}
-                >
-                  <div style={{ fontSize: isMobile ? "2.5em" : "3em" }}>⚙️</div>
-                  <div>Paramètres</div>
-                  <div style={{ 
-                    fontSize: "0.7em", 
-                    opacity: 0.9, 
-                    fontWeight: 600,
-                    textTransform: "none"
-                  }}>
-                    Configuration du système
-                  </div>
-                </button>
-              )}
-            </div>
           </div>
 
           {/* Boutons de contrôle */}
@@ -1203,7 +938,7 @@ export default function Dashboard() {
                 alignItems: "center",
                 gap: "8px"
               }}
-              onClick={() => setShowFilters(v => !v)}
+              onClick={() => setShowFilters(!showFilters)}
             >
               {showFilters ? "➖ Masquer" : "🔍 Afficher"} Filtres
             </button>
@@ -1237,9 +972,7 @@ export default function Dashboard() {
                 fontSize: isMobile ? "1.2em" : "1.4em",
                 fontWeight: 800,
                 marginBottom: isMobile ? "20px" : "25px",
-                textAlign: "center",
-                textTransform: "uppercase",
-                letterSpacing: "1px"
+                textAlign: "center"
               }}>
                 🔍 Filtres de Période
               </h3>
@@ -1254,22 +987,18 @@ export default function Dashboard() {
                     display: "block",
                     marginBottom: "8px",
                     fontWeight: 700,
-                    color: "#4a5568",
-                    fontSize: isMobile ? "0.8em" : "0.9em",
-                    textTransform: "uppercase",
-                    letterSpacing: "1px"
+                    color: "#4a5568"
                   }}>Période</label>
                   <select 
                     value={periode} 
                     onChange={e => setPeriode(e.target.value)}
                     style={{
                       width: "100%",
-                      padding: isMobile ? "12px 15px" : "15px 20px",
+                      padding: "12px 15px",
                       border: "2px solid #e2e8f0",
-                      borderRadius: isMobile ? "8px" : "12px",
-                      fontSize: isMobile ? "0.9em" : "1em",
+                      borderRadius: "12px",
+                      fontSize: "1em",
                       fontWeight: 600,
-                      transition: "all 0.3s ease",
                       background: "white"
                     }}
                   >
@@ -1285,10 +1014,7 @@ export default function Dashboard() {
                     display: "block",
                     marginBottom: "8px",
                     fontWeight: 700,
-                    color: "#4a5568",
-                    fontSize: isMobile ? "0.8em" : "0.9em",
-                    textTransform: "uppercase",
-                    letterSpacing: "1px"
+                    color: "#4a5568"
                   }}>Date début</label>
                   <input 
                     type="date" 
@@ -1296,12 +1022,11 @@ export default function Dashboard() {
                     onChange={e => setDateMin(e.target.value)}
                     style={{
                       width: "100%",
-                      padding: isMobile ? "12px 15px" : "15px 20px",
+                      padding: "12px 15px",
                       border: "2px solid #e2e8f0",
-                      borderRadius: isMobile ? "8px" : "12px",
-                      fontSize: isMobile ? "0.9em" : "1em",
+                      borderRadius: "12px",
+                      fontSize: "1em",
                       fontWeight: 600,
-                      transition: "all 0.3s ease",
                       background: "white"
                     }}
                   />
@@ -1312,10 +1037,7 @@ export default function Dashboard() {
                     display: "block",
                     marginBottom: "8px",
                     fontWeight: 700,
-                    color: "#4a5568",
-                    fontSize: isMobile ? "0.8em" : "0.9em",
-                    textTransform: "uppercase",
-                    letterSpacing: "1px"
+                    color: "#4a5568"
                   }}>Date fin</label>
                   <input 
                     type="date" 
@@ -1323,12 +1045,11 @@ export default function Dashboard() {
                     onChange={e => setDateMax(e.target.value)}
                     style={{
                       width: "100%",
-                      padding: isMobile ? "12px 15px" : "15px 20px",
+                      padding: "12px 15px",
                       border: "2px solid #e2e8f0",
-                      borderRadius: isMobile ? "8px" : "12px",
-                      fontSize: isMobile ? "0.9em" : "1em",
+                      borderRadius: "12px",
+                      fontSize: "1em",
                       fontWeight: 600,
-                      transition: "all 0.3s ease",
                       background: "white"
                     }}
                   />
@@ -1351,8 +1072,138 @@ export default function Dashboard() {
             </div>
           )}
 
+          {/* Raccourcis rapides */}
+          <div style={{
+            background: "linear-gradient(135deg, #e3f2fd 0%, #bbdefb 100%)",
+            borderRadius: isMobile ? "15px" : "25px",
+            padding: isMobile ? "25px 20px" : "35px 30px",
+            marginBottom: isMobile ? "25px" : "35px",
+            border: "3px solid #42a5f5"
+          }}>
+            <h3 style={{
+              color: "#1565c0",
+              fontSize: isMobile ? "1.4em" : "1.8em",
+              fontWeight: 800,
+              marginBottom: isMobile ? "25px" : "30px",
+              textAlign: "center"
+            }}>
+              🚀 Raccourcis Rapides
+            </h3>
+            
+            <div style={{
+              display: "grid",
+              gridTemplateColumns: isMobile ? "1fr" : isTablet ? "1fr 1fr" : "repeat(auto-fit, minmax(280px, 1fr))",
+              gap: isMobile ? "15px" : "20px"
+            }}>
+              {/* VENTE */}
+              <button
+                onClick={() => navigate('/ventes')}
+                style={{
+                  background: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
+                  border: "none",
+                  borderRadius: isMobile ? "15px" : "20px",
+                  padding: isMobile ? "20px 15px" : "25px 20px",
+                  color: "white",
+                  fontWeight: 800,
+                  fontSize: isMobile ? "1.1em" : "1.2em",
+                  cursor: "pointer",
+                  transition: "all 0.3s ease",
+                  display: "flex",
+                  flexDirection: "column",
+                  alignItems: "center",
+                  gap: "10px"
+                }}
+                onMouseEnter={e => e.currentTarget.style.transform = "translateY(-8px)"}
+                onMouseLeave={e => e.currentTarget.style.transform = "translateY(0)"}
+              >
+                <div style={{ fontSize: isMobile ? "2.5em" : "3em" }}>💰</div>
+                <div>Nouvelle Vente Multi-Lots</div>
+              </button>
+
+              {/* STOCK */}
+              <button
+                onClick={() => navigate('/stock')}
+                style={{
+                  background: "linear-gradient(135deg, #48bb78 0%, #38a169 100%)",
+                  border: "none",
+                  borderRadius: isMobile ? "15px" : "20px",
+                  padding: isMobile ? "20px 15px" : "25px 20px",
+                  color: "white",
+                  fontWeight: 800,
+                  fontSize: isMobile ? "1.1em" : "1.2em",
+                  cursor: "pointer",
+                  transition: "all 0.3s ease",
+                  display: "flex",
+                  flexDirection: "column",
+                  alignItems: "center",
+                  gap: "10px"
+                }}
+                onMouseEnter={e => e.currentTarget.style.transform = "translateY(-8px)"}
+                onMouseLeave={e => e.currentTarget.style.transform = "translateY(0)"}
+              >
+                <div style={{ fontSize: isMobile ? "2.5em" : "3em" }}>📦</div>
+                <div>Gérer Stock & Lots</div>
+              </button>
+
+              {/* ACHATS */}
+              {role === 'docteur' && (
+                <button
+                  onClick={() => navigate('/achats')}
+                  style={{
+                    background: "linear-gradient(135deg, #4299e1 0%, #3182ce 100%)",
+                    border: "none",
+                    borderRadius: isMobile ? "15px" : "20px",
+                    padding: isMobile ? "20px 15px" : "25px 20px",
+                    color: "white",
+                    fontWeight: 800,
+                    fontSize: isMobile ? "1.1em" : "1.2em",
+                    cursor: "pointer",
+                    transition: "all 0.3s ease",
+                    display: "flex",
+                    flexDirection: "column",
+                    alignItems: "center",
+                    gap: "10px"
+                  }}
+                  onMouseEnter={e => e.currentTarget.style.transform = "translateY(-8px)"}
+                  onMouseLeave={e => e.currentTarget.style.transform = "translateY(0)"}
+                >
+                  <div style={{ fontSize: isMobile ? "2.5em" : "3em" }}>🛒</div>
+                  <div>Nouvel Achat</div>
+                </button>
+              )}
+
+              {/* PARAMÈTRES */}
+              {role === 'docteur' && (
+                <button
+                  onClick={() => navigate('/parametres')}
+                  style={{
+                    background: "linear-gradient(135deg, #718096 0%, #4a5568 100%)",
+                    border: "none",
+                    borderRadius: isMobile ? "15px" : "20px",
+                    padding: isMobile ? "20px 15px" : "25px 20px",
+                    color: "white",
+                    fontWeight: 800,
+                    fontSize: isMobile ? "1.1em" : "1.2em",
+                    cursor: "pointer",
+                    transition: "all 0.3s ease",
+                    display: "flex",
+                    flexDirection: "column",
+                    alignItems: "center",
+                    gap: "10px"
+                  }}
+                  onMouseEnter={e => e.currentTarget.style.transform = "translateY(-8px)"}
+                  onMouseLeave={e => e.currentTarget.style.transform = "translateY(0)"}
+                >
+                  <div style={{ fontSize: isMobile ? "2.5em" : "3em" }}>⚙️</div>
+                  <div>Paramètres & Sauvegarde</div>
+                </button>
+              )}
+            </div>
+          </div>
+
           {/* Cartes statistiques */}
           <div style={styles.statsGrid}>
+            {/* Total Ventes */}
             <div 
               style={{
                 ...styles.statCard,
@@ -1373,12 +1224,11 @@ export default function Dashboard() {
               <div style={{
                 fontSize: isMobile ? "0.9em" : "1em",
                 fontWeight: 600,
-                color: "#4a5568",
-                textTransform: "uppercase",
-                letterSpacing: "1px"
+                color: "#4a5568"
               }}>Total Ventes</div>
             </div>
             
+            {/* Total Achats */}
             <div 
               style={{
                 ...styles.statCard,
@@ -1399,12 +1249,11 @@ export default function Dashboard() {
               <div style={{
                 fontSize: isMobile ? "0.9em" : "1em",
                 fontWeight: 600,
-                color: "#4a5568",
-                textTransform: "uppercase",
-                letterSpacing: "1px"
+                color: "#4a5568"
               }}>Total Achats</div>
             </div>
             
+            {/* Total Paiements */}
             <div 
               style={{
                 ...styles.statCard,
@@ -1425,12 +1274,11 @@ export default function Dashboard() {
               <div style={{
                 fontSize: isMobile ? "0.9em" : "1em",
                 fontWeight: 600,
-                color: "#4a5568",
-                textTransform: "uppercase",
-                letterSpacing: "1px"
+                color: "#4a5568"
               }}>Total Paiements</div>
             </div>
             
+            {/* Stock */}
             <div 
               style={{
                 ...styles.statCard,
@@ -1451,12 +1299,11 @@ export default function Dashboard() {
               <div style={{
                 fontSize: isMobile ? "0.9em" : "1em",
                 fontWeight: 600,
-                color: "#4a5568",
-                textTransform: "uppercase",
-                letterSpacing: "1px"
-              }}>Produits en Stock</div>
+                color: "#4a5568"
+              }}>Produits + Lots</div>
             </div>
             
+            {/* Documents impayés */}
             <div 
               style={{
                 ...styles.statCard,
@@ -1477,12 +1324,11 @@ export default function Dashboard() {
               <div style={{
                 fontSize: isMobile ? "0.9em" : "1em",
                 fontWeight: 600,
-                color: "#4a5568",
-                textTransform: "uppercase",
-                letterSpacing: "1px"
+                color: "#4a5568"
               }}>Documents Impayés</div>
             </div>
             
+            {/* Alertes */}
             <div 
               style={{
                 ...styles.statCard,
@@ -1503,20 +1349,17 @@ export default function Dashboard() {
               <div style={{
                 fontSize: isMobile ? "0.9em" : "1em",
                 fontWeight: 600,
-                color: "#4a5568",
-                textTransform: "uppercase",
-                letterSpacing: "1px"
-              }}>Alertes</div>
+                color: "#4a5568"
+              }}>Alertes Stock</div>
             </div>
 
-            {/* SOLDE CAISSE JOURNÉE */}
+            {/* Solde caisse */}
             <div 
               style={{
                 ...styles.statCard,
                 borderLeft: "5px solid #f6ad55",
                 background: "linear-gradient(135deg, #fef5e7 0%, #fed7aa 100%)",
-                border: "3px solid #f6ad55",
-                boxShadow: "0 20px 50px rgba(246, 173, 85, 0.3)"
+                border: "3px solid #f6ad55"
               }}
               onMouseEnter={e => e.currentTarget.style.transform = "translateY(-8px)"}
               onMouseLeave={e => e.currentTarget.style.transform = "translateY(0)"}
@@ -1537,25 +1380,12 @@ export default function Dashboard() {
               <div style={{
                 fontSize: isMobile ? "0.9em" : "1em",
                 fontWeight: 800,
-                color: "#744210",
-                textTransform: "uppercase",
-                letterSpacing: "1px"
+                color: "#744210"
               }}>
                 💰 Solde Caisse Aujourd'hui
               </div>
-              <div style={{
-                fontSize: "0.75em", 
-                color: "#744210", 
-                marginTop: "8px",
-                fontStyle: "italic",
-                opacity: 0.8
-              }}>
-                🕐 Ventes espèces du jour
-              </div>
             </div>
           </div>
-
-
 
           {/* Section Alertes */}
           {alertes.length > 0 && (
@@ -1571,25 +1401,18 @@ export default function Dashboard() {
                 fontSize: isMobile ? "1.2em" : "1.4em",
                 fontWeight: 800,
                 marginBottom: isMobile ? "20px" : "25px",
-                textAlign: "center",
-                textTransform: "uppercase",
-                letterSpacing: "1px"
+                textAlign: "center"
               }}>
-                🚨 Alertes ({alertes.length})
+                🚨 Alertes Stock & Lots ({alertes.length})
               </h3>
               
-              <div style={{
-                overflow: "auto",
-                WebkitOverflowScrolling: "touch",
-                borderRadius: "10px"
-              }}>
+              <div style={{ overflow: "auto" }}>
                 <table style={{
                   width: "100%",
                   borderCollapse: "collapse",
-                  borderRadius: isMobile ? "10px" : "20px",
+                  borderRadius: "20px",
                   overflow: "hidden",
-                  boxShadow: "0 15px 40px rgba(0,0,0,0.1)",
-                  marginTop: isMobile ? "15px" : "25px"
+                  boxShadow: "0 15px 40px rgba(0,0,0,0.1)"
                 }}>
                   <thead style={{
                     background: "linear-gradient(135deg, #2d3748 0%, #1a202c 100%)",
@@ -1597,25 +1420,19 @@ export default function Dashboard() {
                   }}>
                     <tr>
                       <th style={{
-                        padding: isMobile ? "10px 8px" : "18px 15px",
+                        padding: "18px 15px",
                         textAlign: "center",
-                        borderBottom: "1px solid #e2e8f0",
-                        fontWeight: 600,
-                        fontSize: isMobile ? "0.8em" : "1em"
+                        fontWeight: 600
                       }}>Type d'alerte</th>
                       <th style={{
-                        padding: isMobile ? "10px 8px" : "18px 15px",
+                        padding: "18px 15px",
                         textAlign: "center",
-                        borderBottom: "1px solid #e2e8f0",
-                        fontWeight: 600,
-                        fontSize: isMobile ? "0.8em" : "1em"
+                        fontWeight: 600
                       }}>Détail du problème</th>
                       <th style={{
-                        padding: isMobile ? "10px 8px" : "18px 15px",
+                        padding: "18px 15px",
                         textAlign: "center",
-                        borderBottom: "1px solid #e2e8f0",
-                        fontWeight: 600,
-                        fontSize: isMobile ? "0.8em" : "1em"
+                        fontWeight: 600
                       }}>Gravité</th>
                     </tr>
                   </thead>
@@ -1625,32 +1442,26 @@ export default function Dashboard() {
                         background: i % 2 === 0 ? "#f8fafc" : "white"
                       }}>
                         <td style={{
-                          padding: isMobile ? "10px 8px" : "18px 15px",
+                          padding: "18px 15px",
                           textAlign: "left",
-                          borderBottom: "1px solid #e2e8f0",
                           fontWeight: 600,
-                          fontSize: isMobile ? "0.8em" : "1em",
                           color: "#2d3748"
                         }}>
                           <span style={{ marginRight: "8px" }}>{alerte.icon}</span>
                           {alerte.type}
                         </td>
                         <td style={{
-                          padding: isMobile ? "10px 8px" : "18px 15px",
+                          padding: "18px 15px",
                           textAlign: "left",
-                          borderBottom: "1px solid #e2e8f0",
                           fontWeight: 600,
-                          fontSize: isMobile ? "0.8em" : "1em",
                           color: "#4a5568"
                         }}>
                           {alerte.message}
                         </td>
                         <td style={{
-                          padding: isMobile ? "10px 8px" : "18px 15px",
+                          padding: "18px 15px",
                           textAlign: "center",
-                          borderBottom: "1px solid #e2e8f0",
-                          fontWeight: 600,
-                          fontSize: isMobile ? "0.8em" : "1em"
+                          fontWeight: 600
                         }}>
                           <span style={{
                             padding: "4px 12px",
@@ -1676,7 +1487,7 @@ export default function Dashboard() {
           )}
 
           {/* Message si aucune donnée */}
-          {ventes.length === 0 && achats.length === 0 && stock.length === 0 && (
+          {ventes.length === 0 && achats.length === 0 && stock.length === 0 && stockEntries.length === 0 && (
             <div style={{
               background: "linear-gradient(135deg, #e6fffa 0%, #b2f5ea 100%)",
               borderRadius: isMobile ? "15px" : "20px",
@@ -1685,10 +1496,7 @@ export default function Dashboard() {
               border: "2px solid #81e6d9",
               textAlign: "center"
             }}>
-              <div style={{ 
-                fontSize: "3em", 
-                marginBottom: "20px" 
-              }}>📝</div>
+              <div style={{ fontSize: "3em", marginBottom: "20px" }}>📝</div>
               <h3 style={{
                 color: "#2d3748",
                 fontSize: isMobile ? "1.3em" : "1.6em",
@@ -1702,7 +1510,8 @@ export default function Dashboard() {
                 fontSize: isMobile ? "1em" : "1.1em",
                 marginBottom: "25px"
               }}>
-                Commencez par ajouter des ventes, achats ou du stock pour voir vos statistiques apparaître ici.
+                Commencez par ajouter des ventes, achats ou du stock pour voir vos statistiques.
+                Données compatibles avec sauvegarde/import JSON.
               </p>
               <div style={{
                 display: "flex",
@@ -1729,15 +1538,26 @@ export default function Dashboard() {
                   📦 Gérer le Stock
                 </button>
                 {role === 'docteur' && (
-                  <button
-                    onClick={() => navigate('/achats')}
-                    style={{
-                      ...styles.button,
-                      background: "linear-gradient(135deg, #4299e1 0%, #3182ce 100%)"
-                    }}
-                  >
-                    🛒 Ajouter un Achat
-                  </button>
+                  <>
+                    <button
+                      onClick={() => navigate('/achats')}
+                      style={{
+                        ...styles.button,
+                        background: "linear-gradient(135deg, #4299e1 0%, #3182ce 100%)"
+                      }}
+                    >
+                      🛒 Ajouter un Achat
+                    </button>
+                    <button
+                      onClick={() => navigate('/parametres')}
+                      style={{
+                        ...styles.button,
+                        background: "linear-gradient(135deg, #718096 0%, #4a5568 100%)"
+                      }}
+                    >
+                      ⚙️ Import/Export Données
+                    </button>
+                  </>
                 )}
               </div>
             </div>
