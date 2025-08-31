@@ -68,6 +68,33 @@ function getDateInputValue(dateInput) {
   }
 }
 
+
+
+
+
+
+// ========== FONCTION UTILITAIRE POUR NOMBRES ==========
+function safeNumber(value, defaultValue = 0) {
+  const num = Number(value);
+  return isNaN(num) ? defaultValue : num;
+}
+
+function safeToFixed(value, decimals = 2) {
+  return safeNumber(value).toFixed(decimals);
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
 /**
  * Composant de gestion des ventes avec support multi-lots optimisé et compatible import/export
  */
@@ -212,7 +239,7 @@ export default function Ventes() {
     const medicamentMap = new Map();
     
     const lotGroups = {};
-    stockEntries.filter(e => e.quantite > 0).forEach(entry => {
+    stockEntries.filter(e => safeNumber(e.quantite) > 0).forEach(entry => {
       if (!lotGroups[entry.nom]) {
         lotGroups[entry.nom] = [];
       }
@@ -221,22 +248,22 @@ export default function Ventes() {
     
     Object.keys(lotGroups).forEach(nom => {
       const lots = lotGroups[nom];
-      const totalQuantity = lots.reduce((sum, lot) => sum + lot.quantite, 0);
+      const totalQuantity = lots.reduce((sum, lot) => sum + safeNumber(lot.quantite), 0);
       medicamentMap.set(nom, {
         nom,
         quantiteTotal: totalQuantity,
         hasLots: true,
-        lastPrice: lots[0].prixVente || 0
+       lastPrice: safeNumber(lots[0]?.prixVente)
       });
     });
     
-    medicaments.filter(m => m.quantite > 0).forEach(med => {
+   medicaments.filter(m => safeNumber(m.quantite) > 0).forEach(med => {
       if (!medicamentMap.has(med.nom)) {
         medicamentMap.set(med.nom, {
           nom: med.nom,
-          quantiteTotal: med.quantite,
+         quantiteTotal: safeNumber(med.quantite),
           hasLots: false,
-          lastPrice: med.prixVente || 0
+          lastPrice: safeNumber(med.prixVente)
         });
       }
     });
@@ -254,16 +281,16 @@ export default function Ventes() {
     
     if (value) {
       const lotsForProduct = stockEntries.filter(entry => 
-        entry.nom === value && entry.quantite > 0
+       entry.nom === value && safeNumber(entry.quantite) > 0
       );
       
       setAvailableLots(lotsForProduct);
       
       if (lotsForProduct.length > 0) {
-        setPrixUnitaire(lotsForProduct[0].prixVente || 0);
+       setPrixUnitaire(safeNumber(lotsForProduct[0]?.prixVente));
       } else {
         const med = medicaments.find((m) => m.nom === value);
-        if (med) setPrixUnitaire(med.prixVente || 0);
+       if (med) setPrixUnitaire(safeNumber(med.prixVente));
       }
     }
   };
@@ -272,7 +299,7 @@ export default function Ventes() {
     setSelectedLot(lotId);
     const selectedLotData = availableLots.find(lot => lot.id === lotId);
     if (selectedLotData) {
-      setPrixUnitaire(selectedLotData.prixVente || 0);
+     setPrixUnitaire(safeNumber(selectedLotData.prixVente));
     }
   };
 
@@ -1534,7 +1561,7 @@ export default function Ventes() {
                             fontWeight: '600',
                             fontSize: '16px'
                           }}>
-                            {a.quantite}
+                         {safeNumber(a.quantite)}
                           </td>
                           <td style={{
                             padding: '16px',
@@ -1542,16 +1569,16 @@ export default function Ventes() {
                             fontWeight: '500',
                             fontSize: '15px'
                           }}>
-                            {a.prixUnitaire.toFixed(2)} DH
+                           {safeToFixed(a.prixUnitaire)} DH
                           </td>
                           <td style={{
                             padding: '16px',
                             textAlign: 'right',
                             fontWeight: '500',
                             fontSize: '15px',
-                            color: a.remise > 0 ? '#dc2626' : '#6b7280'
+                            color: safeNumber(a.remise) > 0 ? '#dc2626' : '#6b7280'
                           }}>
-                            {a.remise.toFixed(2)} DH
+                           {safeToFixed(a.remise)} DH
                           </td>
                           <td style={{
                             padding: '16px',
@@ -1560,7 +1587,7 @@ export default function Ventes() {
                             fontSize: '16px',
                             color: '#16a34a'
                           }}>
-                            {((a.prixUnitaire * a.quantite) - a.remise).toFixed(2)} DH
+                           {safeToFixed(safeNumber(a.prixUnitaire) * safeNumber(a.quantite) - safeNumber(a.remise))} DH
                           </td>
                           <td style={{
                             padding: '16px',
@@ -1613,7 +1640,7 @@ export default function Ventes() {
                           fontWeight: '800',
                           color: '#16a34a'
                         }}>
-                          {totalVenteCourante.toFixed(2)} DH
+                          {safeToFixed(totalVenteCourante)} DH
                         </td>
                         <td style={{ padding: '20px' }}></td>
                       </tr>
@@ -2269,7 +2296,7 @@ export default function Ventes() {
                           fontWeight: '700',
                           color: '#16a34a'
                         }}>
-                          {total.toFixed(2)} DH
+                         {safeToFixed(total)} DH
                         </div>
                       </td>
                       <td style={{ 
@@ -2473,7 +2500,7 @@ export default function Ventes() {
                 boxShadow: '0 4px 15px rgba(16, 185, 129, 0.1)'
               }}>
                 <h4 style={{ margin: '0 0 8px', color: '#065f46', fontSize: '16px', fontWeight: '600' }}>Total</h4>
-                <p style={{ margin: 0, fontSize: '18px', fontWeight: '700', color: '#1f2937' }}>{selectedVente.montantTotal.toFixed(2)} DH</p>
+                <p style={{ margin: 0, fontSize: '18px', fontWeight: '700', color: '#1f2937' }}>{safeToFixed(selectedVente.montantTotal)} DH</p>
               </div>
             </div>
 
@@ -2525,11 +2552,11 @@ export default function Ventes() {
                           </div>
                         )}
                       </td>
-                      <td style={{ padding: '16px', textAlign: 'center' }}>{a.quantite}</td>
-                      <td style={{ padding: '16px', textAlign: 'right' }}>{a.prixUnitaire.toFixed(2)} DH</td>
-                      <td style={{ padding: '16px', textAlign: 'right' }}>{a.remise.toFixed(2)} DH</td>
+                      <td style={{ padding: '16px', textAlign: 'center' }}>{safeNumber(a.quantite)}</td>
+                      <td style={{ padding: '16px', textAlign: 'right' }}>{safeToFixed(a.prixUnitaire)} DH</td>
+                      <td style={{ padding: '16px', textAlign: 'right' }}>{safeToFixed(a.remise)} DH</td>
                       <td style={{ padding: '16px', textAlign: 'right', fontWeight: '600' }}>
-                        {((a.prixUnitaire * a.quantite) - a.remise).toFixed(2)} DH
+                        {safeToFixed(safeNumber(a.prixUnitaire) * safeNumber(a.quantite) - safeNumber(a.remise))} DH
                       </td>
                     </tr>
                   ))}

@@ -784,8 +784,9 @@ export default function DevisFactures() {
                     ${isFacture ? "Arrêté la présente facture" : "Arrêté le présent devis"} à la somme de :
                   </div>
                   <div class="amount-words-text">
-                    ${convertirNombreEnLettres(total).toUpperCase()}
-                  </div>
+  ${convertirNombreEnLettres(total).toUpperCase()} TTC
+</div>
+
                 </div>
               </div>
 
