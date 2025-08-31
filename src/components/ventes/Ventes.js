@@ -1,6 +1,8 @@
 import React, { useEffect, useState, useCallback, useMemo } from "react";
 import { db } from "../../firebase/config";
 import { useUserRole } from "../../contexts/UserRoleContext";
+import { createPortal } from "react-dom";
+
 import {
   collection,
   addDoc,
@@ -2392,255 +2394,320 @@ export default function Ventes() {
         </div>
       </div>
 
-      {/* Modal de détails */}
-      {showDetails && selectedVente && (
-        <div style={{
-          position: 'fixed',
+    {/* Modal de détails via Portal (ignore les parents overflow/transform) */}
+{showDetails && selectedVente && createPortal(
+  <div
+    role="dialog"
+    aria-modal="true"
+    aria-label={`Détails de la vente ${selectedVente?.id?.slice?.(-6)?.toUpperCase?.() || ""}`}
+    onClick={(e) => {
+      if (e.target === e.currentTarget) setShowDetails(false);
+    }}
+    style={{
+      position: 'fixed',
+      inset: 0,
+      background: 'rgba(0, 0, 0, 0.5)',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      // z-index > MUI AppBar (1100) et Drawer (1200)
+      zIndex: 20000,
+      backdropFilter: 'blur(5px)',
+      padding: '16px',
+    }}
+  >
+    <div
+      style={{
+        background: 'linear-gradient(135deg, #ffffff, #f9fafb)',
+        borderRadius: '20px',
+        padding: '16px',
+        width: 'min(100%, 980px)',
+        maxHeight: '90vh',
+        overflowY: 'auto',
+        overflowX: 'hidden',
+        boxShadow: '0 20px 50px rgba(0, 0, 0, 0.2)',
+        border: '1px solid rgba(0, 0, 0, 0.05)',
+        position: 'relative',
+      }}
+      onKeyDown={(e) => {
+        if (e.key === 'Escape') setShowDetails(false);
+      }}
+      tabIndex={-1}
+    >
+      {/* Header sticky (titre + bouton) */}
+      <div
+        style={{
+          position: 'sticky',
           top: 0,
-          left: 0,
-          width: '100%',
-          height: '100%',
-          background: 'rgba(0, 0, 0, 0.5)',
+          zIndex: 2,
+          background: 'linear-gradient(135deg, #ffffff, #f9fafb)',
+          padding: '12px 40px 12px 12px',
+          margin: '-16px -16px 16px',
+          borderBottom: '1px solid rgba(0,0,0,0.06)',
           display: 'flex',
           alignItems: 'center',
-          justifyContent: 'center',
-          zIndex: 1000,
-          backdropFilter: 'blur(5px)'
+          minHeight: 48,
+        }}
+      >
+        <h2
+          style={{
+            margin: 0,
+            fontSize: 'clamp(18px, 2.5vw, 28px)',
+            fontWeight: 700,
+            color: '#1f2937',
+            lineHeight: 1.2,
+            flex: 1,
+          }}
+        >
+          Détails de la vente #{selectedVente?.id?.slice?.(-6)?.toUpperCase?.() || "N/A"}
+        </h2>
+
+        {/* Bouton × visible et accessible */}
+        <button
+          onClick={() => setShowDetails(false)}
+          aria-label="Fermer"
+          style={{
+            position: 'absolute',
+            right: 12,
+            top: 12,
+            width: 36,
+            height: 36,
+            display: 'grid',
+            placeItems: 'center',
+            background: 'transparent',
+            border: 'none',
+            borderRadius: 10,
+            fontSize: 24,
+            lineHeight: 1,
+            color: '#111827',
+            cursor: 'pointer',
+            transition: 'background 0.2s ease, transform 0.1s ease',
+            zIndex: 3,
+          }}
+          onMouseEnter={(e) => (e.currentTarget.style.background = '#f3f4f6')}
+          onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+          onMouseDown={(e) => (e.currentTarget.style.transform = 'scale(0.97)')}
+          onMouseUp={(e) => (e.currentTarget.style.transform = 'scale(1)')}
+        >
+          ×
+        </button>
+      </div>
+
+      {/* Cartes d'infos */}
+      <div style={{
+        display: 'grid',
+        gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+        gap: '12px',
+        marginBottom: '24px'
+      }}>
+        <div style={{
+          background: 'linear-gradient(135deg, #dbeafe, #bfdbfe)',
+          borderRadius: '14px',
+          padding: '16px',
+          boxShadow: '0 4px 15px rgba(59, 130, 246, 0.08)'
         }}>
-          <div style={{
-            background: 'linear-gradient(135deg, #ffffff, #f9fafb)',
-            borderRadius: '24px',
-            padding: '32px',
-            maxWidth: '90%',
-            maxHeight: '%',
-            overflowY: 'auto',
-            boxShadow: '0 20px 50px rgba(0, 0, 0, 0.2)',
-            border: '1px solid rgba(0, 0, 0, 0.05)'
-          }}>
-            <div style={{
-              display: 'flex',
-              justifyContent: 'space-between',
-              alignItems: 'center',
-              marginBottom: '24px'
-            }}>
-              <h2 style={{
-                margin: 0,
-                fontSize: '28px',
-                fontWeight: '700',
-                color: '#1f2937'
-              }}>
-                Détails de la vente #{selectedVente.id.slice(-6).toUpperCase()}
-              </h2>
-              <button
-                onClick={() => setShowDetails(false)}
-                style={{
-                  background: 'none',
-                  border: 'none',
-                  color: '#6b7280',
-                  cursor: 'pointer',
-                  fontSize: '24px',
-                  padding: '8px',
-                  borderRadius: '12px',
-                  transition: 'all 0.2s ease'
-                }}
-                onMouseEnter={(e) => e.target.style.background = '#f3f4f6'}
-                onMouseLeave={(e) => e.target.style.background = 'none'}
-              >
-                ×
-              </button>
-            </div>
+          <h4 style={{ margin: '0 0 6px', color: '#1d4ed8', fontSize: '14px', fontWeight: 600 }}>Client</h4>
+          <p style={{ margin: 0, fontSize: '16px', fontWeight: 700, color: '#1f2937', wordBreak: 'break-word' }}>
+            {selectedVente?.client || '-'}
+          </p>
+        </div>
+        <div style={{
+          background: 'linear-gradient(135deg, #dcfce7, #bbf7d0)',
+          borderRadius: '14px',
+          padding: '16px',
+          boxShadow: '0 4px 15px rgba(34, 197, 94, 0.08)'
+        }}>
+          <h4 style={{ margin: '0 0 6px', color: '#15803d', fontSize: '14px', fontWeight: 600 }}>Date</h4>
+          <p style={{ margin: 0, fontSize: '16px', fontWeight: 700, color: '#1f2937' }}>
+            {formatDateSafe?.(selectedVente?.date) || '-'}
+          </p>
+        </div>
+        <div style={{
+          background: 'linear-gradient(135deg, #fef3c7, #fde68a)',
+          borderRadius: '14px',
+          padding: '16px',
+          boxShadow: '0 4px 15px rgba(245, 158, 11, 0.08)'
+        }}>
+          <h4 style={{ margin: '0 0 6px', color: '#b45309', fontSize: '14px', fontWeight: 600 }}>Statut</h4>
+          <p style={{ margin: 0, fontSize: '16px', fontWeight: 700, color: '#1f2937' }}>
+            {selectedVente?.statutPaiement || '-'}
+          </p>
+        </div>
+        <div style={{
+          background: 'linear-gradient(135deg, #f3e8ff, #e9d5ff)',
+          borderRadius: '14px',
+          padding: '16px',
+          boxShadow: '0 4px 15px rgba(168, 85, 247, 0.08)'
+        }}>
+          <h4 style={{ margin: '0 0 6px', color: '#7e22ce', fontSize: '14px', fontWeight: 600 }}>Mode</h4>
+          <p style={{ margin: 0, fontSize: '16px', fontWeight: 700, color: '#1f2937' }}>
+            {selectedVente?.modePaiement || 'Espèces'}
+          </p>
+        </div>
+        <div style={{
+          background: 'linear-gradient(135deg, #d1fae5, #a7f3d0)',
+          borderRadius: '14px',
+          padding: '16px',
+          boxShadow: '0 4px 15px rgba(16, 185, 129, 0.08)'
+        }}>
+          <h4 style={{ margin: '0 0 6px', color: '#065f46', fontSize: '14px', fontWeight: 600 }}>Total</h4>
+          <p style={{ margin: 0, fontSize: '16px', fontWeight: 800, color: '#1f2937' }}>
+            {typeof safeToFixed === 'function'
+              ? safeToFixed(selectedVente?.montantTotal)
+              : (selectedVente?.montantTotal ?? 0)}
+            {' '}DH
+          </p>
+        </div>
+      </div>
 
-            {/* Cartes d'informations générales */}
-            <div style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
-              gap: '16px',
-              marginBottom: '32px'
+      {/* Tableau des articles */}
+      <h3 style={{
+        margin: '0 0 12px',
+        fontSize: 'clamp(16px, 2.2vw, 20px)',
+        fontWeight: 600,
+        color: '#374151'
+      }}>
+        Articles ({selectedVente?.articles?.length || 0})
+      </h3>
+      <div style={{
+        background: '#fff',
+        borderRadius: '14px',
+        boxShadow: '0 8px 25px rgba(0, 0, 0, 0.05)',
+        marginBottom: '20px',
+        overflowX: 'auto'
+      }}>
+        <table style={{ width: '100%', minWidth: 640, borderCollapse: 'collapse' }}>
+          <thead>
+            <tr style={{
+              background: 'linear-gradient(135deg, #6d28d9, #5b21b6)',
+              color: 'white'
             }}>
-              <div style={{
-                background: 'linear-gradient(135deg, #dbeafe, #bfdbfe)',
-                borderRadius: '16px',
-                padding: '20px',
-                boxShadow: '0 4px 15px rgba(59, 130, 246, 0.1)'
-              }}>
-                <h4 style={{ margin: '0 0 8px', color: '#1d4ed8', fontSize: '16px', fontWeight: '600' }}>Client</h4>
-                <p style={{ margin: 0, fontSize: '18px', fontWeight: '700', color: '#1f2937' }}>{selectedVente.client}</p>
-              </div>
-              <div style={{
-                background: 'linear-gradient(135deg, #dcfce7, #bbf7d0)',
-                borderRadius: '16px',
-                padding: '20px',
-                boxShadow: '0 4px 15px rgba(34, 197, 94, 0.1)'
-              }}>
-                <h4 style={{ margin: '0 0 8px', color: '#15803d', fontSize: '16px', fontWeight: '600' }}>Date</h4>
-                <p style={{ margin: 0, fontSize: '18px', fontWeight: '700', color: '#1f2937' }}>{formatDateSafe(selectedVente.date)}</p>
-              </div>
-              <div style={{
-                background: 'linear-gradient(135deg, #fef3c7, #fde68a)',
-                borderRadius: '16px',
-                padding: '20px',
-                boxShadow: '0 4px 15px rgba(245, 158, 11, 0.1)'
-              }}>
-                <h4 style={{ margin: '0 0 8px', color: '#b45309', fontSize: '16px', fontWeight: '600' }}>Statut</h4>
-                <p style={{ margin: 0, fontSize: '18px', fontWeight: '700', color: '#1f2937' }}>{selectedVente.statutPaiement}</p>
-              </div>
-              <div style={{
-                background: 'linear-gradient(135deg, #f3e8ff, #e9d5ff)',
-                borderRadius: '16px',
-                padding: '20px',
-                boxShadow: '0 4px 15px rgba(168, 85, 247, 0.1)'
-              }}>
-                <h4 style={{ margin: '0 0 8px', color: '#7e22ce', fontSize: '16px', fontWeight: '600' }}>Mode</h4>
-                <p style={{ margin: 0, fontSize: '18px', fontWeight: '700', color: '#1f2937' }}>{selectedVente.modePaiement || 'Espèces'}</p>
-              </div>
-              <div style={{
-                background: 'linear-gradient(135deg, #d1fae5, #a7f3d0)',
-                borderRadius: '16px',
-                padding: '20px',
-                boxShadow: '0 4px 15px rgba(16, 185, 129, 0.1)'
-              }}>
-                <h4 style={{ margin: '0 0 8px', color: '#065f46', fontSize: '16px', fontWeight: '600' }}>Total</h4>
-                <p style={{ margin: 0, fontSize: '18px', fontWeight: '700', color: '#1f2937' }}>{safeToFixed(selectedVente.montantTotal)} DH</p>
-              </div>
-            </div>
+              <th style={{ padding: '12px', textAlign: 'left' }}>Produit / Traçabilité</th>
+              <th style={{ padding: '12px', textAlign: 'center' }}>Qté</th>
+              <th style={{ padding: '12px', textAlign: 'right' }}>Prix Unit.</th>
+              <th style={{ padding: '12px', textAlign: 'right' }}>Remise</th>
+              <th style={{ padding: '12px', textAlign: 'right' }}>Total</th>
+            </tr>
+          </thead>
+          <tbody>
+            {(selectedVente?.articles || []).map((a, i) => (
+              <tr key={i} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                <td style={{ padding: '12px', verticalAlign: 'top' }}>
+                  <strong>{a?.produit || '-'}</strong>
+                  {(a?.numeroLot || a?.fournisseur || a?.datePeremption) && (
+                    <div style={{ fontSize: '12px', color: '#6b7280', marginTop: '4px' }}>
+                      {a?.numeroLot ? `Lot: ${a.numeroLot}` : ''}
+                      {a?.fournisseur ? `${a?.numeroLot ? ' | ' : ''}Fournisseur: ${a.fournisseur}` : ''}
+                      {a?.datePeremption ? `${(a?.numeroLot || a?.fournisseur) ? ' | ' : ''}Exp: ${a.datePeremption}` : ''}
+                    </div>
+                  )}
+                </td>
+                <td style={{ padding: '12px', textAlign: 'center' }}>
+                  {typeof safeNumber === 'function' ? safeNumber(a?.quantite) : (a?.quantite ?? 0)}
+                </td>
+                <td style={{ padding: '12px', textAlign: 'right' }}>
+                  {typeof safeToFixed === 'function' ? safeToFixed(a?.prixUnitaire) : (a?.prixUnitaire ?? 0)} DH
+                </td>
+                <td style={{ padding: '12px', textAlign: 'right' }}>
+                  {typeof safeToFixed === 'function' ? safeToFixed(a?.remise) : (a?.remise ?? 0)} DH
+                </td>
+                <td style={{ padding: '12px', textAlign: 'right', fontWeight: 600 }}>
+                  {typeof safeToFixed === 'function'
+                    ? safeToFixed(
+                        (typeof safeNumber === 'function' ? safeNumber(a?.prixUnitaire) : (a?.prixUnitaire ?? 0)) *
+                        (typeof safeNumber === 'function' ? safeNumber(a?.quantite) : (a?.quantite ?? 0)) -
+                        (typeof safeNumber === 'function' ? safeNumber(a?.remise) : (a?.remise ?? 0))
+                      )
+                    : (((a?.prixUnitaire ?? 0) * (a?.quantite ?? 0)) - (a?.remise ?? 0))}
+                  {' '}DH
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
 
-            {/* Tableau des articles */}
-            <h3 style={{
-              margin: '0 0 16px',
-              fontSize: '20px',
-              fontWeight: '600',
-              color: '#374151'
-            }}>
-              Articles ({selectedVente.articles.length})
-            </h3>
-            <div style={{
-              background: 'white',
-              borderRadius: '16px',
-              overflow: 'hidden',
-              boxShadow: '0 8px 25px rgba(0, 0, 0, 0.05)',
-              marginBottom: '24px'
-            }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                <thead>
-                  <tr style={{
-                    background: 'linear-gradient(135deg, #6d28d9, #5b21b6)',
-                    color: 'white'
-                  }}>
-                    <th style={{ padding: '16px', textAlign: 'left' }}>Produit / Traçabilité</th>
-                    <th style={{ padding: '16px', textAlign: 'center' }}>Qté</th>
-                    <th style={{ padding: '16px', textAlign: 'right' }}>Prix Unit.</th>
-                    <th style={{ padding: '16px', textAlign: 'right' }}>Remise</th>
-                    <th style={{ padding: '16px', textAlign: 'right' }}>Total</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {selectedVente.articles.map((a, i) => (
-                    <tr key={i} style={{
-                      borderBottom: '1px solid #f1f5f9'
-                    }}>
-                      <td style={{ padding: '16px' }}>
-                        <strong>{a.produit}</strong>
-                        {(a.numeroLot || a.fournisseur || a.datePeremption) && (
-                          <div style={{
-                            fontSize: '12px',
-                            color: '#6b7280',
-                            marginTop: '4px'
-                          }}>
-                            {a.numeroLot && `Lot: ${a.numeroLot} | `}
-                            {a.fournisseur && `Fournisseur: ${a.fournisseur} | `}
-                            {a.datePeremption && `Exp: ${a.datePeremption}`}
-                          </div>
-                        )}
-                      </td>
-                      <td style={{ padding: '16px', textAlign: 'center' }}>{safeNumber(a.quantite)}</td>
-                      <td style={{ padding: '16px', textAlign: 'right' }}>{safeToFixed(a.prixUnitaire)} DH</td>
-                      <td style={{ padding: '16px', textAlign: 'right' }}>{safeToFixed(a.remise)} DH</td>
-                      <td style={{ padding: '16px', textAlign: 'right', fontWeight: '600' }}>
-                        {safeToFixed(safeNumber(a.prixUnitaire) * safeNumber(a.quantite) - safeNumber(a.remise))} DH
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-
-            {/* Notes */}
-            {selectedVente.notes && (
-              <div style={{
-                background: 'linear-gradient(135deg, #fef3c7, #fde68a)',
-                borderRadius: '16px',
-                padding: '20px',
-                marginBottom: '24px'
-              }}>
-                <h4 style={{ margin: '0 0 8px', color: '#92400e', fontSize: '16px', fontWeight: '600' }}>Notes</h4>
-                <p style={{ margin: 0, color: '#713f12' }}>{selectedVente.notes}</p>
-              </div>
-            )}
-
-            {/* Actions rapides */}
-            <div style={{
-              display: 'flex',
-              gap: '16px',
-              justifyContent: 'flex-end'
-            }}>
-              <button 
-                onClick={() => {
-                  setShowDetails(false);
-                  handleEditVente(selectedVente);
-                }}
-                style={{
-                  background: 'linear-gradient(135deg, #f59e0b, #d97706)',
-                  color: 'white',
-                  border: 'none',
-                  padding: '12px 24px',
-                  borderRadius: '12px',
-                  fontSize: '14px',
-                  fontWeight: '600',
-                  cursor: 'pointer',
-                  transition: 'all 0.3s ease'
-                }}
-                onMouseEnter={(e) => {
-                  e.target.style.transform = 'translateY(-2px)';
-                  e.target.style.boxShadow = '0 8px 20px rgba(245, 158, 11, 0.3)';
-                }}
-                onMouseLeave={(e) => {
-                  e.target.style.transform = 'translateY(0)';
-                  e.target.style.boxShadow = 'none';
-                }}
-              >
-                Modifier
-              </button>
-              <button 
-                onClick={() => {
-                  setShowDetails(false);
-                  handlePrintVente(selectedVente);
-                }}
-                style={{
-                  background: 'linear-gradient(135deg, #6d28d9, #5b21b6)',
-                  color: 'white',
-                  border: 'none',
-                  padding: '12px 24px',
-                  borderRadius: '12px',
-                  fontSize: '14px',
-                  fontWeight: '600',
-                  cursor: 'pointer',
-                  transition: 'all 0.3s ease'
-                }}
-                onMouseEnter={(e) => {
-                  e.target.style.transform = 'translateY(-2px)';
-                  e.target.style.boxShadow = '0 8px 20px rgba(109, 40, 217, 0.3)';
-                }}
-                onMouseLeave={(e) => {
-                  e.target.style.transform = 'translateY(0)';
-                  e.target.style.boxShadow = 'none';
-                }}
-              >
-                Imprimer
-              </button>
-            </div>
-          </div>
+      {/* Notes */}
+      {selectedVente?.notes && (
+        <div style={{
+          background: 'linear-gradient(135deg, #fef3c7, #fde68a)',
+          borderRadius: '14px',
+          padding: '16px',
+          marginBottom: '20px'
+        }}>
+          <h4 style={{ margin: '0 0 6px', color: '#92400e', fontSize: '14px', fontWeight: 600 }}>Notes</h4>
+          <p style={{ margin: 0, color: '#713f12', fontSize: '14px', lineHeight: 1.5 }}>{selectedVente.notes}</p>
         </div>
       )}
+
+      {/* Actions */}
+      <div style={{
+        display: 'flex',
+        gap: '12px',
+        justifyContent: 'flex-end',
+        flexWrap: 'wrap'
+      }}>
+        <button
+          onClick={() => {
+            setShowDetails(false);
+            handleEditVente?.(selectedVente);
+          }}
+          style={{
+            background: 'linear-gradient(135deg, #f59e0b, #d97706)',
+            color: 'white',
+            border: 'none',
+            padding: '10px 18px',
+            borderRadius: '10px',
+            fontSize: '14px',
+            fontWeight: 600,
+            cursor: 'pointer',
+            transition: 'transform 0.2s ease, box-shadow 0.2s ease'
+          }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.transform = 'translateY(-2px)';
+            e.currentTarget.style.boxShadow = '0 8px 20px rgba(245, 158, 11, 0.3)';
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.transform = 'translateY(0)';
+            e.currentTarget.style.boxShadow = 'none';
+          }}
+        >
+          Modifier
+        </button>
+        <button
+          onClick={() => {
+            setShowDetails(false);
+            handlePrintVente?.(selectedVente);
+          }}
+          style={{
+            background: 'linear-gradient(135deg, #6d28d9, #5b21b6)',
+            color: 'white',
+            border: 'none',
+            padding: '10px 18px',
+            borderRadius: '10px',
+            fontSize: '14px',
+            fontWeight: 600,
+            cursor: 'pointer',
+            transition: 'transform 0.2s ease, box-shadow 0.2s ease'
+          }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.transform = 'translateY(-2px)';
+            e.currentTarget.style.boxShadow = '0 8px 20px rgba(109, 40, 217, 0.3)';
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.transform = 'translateY(0)';
+            e.currentTarget.style.boxShadow = 'none';
+          }}
+        >
+          Imprimer
+        </button>
+      </div>
+    </div>
+  </div>,
+  document.body
+)}
+
+
     </div>
   );
 }

@@ -1,6 +1,6 @@
-// src/components/Navbar.js - Version complète avec gestion rôles propriétaire et sauvegardes
+// src/components/Navbar.js - Version complète avec gestion rôles propriétaire, sauvegardes et affichage heure
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { Link, useNavigate, useLocation } from "react-router-dom";
 import {
   AppBar,
@@ -40,6 +40,7 @@ import { useUserRole } from "../contexts/UserRoleContext";
 
 export default function Navbar() {
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [currentTime, setCurrentTime] = useState(""); // ⏰ Ajout heure
   const navigate = useNavigate();
   const location = useLocation();
   
@@ -56,92 +57,38 @@ export default function Navbar() {
     getOwnershipStatus 
   } = useUserRole();
 
-  // Menus avec hiérarchie des permissions et badges appropriés
+  // ⏰ Mise à jour de l'heure actuelle en temps réel
+  useEffect(() => {
+    const updateClock = () => {
+      const now = new Date();
+      const formattedTime = now.toLocaleTimeString("fr-FR", {
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit"
+      });
+      setCurrentTime(formattedTime);
+    };
+
+    updateClock();
+    const interval = setInterval(updateClock, 1000);
+    return () => clearInterval(interval);
+  }, []);
+
+  // ================= MENU ==================
   const menuItems = [
-    { 
-      text: "Dashboard", 
-      icon: <DashboardIcon />, 
-      path: "/dashboard", 
-      allowed: ["docteur", "vendeuse"],
-      description: "Tableau de bord principal"
-    },
-    { 
-      text: "Achats", 
-      icon: <ShoppingCartIcon />, 
-      path: "/achats", 
-      allowed: ["docteur"],
-      description: "Gestion des achats fournisseurs"
-    },
-    { 
-      text: "Ventes", 
-      icon: <PointOfSaleIcon />, 
-      path: "/ventes", 
-      allowed: ["docteur", "vendeuse"],
-      description: "Gestion des ventes clients"
-    },
-    { 
-      text: "Stock", 
-      icon: <LocalPharmacyIcon />, 
-      path: "/stock", 
-      allowed: ["docteur", "vendeuse"],
-      description: "Gestion du stock pharmacie"
-    },
-    { 
-      text: "Devis & Factures", 
-      icon: <DescriptionIcon />, 
-      path: "/devis-factures", 
-      allowed: ["docteur", "vendeuse"],
-      description: "Gestion devis et factures"
-    },
-    { 
-      text: "Paiements", 
-      icon: <AttachMoneyIcon />, 
-      path: "/paiements", 
-      allowed: ["docteur", "vendeuse"],
-      description: "Suivi des paiements"
-    },
-    
-    // SAUVEGARDES avec permissions étendues pour propriétaire
-    { 
-      text: "Sauvegardes", 
-      icon: <BackupIcon />, 
-      path: "/backup", 
-      allowed: ["docteur", "vendeuse"],
-      description: "Sauvegarde des données",
-      isNew: true,
-      hasOwnerBonus: true // Propriétaire a accès complet
-    },
-    
-    // GESTION UTILISATEURS (votre version existante) - Docteurs
-    { 
-      text: "Utilisateurs", 
-      icon: <PeopleIcon />, 
-      path: "/users", 
-      allowed: ["docteur"],
-      description: "Gestion des invitations et utilisateurs",
-      isAdmin: true
-    },
-    
-    // 🔑 GESTION DES RÔLES - PROPRIÉTAIRE UNIQUEMENT
-    { 
-      text: "👑 Gestion Rôles", 
-      icon: <ManageAccountsIcon />, 
-      path: "/gestion-utilisateurs", 
-      allowed: ["docteur"], 
-      ownerOnly: true,
-      description: "Promotion/rétrogradation des utilisateurs",
-      isOwnerSpecial: true
-    },
-    
-    { 
-      text: "Paramètres", 
-      icon: <SettingsIcon />, 
-      path: "/parametres", 
-      allowed: ["docteur"],
-      description: "Configuration système"
-    },
+    { text: "Dashboard", icon: <DashboardIcon />, path: "/dashboard", allowed: ["docteur", "vendeuse"], description: "Tableau de bord principal" },
+    { text: "Achats", icon: <ShoppingCartIcon />, path: "/achats", allowed: ["docteur"], description: "Gestion des achats fournisseurs" },
+    { text: "Ventes", icon: <PointOfSaleIcon />, path: "/ventes", allowed: ["docteur", "vendeuse"], description: "Gestion des ventes clients" },
+    { text: "Stock", icon: <LocalPharmacyIcon />, path: "/stock", allowed: ["docteur", "vendeuse"], description: "Gestion du stock pharmacie" },
+    { text: "Devis & Factures", icon: <DescriptionIcon />, path: "/devis-factures", allowed: ["docteur", "vendeuse"], description: "Gestion devis et factures" },
+    { text: "Paiements", icon: <AttachMoneyIcon />, path: "/paiements", allowed: ["docteur", "vendeuse"], description: "Suivi des paiements" },
+    { text: "Sauvegardes", icon: <BackupIcon />, path: "/backup", allowed: ["docteur", "vendeuse"], description: "Sauvegarde des données", isNew: true, hasOwnerBonus: true },
+    { text: "Utilisateurs", icon: <PeopleIcon />, path: "/users", allowed: ["docteur"], description: "Gestion des invitations et utilisateurs", isAdmin: true },
+    { text: "👑 Gestion Rôles", icon: <ManageAccountsIcon />, path: "/gestion-utilisateurs", allowed: ["docteur"], ownerOnly: true, description: "Promotion/rétrogradation des utilisateurs", isOwnerSpecial: true },
+    { text: "Paramètres", icon: <SettingsIcon />, path: "/parametres", allowed: ["docteur"], description: "Configuration système" },
   ];
 
+  // Déconnexion
   const handleLogout = async () => {
     try {
       await signOut(auth);
@@ -151,10 +98,10 @@ export default function Navbar() {
     }
   };
 
-  // Affichage conditionnel strict
   if (loading || !authReady) return null;
   if (!canAccessApp()) return null;
 
+  // ================= DRAWER ==================
   const drawer = (
     <Box
       sx={{
@@ -212,7 +159,7 @@ export default function Navbar() {
         )}
       </Box>
 
-      {/* Indicateurs d'état si problèmes */}
+      {/* Indicateurs d'état */}
       {(isDeleted || isLocked || !isActive) && (
         <Box sx={{ textAlign: "center", mb: 1, px: 2 }}>
           <Chip
@@ -233,13 +180,11 @@ export default function Navbar() {
       
       <Divider sx={{ bgcolor: "#fff3", mb: 2 }} />
       
-      {/* Menu principal avec badges et permissions */}
+      {/* Menu principal */}
       <List>
         {menuItems
           .filter(item => {
-            // Vérifier permissions de base
             if (!item.allowed.includes(role)) return false;
-            // Vérifier permission propriétaire uniquement
             if (item.ownerOnly && !isOwner) return false;
             return true;
           })
@@ -296,93 +241,13 @@ export default function Navbar() {
                   }
                 }}
               />
-              
-              {/* Badge "NEW" pour Sauvegardes */}
-              {item.isNew && (
-                <Box
-                  sx={{
-                    position: 'absolute',
-                    top: 6,
-                    right: 10,
-                    background: '#ff4757',
-                    color: '#fff',
-                    fontSize: '0.6rem',
-                    fontWeight: 700,
-                    padding: '2px 6px',
-                    borderRadius: '10px',
-                    lineHeight: 1
-                  }}
-                >
-                  NEW
-                </Box>
-              )}
-              
-              {/* Badge "ADMIN" pour Gestion Utilisateurs classique */}
-              {item.isAdmin && (
-                <Box
-                  sx={{
-                    position: 'absolute',
-                    top: 6,
-                    right: 10,
-                    background: '#9c27b0',
-                    color: '#fff',
-                    fontSize: '0.6rem',
-                    fontWeight: 700,
-                    padding: '2px 6px',
-                    borderRadius: '10px',
-                    lineHeight: 1
-                  }}
-                >
-                  ADMIN
-                </Box>
-              )}
-              
-              {/* Badge "OWNER" pour Gestion Rôles */}
-              {item.isOwnerSpecial && (
-                <Box
-                  sx={{
-                    position: 'absolute',
-                    top: 6,
-                    right: 10,
-                    background: 'linear-gradient(90deg, #ffd700, #ffed4a)',
-                    color: '#1a2332',
-                    fontSize: '0.6rem',
-                    fontWeight: 700,
-                    padding: '2px 6px',
-                    borderRadius: '10px',
-                    lineHeight: 1
-                  }}
-                >
-                  OWNER
-                </Box>
-              )}
-              
-              {/* Badge "FULL" pour propriétaire sur Sauvegardes */}
-              {item.hasOwnerBonus && isOwner && (
-                <Box
-                  sx={{
-                    position: 'absolute',
-                    bottom: 6,
-                    right: 10,
-                    background: '#2ed573',
-                    color: '#fff',
-                    fontSize: '0.55rem',
-                    fontWeight: 600,
-                    padding: '1px 5px',
-                    borderRadius: '8px',
-                    lineHeight: 1
-                  }}
-                >
-                  FULL
-                </Box>
-              )}
             </ListItemButton>
           ))}
       </List>
       
       <Divider sx={{ bgcolor: "#fff3", mt: 3, mb: 2 }} />
       
-      {/* Section informations utilisateur */}
+      {/* Infos utilisateur */}
       <Box sx={{ px: 2, mb: 2 }}>
         <Typography variant="caption" sx={{ color: "#b3c5d7", display: "block" }}>
           Statut: {getOwnershipStatus()}
@@ -415,6 +280,7 @@ export default function Navbar() {
     </Box>
   );
 
+  // ================= RENDU FINAL ==================
   return (
     <>
       <AppBar
@@ -449,8 +315,6 @@ export default function Navbar() {
             }}
           >
             💊 Pharma Gestion
-            
-            {/* Badge propriétaire dans la barre principale */}
             {isOwner && (
               <Chip
                 icon={<SupervisorAccountIcon />}
@@ -463,26 +327,28 @@ export default function Navbar() {
                   fontSize: "0.7rem",
                   fontWeight: "bold",
                   height: "24px",
-                  "& .MuiChip-icon": { 
-                    color: "#1a2332",
-                    fontSize: "14px"
-                  }
+                  "& .MuiChip-icon": { color: "#1a2332", fontSize: "14px" }
                 }}
               />
             )}
           </Typography>
-          
-          {/* Indicateur de rôle dans la barre */}
-          <Box sx={{ mr: 2 }}>
-            <Typography variant="caption" sx={{ 
-              color: "rgba(255,255,255,0.8)",
-              fontSize: "0.75rem" 
-            }}>
-              {role === "docteur" ? "👨‍⚕️ Docteur" : "👩‍💼 Vendeuse"}
+
+          {/* Heure actuelle en haut à droite */}
+          <Box sx={{ mr: 3 }}>
+            <Typography
+              variant="body1"
+              sx={{
+                fontWeight: "bold",
+                fontSize: "0.9rem",
+                color: "#fff",
+                textShadow: "0 0 5px #0006"
+              }}
+            >
+              🕒 {currentTime}
             </Typography>
           </Box>
 
-          {/* Accès rapide Backup dans la barre */}
+          {/* Accès rapide Backup */}
           <IconButton
             color="inherit"
             onClick={() => navigate('/backup')}
