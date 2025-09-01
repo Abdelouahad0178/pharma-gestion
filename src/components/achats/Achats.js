@@ -38,14 +38,14 @@ export default function Achats() {
   const [prixVente, setPrixVente] = useState("");
   const [remiseArticle, setRemiseArticle] = useState(0);
   const [datePeremption, setDatePeremption] = useState("");
-  const [numeroLot, setNumeroLot] = useState(""); // 🆕 Nouveau champ
-  const [fournisseurArticle, setFournisseurArticle] = useState(""); // 🆕 Fournisseur spécifique à l'article
+  const [numeroLot, setNumeroLot] = useState("");
+  const [fournisseurArticle, setFournisseurArticle] = useState("");
 
   // Listes
   const [articles, setArticles] = useState([]);
   const [achats, setAchats] = useState([]);
   const [medicaments, setMedicaments] = useState([]);
-  const [stockEntries, setStockEntries] = useState([]); // 🆕 Entrées de stock détaillées
+  const [stockEntries, setStockEntries] = useState([]);
   const [parametres, setParametres] = useState({ 
     entete: "", 
     pied: "", 
@@ -69,18 +69,18 @@ export default function Achats() {
 
   // Toggle formulaire
   const [showForm, setShowForm] = useState(false);
-  const [showStockDetails, setShowStockDetails] = useState(false); // 🆕 Afficher détails stock
+  const [showStockDetails, setShowStockDetails] = useState(false);
 
   // Animation states
   const [isLoading, setIsLoading] = useState(false);
   const [notification, setNotification] = useState(null);
 
-  // 📱 États pour responsive et impression optimisée
+  // États pour responsive et impression optimisée
   const [isMobile, setIsMobile] = useState(false);
   const [isTablet, setIsTablet] = useState(false);
   const [isPrintReady, setIsPrintReady] = useState(false);
 
-  // 📱 Hook pour détecter la taille d'écran
+  // Hook pour détecter la taille d'écran
   useEffect(() => {
     const checkScreenSize = () => {
       const width = window.innerWidth;
@@ -93,7 +93,7 @@ export default function Achats() {
     return () => window.removeEventListener('resize', checkScreenSize);
   }, []);
 
-  // 🔧 Détection des capacités d'impression
+  // Détection des capacités d'impression
   useEffect(() => {
     const checkPrintCapabilities = () => {
       const userAgent = navigator.userAgent.toLowerCase();
@@ -101,7 +101,7 @@ export default function Achats() {
       setIsPrintReady(true);
       
       if (isMobileDevice && !window.open) {
-        console.log("📱 Appareil mobile détecté - Mode impression optimisé activé");
+        console.log("Appareil mobile détecté - Mode impression optimisé activé");
       }
     };
 
@@ -109,13 +109,13 @@ export default function Achats() {
   }, []);
 
   // Fonction pour afficher les notifications
-  const showNotification = (message, type = 'success') => {
+  const showNotification = useCallback((message, type = 'success') => {
     setNotification({ message, type });
     setTimeout(() => setNotification(null), 3000);
-  };
+  }, []);
 
-  // Chargement des paramètres de la société avec cachet ÉTENDU
-  const fetchParametres = async () => {
+  // Chargement des paramètres de la société avec cachet étendu
+  const fetchParametres = useCallback(async () => {
     if (!societeId) return;
     try {
       const docRef = doc(db, "societe", societeId, "parametres", "documents");
@@ -176,81 +176,101 @@ export default function Achats() {
         tailleCachet: 120
       });
     }
-  };
+  }, [societeId]);
 
   // Chargement des achats (par société)
   const fetchAchats = useCallback(async () => {
     if (!societeId) return setAchats([]);
-    const snap = await getDocs(collection(db, "societe", societeId, "achats"));
-    let arr = [];
-    snap.forEach((docSnap) => {
-      const data = docSnap.data();
-      if (
-        Array.isArray(data.articles) &&
-        data.articles.length > 0 &&
-        data.articles.some(a => a.produit && a.quantite > 0 && a.prixUnitaire > 0)
-      ) {
-        arr.push({ id: docSnap.id, ...data });
-      }
-    });
-    setAchats(arr);
+    try {
+      const snap = await getDocs(collection(db, "societe", societeId, "achats"));
+      let arr = [];
+      snap.forEach((docSnap) => {
+        const data = docSnap.data();
+        if (
+          Array.isArray(data.articles) &&
+          data.articles.length > 0 &&
+          data.articles.some(a => a.produit && a.quantite > 0 && (a.prixUnitaire > 0 || a.prixAchat > 0))
+        ) {
+          arr.push({ id: docSnap.id, ...data });
+        }
+      });
+      // Trier par date décroissante
+      arr.sort((a, b) => {
+        const dateA = a.timestamp?.toDate?.() || a.date?.toDate?.() || new Date(0);
+        const dateB = b.timestamp?.toDate?.() || b.date?.toDate?.() || new Date(0);
+        return dateB - dateA;
+      });
+      setAchats(arr);
+    } catch (error) {
+      console.error("Erreur lors du chargement des achats:", error);
+      setAchats([]);
+    }
   }, [societeId]);
 
-  // 🆕 Chargement du stock avec gestion multi-lots
+  // Chargement du stock avec gestion multi-lots
   const fetchStockEntries = useCallback(async () => {
     if (!societeId) return setStockEntries([]);
-    const snap = await getDocs(collection(db, "societe", societeId, "stock_entries"));
-    let arr = [];
-    snap.forEach((docSnap) => {
-      arr.push({ id: docSnap.id, ...docSnap.data() });
-    });
-    setStockEntries(arr.sort((a, b) => {
-      // Trier par nom puis par date d'expiration
-      if (a.nom !== b.nom) return a.nom.localeCompare(b.nom);
-      return new Date(a.datePeremption) - new Date(b.datePeremption);
-    }));
+    try {
+      const snap = await getDocs(collection(db, "societe", societeId, "stock_entries"));
+      let arr = [];
+      snap.forEach((docSnap) => {
+        arr.push({ id: docSnap.id, ...docSnap.data() });
+      });
+      setStockEntries(arr.sort((a, b) => {
+        // Trier par nom puis par date d'expiration
+        if (a.nom !== b.nom) return (a.nom || "").localeCompare(b.nom || "");
+        return new Date(a.datePeremption || 0) - new Date(b.datePeremption || 0);
+      }));
+    } catch (error) {
+      console.error("Erreur lors du chargement des entrées de stock:", error);
+      setStockEntries([]);
+    }
   }, [societeId]);
 
   // Chargement des médicaments (liste unique des noms)
   const fetchMedicaments = useCallback(async () => {
     if (!societeId) return setMedicaments([]);
     
-    // Récupérer tous les médicaments du stock traditionnel
-    const stockSnap = await getDocs(collection(db, "societe", societeId, "stock"));
-    let stockMeds = [];
-    stockSnap.forEach((docSnap) => stockMeds.push(docSnap.data()));
-    
-    // Récupérer tous les médicaments des entrées de stock
-    const entriesSnap = await getDocs(collection(db, "societe", societeId, "stock_entries"));
-    let entriesMeds = [];
-    entriesSnap.forEach((docSnap) => entriesMeds.push(docSnap.data()));
-    
-    // Créer une liste unique des noms de médicaments
-    const allMeds = [...stockMeds, ...entriesMeds];
-    const uniqueNames = Array.from(new Set(allMeds.map(m => m.nom).filter(Boolean)));
-    const medicamentsList = uniqueNames.map(nom => {
-      const examples = allMeds.filter(m => m.nom === nom);
-      return {
-        nom,
-        exemples: examples.slice(0, 3) // Garder quelques exemples pour référence
-      };
-    });
-    
-    setMedicaments(medicamentsList);
+    try {
+      // Récupérer tous les médicaments du stock traditionnel
+      const stockSnap = await getDocs(collection(db, "societe", societeId, "stock"));
+      let stockMeds = [];
+      stockSnap.forEach((docSnap) => stockMeds.push(docSnap.data()));
+      
+      // Récupérer tous les médicaments des entrées de stock
+      const entriesSnap = await getDocs(collection(db, "societe", societeId, "stock_entries"));
+      let entriesMeds = [];
+      entriesSnap.forEach((docSnap) => entriesMeds.push(docSnap.data()));
+      
+      // Créer une liste unique des noms de médicaments
+      const allMeds = [...stockMeds, ...entriesMeds];
+      const uniqueNames = Array.from(new Set(allMeds.map(m => m.nom).filter(Boolean)));
+      const medicamentsList = uniqueNames.map(nom => {
+        const examples = allMeds.filter(m => m.nom === nom);
+        return {
+          nom,
+          exemples: examples.slice(0, 3) // Garder quelques exemples pour référence
+        };
+      });
+      
+      setMedicaments(medicamentsList.sort((a, b) => (a.nom || "").localeCompare(b.nom || "")));
+    } catch (error) {
+      console.error("Erreur lors du chargement des médicaments:", error);
+      setMedicaments([]);
+    }
   }, [societeId]);
 
   useEffect(() => { 
-    fetchAchats(); 
-    fetchParametres();
-    fetchStockEntries();
-  }, [fetchAchats, societeId, fetchStockEntries]);
-  
-  useEffect(() => { 
-    fetchMedicaments(); 
-  }, [fetchMedicaments]);
+    if (societeId) {
+      fetchAchats(); 
+      fetchParametres();
+      fetchStockEntries();
+      fetchMedicaments();
+    }
+  }, [societeId, fetchAchats, fetchParametres, fetchStockEntries, fetchMedicaments]);
 
-  // 🆕 Sélection médicament avec suggestion de prix basée sur les entrées existantes
-  const handleProduitChange = (value) => {
+  // Sélection médicament avec suggestion de prix basée sur les entrées existantes
+  const handleProduitChange = useCallback((value) => {
     setProduit(value);
     if (value !== "_new_" && value) {
       // Chercher les dernières entrées pour ce médicament
@@ -275,32 +295,45 @@ export default function Achats() {
       setPrixVente("");
       setFournisseurArticle("");
     }
-  };
+  }, [stockEntries, medicaments]);
 
-  // 🆕 Ajout d'un article avec informations étendues
-  const handleAddArticle = (e) => {
+  // Ajout d'un article avec informations étendues
+  const handleAddArticle = useCallback((e) => {
     e.preventDefault();
-    const nomProduitFinal = produit === "_new_" ? produitNouveau : produit;
-    if (!nomProduitFinal || !quantite || !prixUnitaire || !datePeremption) return;
+    const nomProduitFinal = produit === "_new_" ? produitNouveau.trim() : produit;
+    
+    if (!nomProduitFinal || !quantite || !prixUnitaire || !datePeremption) {
+      showNotification("Veuillez remplir tous les champs obligatoires", "error");
+      return;
+    }
+    
+    // Validation des nombres
+    const qte = Number(quantite);
+    const prix = Number(prixUnitaire);
+    const prixV = Number(prixVente) || 0;
+    
+    if (qte <= 0 || prix <= 0) {
+      showNotification("La quantité et le prix doivent être positifs", "error");
+      return;
+    }
     
     // Générer un numéro de lot automatique si non fourni
-    const lotFinal = numeroLot || `LOT${Date.now().toString().slice(-6)}`;
-    const fournisseurFinal = fournisseurArticle || fournisseur;
+    const lotFinal = numeroLot.trim() || `LOT${Date.now().toString().slice(-6)}`;
+    const fournisseurFinal = fournisseurArticle.trim() || fournisseur;
     
-    setArticles([
-      ...articles,
-      {
-        produit: nomProduitFinal,
-        quantite: Number(quantite),
-        prixUnitaire: Number(prixUnitaire),
-        prixAchat: Number(prixUnitaire),
-        prixVente: Number(prixVente) || 0,
-        remise: Number(remiseArticle) || 0,
-        datePeremption,
-        numeroLot: lotFinal,
-        fournisseurArticle: fournisseurFinal,
-      }
-    ]);
+    const nouvelArticle = {
+      produit: nomProduitFinal,
+      quantite: qte,
+      prixUnitaire: prix,
+      prixAchat: prix,
+      prixVente: prixV,
+      remise: Number(remiseArticle) || 0,
+      datePeremption,
+      numeroLot: lotFinal,
+      fournisseurArticle: fournisseurFinal,
+    };
+    
+    setArticles(prev => [...prev, nouvelArticle]);
     
     // Réinitialiser les champs article
     setProduit(""); 
@@ -314,27 +347,27 @@ export default function Achats() {
     setFournisseurArticle("");
     
     showNotification("Article ajouté avec informations détaillées!", "success");
-  };
+  }, [produit, produitNouveau, quantite, prixUnitaire, prixVente, remiseArticle, datePeremption, numeroLot, fournisseurArticle, fournisseur, showNotification]);
 
   // Retrait d'article temporaire
-  const handleRemoveArticle = (idx) => {
-    setArticles(articles.filter((_, i) => i !== idx));
+  const handleRemoveArticle = useCallback((idx) => {
+    setArticles(prev => prev.filter((_, i) => i !== idx));
     showNotification("Article supprimé", "info");
-  };
+  }, [showNotification]);
 
-  // 🆕 Mise à jour du stock avec gestion multi-lots (ajout)
-  const updateStockOnAdd = async (bon) => {
-    if (!societeId || !user) return;
+  // Mise à jour du stock avec gestion multi-lots (ajout)
+  const updateStockOnAdd = useCallback(async (bon) => {
+    if (!societeId || !user || !bon.articles) return;
     
-    for (const art of bon.articles || []) {
+    const updatePromises = bon.articles.map(async (art) => {
       try {
         // Créer une nouvelle entrée de stock pour chaque article
         await addDoc(collection(db, "societe", societeId, "stock_entries"), {
           nom: art.produit || "",
           quantite: Number(art.quantite || 0),
           quantiteInitiale: Number(art.quantite || 0),
-          prixAchat: Number(art.prixUnitaire || 0),
-          prixVente: Number(art.prixVente || art.prixUnitaire || 0),
+          prixAchat: Number(art.prixUnitaire || art.prixAchat || 0),
+          prixVente: Number(art.prixVente || art.prixUnitaire || art.prixAchat || 0),
           datePeremption: art.datePeremption || "",
           numeroLot: art.numeroLot || `LOT${Date.now().toString().slice(-6)}`,
           fournisseur: art.fournisseurArticle || bon.fournisseur || "",
@@ -354,14 +387,14 @@ export default function Achats() {
         const stockSnap = await getDocs(q);
         
         if (!stockSnap.empty) {
-          // Mettre à jour le stock existant (on garde le plus récent)
+          // Mettre à jour le stock existant
           const docId = stockSnap.docs[0].id;
           const current = stockSnap.docs[0].data();
           
           await updateDoc(doc(db, "societe", societeId, "stock", docId), {
             quantite: Number(current.quantite || 0) + Number(art.quantite || 0),
-            prixAchat: Number(art.prixUnitaire || 0), // Prix le plus récent
-            prixVente: Number(art.prixVente || current.prixVente || art.prixUnitaire),
+            prixAchat: Number(art.prixUnitaire || art.prixAchat || 0), // Prix le plus récent
+            prixVente: Number(art.prixVente || current.prixVente || art.prixUnitaire || art.prixAchat),
             datePeremption: art.datePeremption || current.datePeremption || "",
             dernierFournisseur: art.fournisseurArticle || bon.fournisseur || "",
             modifiePar: user.uid,
@@ -373,8 +406,8 @@ export default function Achats() {
           await addDoc(stockRef, {
             nom: art.produit || "",
             quantite: Number(art.quantite || 0),
-            prixAchat: Number(art.prixUnitaire || 0),
-            prixVente: Number(art.prixVente || art.prixUnitaire || 0),
+            prixAchat: Number(art.prixUnitaire || art.prixAchat || 0),
+            prixVente: Number(art.prixVente || art.prixUnitaire || art.prixAchat || 0),
             seuil: 5,
             datePeremption: art.datePeremption || "",
             dernierFournisseur: art.fournisseurArticle || bon.fournisseur || "",
@@ -387,23 +420,27 @@ export default function Achats() {
       } catch (error) {
         console.error(`Erreur lors de l'ajout au stock de ${art.produit}:`, error);
       }
-    }
-  };
+    });
 
-  // 🆕 Mise à jour du stock avec gestion multi-lots (suppression)
-  const updateStockOnDelete = async (bon) => {
-    if (!societeId || !user) return;
+    await Promise.allSettled(updatePromises);
+  }, [societeId, user]);
+
+  // Mise à jour du stock avec gestion multi-lots (suppression)
+  const updateStockOnDelete = useCallback(async (bon) => {
+    if (!societeId || !user || !bon.articles) return;
     
-    for (const art of bon.articles || []) {
+    const deletePromises = bon.articles.map(async (art) => {
       try {
         // Trouver et supprimer les entrées de stock correspondantes
         const entriesRef = collection(db, "societe", societeId, "stock_entries");
         const q = query(entriesRef, where("achatId", "==", bon.id), where("nom", "==", art.produit || ""));
         const entriesSnap = await getDocs(q);
         
-        entriesSnap.forEach(async (entryDoc) => {
+        const deleteEntryPromises = entriesSnap.docs.map(async (entryDoc) => {
           await deleteDoc(doc(db, "societe", societeId, "stock_entries", entryDoc.id));
         });
+        
+        await Promise.all(deleteEntryPromises);
 
         // Mettre à jour le stock traditionnel
         const stockRef = collection(db, "societe", societeId, "stock");
@@ -424,23 +461,37 @@ export default function Achats() {
       } catch (error) {
         console.error(`Erreur lors de la suppression du stock de ${art.produit}:`, error);
       }
-    }
-  };
+    });
 
-  // Ajout ou modification d'un bon d'achat AVEC ENREGISTREMENT D'ACTIVITÉ
+    await Promise.allSettled(deletePromises);
+  }, [societeId, user]);
+
+  // Ajout ou modification d'un bon d'achat avec enregistrement d'activité
   const handleAddBon = async (e) => {
     e.preventDefault();
-    if (!societeId) return alert("Aucune société sélectionnée !");
-    if (!user) return alert("Utilisateur non connecté !");
-    if (!fournisseur || !dateAchat || articles.length === 0) return;
+    if (!societeId) {
+      showNotification("Aucune société sélectionnée !", "error");
+      return;
+    }
+    if (!user) {
+      showNotification("Utilisateur non connecté !", "error");
+      return;
+    }
+    if (!fournisseur.trim() || !dateAchat || articles.length === 0) {
+      showNotification("Veuillez remplir tous les champs obligatoires", "error");
+      return;
+    }
     
-    const articlesValid = articles.filter(a => a.produit && a.quantite > 0 && a.prixUnitaire > 0);
-    if (articlesValid.length === 0) return;
+    const articlesValid = articles.filter(a => a.produit && a.quantite > 0 && (a.prixUnitaire > 0 || a.prixAchat > 0));
+    if (articlesValid.length === 0) {
+      showNotification("Aucun article valide trouvé", "error");
+      return;
+    }
 
     setIsLoading(true);
 
     const montantTotal = articlesValid.reduce(
-      (sum, a) => sum + ((a.prixUnitaire || 0) * (a.quantite || 0) - (a.remise || 0)),
+      (sum, a) => sum + (((a.prixUnitaire || a.prixAchat || 0) * (a.quantite || 0)) - (a.remise || 0)),
       0
     ) - (Number(remiseGlobale) || 0);
 
@@ -450,7 +501,7 @@ export default function Achats() {
         if (oldBon) await updateStockOnDelete(oldBon);
         
         await updateDoc(doc(db, "societe", societeId, "achats", editId), {
-          fournisseur,
+          fournisseur: fournisseur.trim(),
           date: Timestamp.fromDate(new Date(dateAchat)),
           timestamp: Timestamp.now(),
           statutPaiement,
@@ -467,7 +518,7 @@ export default function Achats() {
           userEmail: user.email,
           timestamp: Timestamp.now(),
           details: {
-            fournisseur,
+            fournisseur: fournisseur.trim(),
             montant: montantTotal,
             articles: articlesValid.length,
             action: 'modification',
@@ -476,14 +527,20 @@ export default function Achats() {
           }
         });
         
-        await updateStockOnAdd({ id: editId, fournisseur, articles: articlesValid, date: Timestamp.fromDate(new Date(dateAchat)) });
+        await updateStockOnAdd({ 
+          id: editId, 
+          fournisseur: fournisseur.trim(), 
+          articles: articlesValid, 
+          date: Timestamp.fromDate(new Date(dateAchat)) 
+        });
+        
         setIsEditing(false); 
         setEditId(null);
         showNotification("Bon d'achat modifié avec succès!", "success");
         
       } else {
         const achatRef = await addDoc(collection(db, "societe", societeId, "achats"), {
-          fournisseur,
+          fournisseur: fournisseur.trim(),
           date: Timestamp.fromDate(new Date(dateAchat)),
           timestamp: Timestamp.now(),
           statutPaiement,
@@ -501,7 +558,7 @@ export default function Achats() {
           userEmail: user.email,
           timestamp: Timestamp.now(),
           details: {
-            fournisseur,
+            fournisseur: fournisseur.trim(),
             montant: montantTotal,
             articles: articlesValid.length,
             action: 'création',
@@ -510,7 +567,12 @@ export default function Achats() {
           }
         });
         
-        await updateStockOnAdd({ id: achatRef.id, fournisseur, articles: articlesValid, date: Timestamp.fromDate(new Date(dateAchat)) });
+        await updateStockOnAdd({ 
+          id: achatRef.id, 
+          fournisseur: fournisseur.trim(), 
+          articles: articlesValid, 
+          date: Timestamp.fromDate(new Date(dateAchat)) 
+        });
         
         if (statutPaiement === "payé") {
           await addDoc(collection(db, "societe", societeId, "paiements"), {
@@ -531,7 +593,7 @@ export default function Achats() {
               mode: "Espèces",
               type: "achats",
               montant: montantTotal,
-              fournisseur,
+              fournisseur: fournisseur.trim(),
               paiementAuto: true
             }
           });
@@ -540,20 +602,18 @@ export default function Achats() {
       }
       
       resetForm();
-      fetchAchats();
-      fetchMedicaments();
-      fetchStockEntries(); // 🆕 Recharger les entrées de stock
+      await Promise.all([fetchAchats(), fetchMedicaments(), fetchStockEntries()]);
       
     } catch (error) {
-      console.error("❌ Erreur lors de l'enregistrement:", error);
-      showNotification("Erreur lors de l'enregistrement", "error");
+      console.error("Erreur lors de l'enregistrement:", error);
+      showNotification("Erreur lors de l'enregistrement: " + error.message, "error");
     } finally {
       setIsLoading(false);
     }
   };
 
-  // Réinit form
-  const resetForm = () => {
+  // Réinitialisation du formulaire
+  const resetForm = useCallback(() => {
     setFournisseur(""); 
     setDateAchat(""); 
     setStatutPaiement("payé"); 
@@ -563,10 +623,17 @@ export default function Achats() {
     setIsEditing(false);
     setNumeroLot("");
     setFournisseurArticle("");
-  };
+    setProduit("");
+    setProduitNouveau("");
+    setQuantite(1);
+    setPrixUnitaire("");
+    setPrixVente("");
+    setRemiseArticle(0);
+    setDatePeremption("");
+  }, []);
 
-  // ✨ GÉNÉRATION DU CACHET HTML OPTIMISÉ POUR SIGNATURE ✨
-  const generateCachetHtml = () => {
+  // Génération du cachet HTML optimisé pour signature
+  const generateCachetHtml = useCallback(() => {
     if (!parametres.afficherCachet) return '';
     
     const taille = parametres.tailleCachet || 120;
@@ -624,466 +691,28 @@ export default function Achats() {
         </div>
       `;
     }
-  };
+  }, [parametres]);
 
-  // ✨ IMPRESSION OPTIMISÉE AVEC GESTION D'ERREURS AMÉLIORÉE ✨
-  const handlePrintBon = (bon) => {
-    try {
-      const articles = Array.isArray(bon.articles) ? bon.articles : [];
-      const totalArticles = articles.reduce(
-        (sum, a) => sum + ((a.prixUnitaire || 0) * (a.quantite || 0) - (a.remise || 0)),
-        0
-      );
-      const totalApresRemiseGlobale = totalArticles - (bon.remiseGlobale || 0);
-      
-      const cachetHtml = generateCachetHtml();
-      
-      // 📱 Détection de l'environnement mobile pour optimiser l'impression
-      const isMobileDevice = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) || window.innerWidth < 768;
-      
-      // Générer le HTML avec gestion d'erreur
-      let htmlContent;
-      try {
-        htmlContent = generatePrintHTML(bon, articles, totalApresRemiseGlobale, cachetHtml, isMobileDevice);
-      } catch (htmlError) {
-        console.error("Erreur lors de la génération du HTML:", htmlError);
-        showNotification("Erreur lors de la génération du document", "error");
-        return;
-      }
-      
-      if (isMobileDevice) {
-        // 📱 Stratégie mobile avec fallback automatique
-        handleMobilePrint(htmlContent, "Bon d'Achat", bon.id);
-      } else {
-        // 💻 Stratégie desktop avec fallback automatique
-        handleDesktopPrint(htmlContent, "Bon d'Achat", bon.id);
-      }
-      
-      showNotification(`📱 Bon d'Achat préparé pour mobile ! ${isMobileDevice ? 'Choisissez votre méthode d\'impression' : 'Envoyé vers l\'imprimante'}`, "success");
-      
-    } catch (error) {
-      console.error("Erreur lors de la préparation d'impression:", error);
-      showNotification("Erreur lors de la préparation d'impression", "error");
-    }
-  };
-
-  // 📱 Gestion impression mobile optimisée - NOUVELLE APPROCHE
-  const handleMobilePrint = (htmlContent, titleDocument, numero) => {
-    try {
-      // Détecter le type d'appareil mobile
-      const userAgent = navigator.userAgent.toLowerCase();
-      const isIOS = /iphone|ipad|ipod/.test(userAgent);
-      const isAndroid = /android/.test(userAgent);
-      
-      // Créer un contenu optimisé pour mobile avec moins de hauteur fixe
-      const mobileOptimizedContent = htmlContent.replace(
-        /height: calc\(100vh[^)]*\)/g, 
-        'height: auto'
-      ).replace(
-        /min-height: calc\(100vh[^)]*\)/g, 
-        'min-height: auto'
-      );
-      
-      // Pour iOS et Android, utiliser une approche différente
-      if (isIOS || isAndroid) {
-        // Créer un bouton de téléchargement temporaire
-        showMobileDownloadOption(mobileOptimizedContent, titleDocument, numero);
-      } else {
-        // Pour autres mobiles, essayer l'approche nouvelle fenêtre
-        handleMobileNewWindow(mobileOptimizedContent, titleDocument, numero);
-      }
-      
-    } catch (error) {
-      console.error("Erreur dans handleMobilePrint:", error);
-      downloadPrintFile(htmlContent, titleDocument, numero);
-    }
-  };
-
-  // 📱 Nouvelle fenêtre pour mobiles non iOS/Android
-  const handleMobileNewWindow = (htmlContent, titleDocument, numero) => {
-    try {
-      // Optimiser le contenu pour mobile avant d'ouvrir la nouvelle fenêtre
-      const optimizedContent = htmlContent.replace(
-        '<body>',
-        `<body style="margin: 0; padding: 10px; font-size: 12px; overflow: auto; height: auto;">`
-      );
-      
-      // Créer une nouvelle fenêtre avec le contenu
-      const printWindow = window.open('', '_blank', 'width=device-width,height=device-height,scrollbars=yes,resizable=yes');
-      
-      if (printWindow) {
-        printWindow.document.open();
-        printWindow.document.write(optimizedContent);
-        printWindow.document.close();
-        
-        // Attendre le chargement et ajuster la fenêtre
-        printWindow.onload = () => {
-          // Ajuster la vue pour mobile
-          const viewport = printWindow.document.createElement('meta');
-          viewport.setAttribute('name', 'viewport');
-          viewport.setAttribute('content', 'width=device-width, initial-scale=1.0, user-scalable=yes');
-          printWindow.document.head.appendChild(viewport);
-        };
-        
-        // Ajouter un bouton d'impression dans la nouvelle fenêtre
-        const printButton = printWindow.document.createElement('div');
-        printButton.innerHTML = `
-          <div style="
-            position: fixed; 
-            bottom: 20px; 
-            right: 20px; 
-            background: #667eea; 
-            color: white; 
-            padding: 15px 25px; 
-            border-radius: 25px; 
-            cursor: pointer; 
-            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
-            z-index: 9999;
-            font-weight: bold;
-            text-align: center;
-            font-size: 16px;
-            user-select: none;
-          " onclick="window.print()">
-            🖨️ Imprimer
-          </div>
-          <div style="
-            position: fixed; 
-            bottom: 80px; 
-            right: 20px; 
-            background: #48bb78; 
-            color: white; 
-            padding: 10px 20px; 
-            border-radius: 20px; 
-            cursor: pointer; 
-            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
-            z-index: 9999;
-            font-weight: bold;
-            text-align: center;
-            font-size: 14px;
-            user-select: none;
-          " onclick="window.close()">
-            ✖️ Fermer
-          </div>
-        `;
-        printWindow.document.body.appendChild(printButton);
-        
-        showNotification("Document ouvert dans un nouvel onglet. Utilisez le bouton d'impression.", "info");
-      } else {
-        downloadPrintFile(htmlContent, titleDocument, numero);
-      }
-      
-    } catch (error) {
-      console.error("Erreur nouvelle fenêtre mobile:", error);
-      downloadPrintFile(htmlContent, titleDocument, numero);
-    }
-  };
-
-  // 📱 Afficher option de téléchargement pour iOS/Android
-  const showMobileDownloadOption = (htmlContent, titleDocument, numero) => {
-    // Créer un modal mobile pour les options
-    const modal = document.createElement('div');
-    modal.style.cssText = `
-      position: fixed;
-      top: 0;
-      left: 0;
-      width: 100%;
-      height: 100%;
-      background: rgba(0,0,0,0.8);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      z-index: 10000;
-      padding: 20px;
-    `;
-    
-    modal.innerHTML = `
-      <div style="
-        background: white;
-        border-radius: 20px;
-        padding: 30px;
-        max-width: 90%;
-        text-align: center;
-        box-shadow: 0 20px 40px rgba(0,0,0,0.3);
-      ">
-        <h3 style="color: #2d3748; margin-bottom: 20px; font-size: 1.3em;">
-          📱 Options d'impression mobile
-        </h3>
-        <p style="color: #4a5568; margin-bottom: 25px; line-height: 1.4;">
-          Choisissez votre méthode d'impression préférée :
-        </p>
-        
-        <button onclick="window.mobileprint_download()" style="
-          background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-          color: white;
-          border: none;
-          padding: 15px 25px;
-          border-radius: 15px;
-          font-weight: bold;
-          margin: 10px;
-          width: 80%;
-          font-size: 1em;
-          cursor: pointer;
-        ">
-          💾 Télécharger le document
-        </button>
-        
-        <button onclick="window.mobileprint_newtab()" style="
-          background: linear-gradient(135deg, #48bb78 0%, #38a169 100%);
-          color: white;
-          border: none;
-          padding: 15px 25px;
-          border-radius: 15px;
-          font-weight: bold;
-          margin: 10px;
-          width: 80%;
-          font-size: 1em;
-          cursor: pointer;
-        ">
-          🌐 Ouvrir dans un nouvel onglet
-        </button>
-        
-        <button onclick="window.mobileprint_close()" style="
-          background: #e2e8f0;
-          color: #4a5568;
-          border: none;
-          padding: 10px 20px;
-          border-radius: 10px;
-          font-weight: bold;
-          margin-top: 15px;
-          cursor: pointer;
-        ">
-          ❌ Annuler
-        </button>
-      </div>
-    `;
-    
-    // Ajouter les fonctions globales temporaires
-    window.mobileprint_download = () => {
-      downloadPrintFile(htmlContent, titleDocument, numero);
-      document.body.removeChild(modal);
-      delete window.mobileprint_download;
-      delete window.mobileprint_newtab;
-      delete window.mobileprint_close;
-    };
-    
-    window.mobileprint_newtab = () => {
-      handleMobileNewWindow(htmlContent, titleDocument, numero);
-      document.body.removeChild(modal);
-      delete window.mobileprint_download;
-      delete window.mobileprint_newtab;
-      delete window.mobileprint_close;
-    };
-    
-    window.mobileprint_close = () => {
-      document.body.removeChild(modal);
-      delete window.mobileprint_download;
-      delete window.mobileprint_newtab;
-      delete window.mobileprint_close;
-    };
-    
-    document.body.appendChild(modal);
-  };
-
-  // 💻 Gestion impression desktop améliorée - VERSION SÉCURISÉE
-  const handleDesktopPrint = (htmlContent, titleDocument, numero) => {
-    try {
-      const printWindow = window.open("", "_blank", "width=800,height=600,scrollbars=yes,resizable=yes");
-      
-      if (printWindow && printWindow.document) {
-        // Variable pour éviter les doubles fermetures
-        let isWindowClosed = false;
-        
-        // Fonction de fermeture sécurisée
-        const safeCloseWindow = () => {
-          if (!isWindowClosed && printWindow && !printWindow.closed) {
-            isWindowClosed = true;
-            try {
-              printWindow.close();
-            } catch (error) {
-              console.warn("Erreur lors de la fermeture de la fenêtre:", error);
-            }
-          }
-        };
-        
-        try {
-          // Utiliser write() de manière plus sécurisée
-          printWindow.document.open();
-          printWindow.document.write(htmlContent);
-          printWindow.document.close();
-          
-          // Attendre le chargement complet
-          setTimeout(() => {
-            try {
-              if (!isWindowClosed && printWindow && !printWindow.closed) {
-                printWindow.focus();
-                printWindow.print();
-                
-                // Fermer après impression avec délai plus court
-                setTimeout(safeCloseWindow, 800);
-              }
-              
-            } catch (printError) {
-              console.warn("Erreur d'impression:", printError);
-              safeCloseWindow();
-            }
-          }, 400);
-          
-          // Timeout de sécurité plus court
-          setTimeout(safeCloseWindow, 5000);
-          
-        } catch (writeError) {
-          console.warn("Erreur d'écriture dans la fenêtre:", writeError);
-          safeCloseWindow();
-          downloadPrintFile(htmlContent, titleDocument, numero);
-        }
-        
-      } else {
-        // Fallback si popup bloquée
-        showNotification("Popups bloquées - Téléchargement du document...", "info");
-        downloadPrintFile(htmlContent, titleDocument, numero);
-      }
-      
-    } catch (error) {
-      console.error("Erreur dans handleDesktopPrint:", error);
-      downloadPrintFile(htmlContent, titleDocument, numero);
-    }
-  };
-
-  // 💾 Fonction de téléchargement optimisée pour mobile
-  const downloadPrintFile = (htmlContent, titleDocument, numero) => {
-    try {
-      const userAgent = navigator.userAgent.toLowerCase();
-      const isIOS = /iphone|ipad|ipod/.test(userAgent);
-      const isAndroid = /android/.test(userAgent);
-      
-      if (isIOS) {
-        // Pour iOS, créer un nouvel onglet avec le contenu
-        const newWindow = window.open('', '_blank');
-        if (newWindow) {
-          newWindow.document.open();
-          newWindow.document.write(htmlContent);
-          newWindow.document.close();
-          
-          // Ajouter des instructions pour iOS
-          const instructions = newWindow.document.createElement('div');
-          instructions.innerHTML = `
-            <div style="
-              position: fixed; 
-              top: 0; 
-              left: 0; 
-              right: 0; 
-              background: #667eea; 
-              color: white; 
-              padding: 15px; 
-              text-align: center; 
-              z-index: 9999;
-              font-weight: bold;
-            ">
-              📱 iOS: Utilisez Partage → Imprimer ou Partage → Fichiers pour sauvegarder
-              <br>
-              <button onclick="window.print()" style="
-                background: white; 
-                color: #667eea; 
-                border: none; 
-                padding: 8px 15px; 
-                border-radius: 10px; 
-                margin-top: 10px;
-                font-weight: bold;
-              ">
-                🖨️ Essayer d'imprimer
-              </button>
-            </div>
-          `;
-          newWindow.document.body.insertBefore(instructions, newWindow.document.body.firstChild);
-          
-          showNotification("Document ouvert pour iOS. Utilisez Partage → Imprimer", "info");
-        } else {
-          showNotification("Veuillez autoriser les popups pour l'impression", "warning");
-        }
-        return;
-      }
-      
-      // Pour Android et autres appareils
-      const blob = new Blob([htmlContent], { type: 'text/html;charset=utf-8' });
-      
-      if (isAndroid && navigator.share) {
-        // Utiliser l'API de partage native sur Android si disponible
-        const file = new File([blob], `${titleDocument}_${numero}.html`, { type: 'text/html' });
-        navigator.share({
-          files: [file],
-          title: `${titleDocument} - ${numero}`,
-          text: 'Document de bon d\'achat à imprimer'
-        }).then(() => {
-          showNotification("Document partagé ! Choisissez votre application d'impression", "success");
-        }).catch(() => {
-          // Fallback vers téléchargement traditionnel
-          downloadFileTraditional(blob, titleDocument, numero);
-        });
-      } else {
-        // Téléchargement traditionnel
-        downloadFileTraditional(blob, titleDocument, numero);
-      }
-      
-    } catch (error) {
-      console.error("Erreur dans downloadPrintFile:", error);
-      showNotification("Erreur lors de la création du fichier", "error");
-    }
-  };
-
-  // Fonction de téléchargement traditionnel
-  const downloadFileTraditional = (blob, titleDocument, numero) => {
-    try {
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      
-      link.href = url;
-      link.download = `${titleDocument}_${numero}_${new Date().toISOString().slice(0, 10)}.html`;
-      link.style.display = 'none';
-      
-      document.body.appendChild(link);
-      
-      setTimeout(() => {
-        try {
-          link.click();
-          document.body.removeChild(link);
-          
-          setTimeout(() => {
-            try {
-              URL.revokeObjectURL(url);
-            } catch (urlError) {
-              console.warn("Erreur lors de la libération de l'URL:", urlError);
-            }
-          }, 500);
-          
-          showNotification(`${titleDocument} téléchargé ! Ouvrez le fichier pour imprimer.`, "success");
-          
-        } catch (clickError) {
-          console.error("Erreur lors du téléchargement:", clickError);
-          document.body.removeChild(link);
-          URL.revokeObjectURL(url);
-          showNotification("Erreur lors du téléchargement", "error");
-        }
-      }, 100);
-      
-    } catch (error) {
-      console.error("Erreur dans downloadFileTraditional:", error);
-      showNotification("Erreur lors de la création du fichier", "error");
-    }
-  };
-
-  // Fonction helper pour générer le HTML d'impression optimisé - VERSION CORRIGÉE
-  const generatePrintHTML = (bon, articles, total, cachetHtml, isMobileDevice = false) => {
+  // Fonction helper pour générer le HTML d'impression optimisé
+  const generatePrintHTML = useCallback((bon, articles, total, cachetHtml, isMobileDevice = false) => {
     const primaryColor = "#667eea";
     const secondaryColor = "#764ba2";
     
     let dateStr = "";
-    if (bon.timestamp?.toDate) {
-      dateStr = bon.timestamp.toDate().toLocaleString('fr-FR');
-    } else if (bon.date?.toDate) {
-      dateStr = bon.date.toDate().toLocaleDateString('fr-FR');
+    try {
+      if (bon.timestamp?.toDate) {
+        dateStr = bon.timestamp.toDate().toLocaleString('fr-FR');
+      } else if (bon.date?.toDate) {
+        dateStr = bon.date.toDate().toLocaleDateString('fr-FR');
+      } else if (typeof bon.date === 'string') {
+        dateStr = new Date(bon.date).toLocaleDateString('fr-FR');
+      }
+    } catch (dateError) {
+      console.warn("Erreur formatage date:", dateError);
+      dateStr = "Date non disponible";
     }
     
-    // 📱 Adaptations pour les petites dimensions
+    // Adaptations pour les petites dimensions
     const mobileOptimizations = isMobileDevice ? {
       fontSize: "12px",
       headerPadding: "20px 15px",
@@ -1532,7 +1161,7 @@ export default function Achats() {
               border: 1px solid rgba(255,255,255,0.3);
             }
             
-            /* 📱 Optimisations spéciales pour mobile */
+            /* Optimisations spéciales pour mobile */
             ${isMobileDevice ? `
               .info-section {
                 grid-template-columns: 1fr !important;
@@ -1565,7 +1194,7 @@ export default function Achats() {
               }
             ` : ''}
             
-            /* 🖨️ Optimisations d'impression - TOUT SUR UNE PAGE */
+            /* Optimisations d'impression - TOUT SUR UNE PAGE */
             @media print {
               @page {
                 margin: 0.5cm;
@@ -1612,18 +1241,6 @@ export default function Achats() {
                 overflow: visible !important;
               }
               
-              .info-section {
-                grid-template-columns: 1fr 1fr 1fr 1fr !important;
-                gap: 8px !important;
-                margin-bottom: 15px !important;
-                page-break-inside: avoid !important;
-              }
-              
-              .info-card {
-                padding: 8px !important;
-                border-radius: 4px !important;
-              }
-              
               .articles-section {
                 margin: 15px 0 !important;
                 height: auto !important;
@@ -1654,55 +1271,6 @@ export default function Achats() {
                 word-wrap: break-word !important;
               }
               
-              .grand-total-section {
-                margin: 15px 0 !important;
-                padding: 15px !important;
-                page-break-inside: avoid !important;
-              }
-              
-              .total-amount {
-                font-size: 1.8em !important;
-                line-height: 1.2 !important;
-              }
-              
-              .signature-section {
-                margin: 15px 0 !important;
-                page-break-inside: avoid !important;
-                display: flex !important;
-                justify-content: space-between !important;
-              }
-              
-              .signature-area {
-                height: 40px !important;
-                margin-bottom: 8px !important;
-              }
-              
-              .footer-section {
-                padding: 10px 8px !important;
-                page-break-inside: avoid !important;
-              }
-              
-              .footer-message {
-                font-size: 0.8em !important;
-                line-height: 1.2 !important;
-              }
-              
-              .print-info {
-                font-size: 0.6em !important;
-              }
-              
-              /* Forcer les couleurs pour l'impression */
-              .header-section,
-              .grand-total-section,
-              .footer-section,
-              .articles-table thead,
-              .status-badge,
-              .quantity-cell,
-              .total-cell {
-                -webkit-print-color-adjust: exact !important;
-                print-color-adjust: exact !important;
-              }
-              
               /* Masquer le filigrane en impression pour économiser l'encre */
               .watermark {
                 display: none !important;
@@ -1712,19 +1280,6 @@ export default function Achats() {
               ${isMobileDevice ? `
                 body {
                   font-size: 9px !important;
-                }
-                
-                .header-section {
-                  padding: 10px 8px !important;
-                }
-                
-                .content-wrapper {
-                  padding: 10px 8px !important;
-                }
-                
-                .info-section {
-                  grid-template-columns: 1fr 1fr !important;
-                  gap: 6px !important;
                 }
                 
                 .articles-table th,
@@ -1737,57 +1292,7 @@ export default function Achats() {
                   max-width: 60px !important;
                   font-size: 7px !important;
                 }
-                
-                .signature-section {
-                  display: block !important;
-                }
-                
-                .signature-box {
-                  margin-bottom: 15px !important;
-                }
-                
-                .signature-area {
-                  height: 30px !important;
-                }
               ` : ''}
-            }
-            
-            /* 📱 Styles spéciaux pour très petits écrans */
-            @media screen and (max-width: 480px) {
-              body {
-                font-size: 9px !important;
-              }
-              
-              .company-title {
-                font-size: 1.2em !important;
-              }
-              
-              .info-section {
-                grid-template-columns: 1fr !important;
-                gap: 6px !important;
-              }
-              
-              .articles-table {
-                font-size: 0.7em !important;
-              }
-              
-              .product-name {
-                max-width: 60px !important;
-                font-size: 0.7em !important;
-              }
-              
-              .total-amount {
-                font-size: 1.2em !important;
-              }
-              
-              .signature-section {
-                flex-direction: column !important;
-                gap: 10px !important;
-              }
-              
-              .signature-box {
-                max-width: 100% !important;
-              }
             }
           </style>
         </head>
@@ -1846,21 +1351,27 @@ export default function Achats() {
                     </tr>
                   </thead>
                   <tbody>
-                    ${articles.map((a, index) => `
-                      <tr>
-                        <td class="product-name">${a.produit || ""}</td>
-                        <td><span class="lot-number">${a.numeroLot || "N/A"}</span></td>
-                        <td class="supplier-cell">${a.fournisseurArticle || bon.fournisseur || ""}</td>
-                        <td><span class="quantity-cell">${a.quantite || 0}</span></td>
-                        <td class="price-cell">${(a.prixUnitaire || 0).toFixed(2)} DH</td>
-                        <td class="price-cell">${(a.prixVente || 0).toFixed(2)} DH</td>
-                        <td style="color: ${a.datePeremption && new Date(a.datePeremption) < new Date(Date.now() + 30*24*60*60*1000) ? '#e53e3e' : '#4a5568'};">
-                          ${a.datePeremption || ""}
-                        </td>
-                        <td class="total-cell">
-                          ${((a.prixUnitaire || 0) * (a.quantite || 0) - (a.remise || 0)).toFixed(2)} DH
-                        </td>
-                      </tr>`).join("")}
+                    ${articles.map((a, index) => {
+                      const prixAchatFinal = a.prixUnitaire || a.prixAchat || 0;
+                      const totalArticle = (prixAchatFinal * (a.quantite || 0)) - (a.remise || 0);
+                      const isExpiringSoon = a.datePeremption && new Date(a.datePeremption) < new Date(Date.now() + 30*24*60*60*1000);
+                      
+                      return `
+                        <tr>
+                          <td class="product-name">${a.produit || ""}</td>
+                          <td><span class="lot-number">${a.numeroLot || "N/A"}</span></td>
+                          <td class="supplier-cell">${a.fournisseurArticle || bon.fournisseur || ""}</td>
+                          <td><span class="quantity-cell">${a.quantite || 0}</span></td>
+                          <td class="price-cell">${prixAchatFinal.toFixed(2)} DH</td>
+                          <td class="price-cell">${(a.prixVente || 0).toFixed(2)} DH</td>
+                          <td style="color: ${isExpiringSoon ? '#e53e3e' : '#4a5568'};">
+                            ${a.datePeremption || ""}
+                          </td>
+                          <td class="total-cell">
+                            ${totalArticle.toFixed(2)} DH
+                          </td>
+                        </tr>`;
+                    }).join("")}
                   </tbody>
                 </table>
               </div>
@@ -1890,26 +1401,478 @@ export default function Achats() {
                 ${parametres.pied || "Merci pour votre confiance ! 🙏"} - Gestion Multi-Lots Activée
               </div>
               <div class="print-info">
-                Bon d'Achat Multi-Lots généré le ${new Date().toLocaleString('fr-FR')} par ${user.email || 'Utilisateur'}
+                Bon d'Achat Multi-Lots généré le ${new Date().toLocaleString('fr-FR')} par ${user?.email || 'Utilisateur'}
               </div>
             </div>
           </div>
         </body>
       </html>
     `;
-  };
+  }, [parametres, user]);
+
+  // Impression optimisée avec gestion d'erreurs améliorée
+  const handlePrintBon = useCallback((bon) => {
+    try {
+      const articles = Array.isArray(bon.articles) ? bon.articles : [];
+      const totalArticles = articles.reduce(
+        (sum, a) => sum + (((a.prixUnitaire || a.prixAchat || 0) * (a.quantite || 0)) - (a.remise || 0)),
+        0
+      );
+      const totalApresRemiseGlobale = totalArticles - (bon.remiseGlobale || 0);
+      
+      const cachetHtml = generateCachetHtml();
+      
+      // Détection de l'environnement mobile pour optimiser l'impression
+      const isMobileDevice = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) || window.innerWidth < 768;
+      
+      // Générer le HTML avec gestion d'erreur
+      let htmlContent;
+      try {
+        htmlContent = generatePrintHTML(bon, articles, totalApresRemiseGlobale, cachetHtml, isMobileDevice);
+      } catch (htmlError) {
+        console.error("Erreur lors de la génération du HTML:", htmlError);
+        showNotification("Erreur lors de la génération du document", "error");
+        return;
+      }
+      
+      if (isMobileDevice) {
+        // Stratégie mobile avec fallback automatique
+        handleMobilePrint(htmlContent, "Bon d'Achat", bon.id);
+      } else {
+        // Stratégie desktop avec fallback automatique
+        handleDesktopPrint(htmlContent, "Bon d'Achat", bon.id);
+      }
+      
+      showNotification(`Bon d'Achat préparé ! ${isMobileDevice ? 'Choisissez votre méthode d\'impression' : 'Envoyé vers l\'imprimante'}`, "success");
+      
+    } catch (error) {
+      console.error("Erreur lors de la préparation d'impression:", error);
+      showNotification("Erreur lors de la préparation d'impression", "error");
+    }
+  }, [generateCachetHtml, generatePrintHTML, showNotification]);
+
+  // Gestion impression mobile optimisée
+  const handleMobilePrint = useCallback((htmlContent, titleDocument, numero) => {
+    try {
+      // Détecter le type d'appareil mobile
+      const userAgent = navigator.userAgent.toLowerCase();
+      const isIOS = /iphone|ipad|ipod/.test(userAgent);
+      const isAndroid = /android/.test(userAgent);
+      
+      // Créer un contenu optimisé pour mobile avec moins de hauteur fixe
+      const mobileOptimizedContent = htmlContent.replace(
+        /height: calc\(100vh[^)]*\)/g, 
+        'height: auto'
+      ).replace(
+        /min-height: calc\(100vh[^)]*\)/g, 
+        'min-height: auto'
+      );
+      
+      // Pour iOS et Android, utiliser une approche différente
+      if (isIOS || isAndroid) {
+        // Créer un bouton de téléchargement temporaire
+        showMobileDownloadOption(mobileOptimizedContent, titleDocument, numero);
+      } else {
+        // Pour autres mobiles, essayer l'approche nouvelle fenêtre
+        handleMobileNewWindow(mobileOptimizedContent, titleDocument, numero);
+      }
+      
+    } catch (error) {
+      console.error("Erreur dans handleMobilePrint:", error);
+      downloadPrintFile(htmlContent, titleDocument, numero);
+    }
+  }, []);
+
+  // Nouvelle fenêtre pour mobiles non iOS/Android
+  const handleMobileNewWindow = useCallback((htmlContent, titleDocument, numero) => {
+    try {
+      // Optimiser le contenu pour mobile avant d'ouvrir la nouvelle fenêtre
+      const optimizedContent = htmlContent.replace(
+        '<body>',
+        `<body style="margin: 0; padding: 10px; font-size: 12px; overflow: auto; height: auto;">`
+      );
+      
+      // Créer une nouvelle fenêtre avec le contenu
+      const printWindow = window.open('', '_blank', 'width=device-width,height=device-height,scrollbars=yes,resizable=yes');
+      
+      if (printWindow) {
+        printWindow.document.open();
+        printWindow.document.write(optimizedContent);
+        printWindow.document.close();
+        
+        // Attendre le chargement et ajuster la fenêtre
+        printWindow.onload = () => {
+          // Ajuster la vue pour mobile
+          const viewport = printWindow.document.createElement('meta');
+          viewport.setAttribute('name', 'viewport');
+          viewport.setAttribute('content', 'width=device-width, initial-scale=1.0, user-scalable=yes');
+          printWindow.document.head.appendChild(viewport);
+        };
+        
+        // Ajouter un bouton d'impression dans la nouvelle fenêtre
+        const printButton = printWindow.document.createElement('div');
+        printButton.innerHTML = `
+          <div style="
+            position: fixed; 
+            bottom: 20px; 
+            right: 20px; 
+            background: #667eea; 
+            color: white; 
+            padding: 15px 25px; 
+            border-radius: 25px; 
+            cursor: pointer; 
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+            z-index: 9999;
+            font-weight: bold;
+            text-align: center;
+            font-size: 16px;
+            user-select: none;
+          " onclick="window.print()">
+            🖨️ Imprimer
+          </div>
+          <div style="
+            position: fixed; 
+            bottom: 80px; 
+            right: 20px; 
+            background: #48bb78; 
+            color: white; 
+            padding: 10px 20px; 
+            border-radius: 20px; 
+            cursor: pointer; 
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+            z-index: 9999;
+            font-weight: bold;
+            text-align: center;
+            font-size: 14px;
+            user-select: none;
+          " onclick="window.close()">
+            ✖️ Fermer
+          </div>
+        `;
+        printWindow.document.body.appendChild(printButton);
+        
+        showNotification("Document ouvert dans un nouvel onglet. Utilisez le bouton d'impression.", "info");
+      } else {
+        downloadPrintFile(htmlContent, titleDocument, numero);
+      }
+      
+    } catch (error) {
+      console.error("Erreur nouvelle fenêtre mobile:", error);
+      downloadPrintFile(htmlContent, titleDocument, numero);
+    }
+  }, []);
+
+  // Afficher option de téléchargement pour iOS/Android
+  const showMobileDownloadOption = useCallback((htmlContent, titleDocument, numero) => {
+    // Créer un modal mobile pour les options
+    const modal = document.createElement('div');
+    modal.style.cssText = `
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(0,0,0,0.8);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 10000;
+      padding: 20px;
+    `;
+    
+    modal.innerHTML = `
+      <div style="
+        background: white;
+        border-radius: 20px;
+        padding: 30px;
+        max-width: 90%;
+        text-align: center;
+        box-shadow: 0 20px 40px rgba(0,0,0,0.3);
+      ">
+        <h3 style="color: #2d3748; margin-bottom: 20px; font-size: 1.3em;">
+          📱 Options d'impression mobile
+        </h3>
+        <p style="color: #4a5568; margin-bottom: 25px; line-height: 1.4;">
+          Choisissez votre méthode d'impression préférée :
+        </p>
+        
+        <button onclick="window.mobileprint_download()" style="
+          background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+          color: white;
+          border: none;
+          padding: 15px 25px;
+          border-radius: 15px;
+          font-weight: bold;
+          margin: 10px;
+          width: 80%;
+          font-size: 1em;
+          cursor: pointer;
+        ">
+          💾 Télécharger le document
+        </button>
+        
+        <button onclick="window.mobileprint_newtab()" style="
+          background: linear-gradient(135deg, #48bb78 0%, #38a169 100%);
+          color: white;
+          border: none;
+          padding: 15px 25px;
+          border-radius: 15px;
+          font-weight: bold;
+          margin: 10px;
+          width: 80%;
+          font-size: 1em;
+          cursor: pointer;
+        ">
+          🌐 Ouvrir dans un nouvel onglet
+        </button>
+        
+        <button onclick="window.mobileprint_close()" style="
+          background: #e2e8f0;
+          color: #4a5568;
+          border: none;
+          padding: 10px 20px;
+          border-radius: 10px;
+          font-weight: bold;
+          margin-top: 15px;
+          cursor: pointer;
+        ">
+          ❌ Annuler
+        </button>
+      </div>
+    `;
+    
+    // Ajouter les fonctions globales temporaires
+    window.mobileprint_download = () => {
+      downloadPrintFile(htmlContent, titleDocument, numero);
+      document.body.removeChild(modal);
+      delete window.mobileprint_download;
+      delete window.mobileprint_newtab;
+      delete window.mobileprint_close;
+    };
+    
+    window.mobileprint_newtab = () => {
+      handleMobileNewWindow(htmlContent, titleDocument, numero);
+      document.body.removeChild(modal);
+      delete window.mobileprint_download;
+      delete window.mobileprint_newtab;
+      delete window.mobileprint_close;
+    };
+    
+    window.mobileprint_close = () => {
+      document.body.removeChild(modal);
+      delete window.mobileprint_download;
+      delete window.mobileprint_newtab;
+      delete window.mobileprint_close;
+    };
+    
+    document.body.appendChild(modal);
+  }, []);
+
+  // Gestion impression desktop améliorée
+  const handleDesktopPrint = useCallback((htmlContent, titleDocument, numero) => {
+    try {
+      const printWindow = window.open("", "_blank", "width=800,height=600,scrollbars=yes,resizable=yes");
+      
+      if (printWindow && printWindow.document) {
+        // Variable pour éviter les doubles fermetures
+        let isWindowClosed = false;
+        
+        // Fonction de fermeture sécurisée
+        const safeCloseWindow = () => {
+          if (!isWindowClosed && printWindow && !printWindow.closed) {
+            isWindowClosed = true;
+            try {
+              printWindow.close();
+            } catch (error) {
+              console.warn("Erreur lors de la fermeture de la fenêtre:", error);
+            }
+          }
+        };
+        
+        try {
+          // Utiliser write() de manière plus sécurisée
+          printWindow.document.open();
+          printWindow.document.write(htmlContent);
+          printWindow.document.close();
+          
+          // Attendre le chargement complet
+          setTimeout(() => {
+            try {
+              if (!isWindowClosed && printWindow && !printWindow.closed) {
+                printWindow.focus();
+                printWindow.print();
+                
+                // Fermer après impression avec délai plus court
+                setTimeout(safeCloseWindow, 800);
+              }
+              
+            } catch (printError) {
+              console.warn("Erreur d'impression:", printError);
+              safeCloseWindow();
+            }
+          }, 400);
+          
+          // Timeout de sécurité plus court
+          setTimeout(safeCloseWindow, 5000);
+          
+        } catch (writeError) {
+          console.warn("Erreur d'écriture dans la fenêtre:", writeError);
+          safeCloseWindow();
+          downloadPrintFile(htmlContent, titleDocument, numero);
+        }
+        
+      } else {
+        // Fallback si popup bloquée
+        showNotification("Popups bloquées - Téléchargement du document...", "info");
+        downloadPrintFile(htmlContent, titleDocument, numero);
+      }
+      
+    } catch (error) {
+      console.error("Erreur dans handleDesktopPrint:", error);
+      downloadPrintFile(htmlContent, titleDocument, numero);
+    }
+  }, []);
+
+  // Fonction de téléchargement optimisée pour mobile
+  const downloadPrintFile = useCallback((htmlContent, titleDocument, numero) => {
+    try {
+      const userAgent = navigator.userAgent.toLowerCase();
+      const isIOS = /iphone|ipad|ipod/.test(userAgent);
+      const isAndroid = /android/.test(userAgent);
+      
+      if (isIOS) {
+        // Pour iOS, créer un nouvel onglet avec le contenu
+        const newWindow = window.open('', '_blank');
+        if (newWindow) {
+          newWindow.document.open();
+          newWindow.document.write(htmlContent);
+          newWindow.document.close();
+          
+          // Ajouter des instructions pour iOS
+          const instructions = newWindow.document.createElement('div');
+          instructions.innerHTML = `
+            <div style="
+              position: fixed; 
+              top: 0; 
+              left: 0; 
+              right: 0; 
+              background: #667eea; 
+              color: white; 
+              padding: 15px; 
+              text-align: center; 
+              z-index: 9999;
+              font-weight: bold;
+            ">
+              📱 iOS: Utilisez Partage → Imprimer ou Partage → Fichiers pour sauvegarder
+              <br>
+              <button onclick="window.print()" style="
+                background: white; 
+                color: #667eea; 
+                border: none; 
+                padding: 8px 15px; 
+                border-radius: 10px; 
+                margin-top: 10px;
+                font-weight: bold;
+              ">
+                🖨️ Essayer d'imprimer
+              </button>
+            </div>
+          `;
+          newWindow.document.body.insertBefore(instructions, newWindow.document.body.firstChild);
+          
+          showNotification("Document ouvert pour iOS. Utilisez Partage → Imprimer", "info");
+        } else {
+          showNotification("Veuillez autoriser les popups pour l'impression", "warning");
+        }
+        return;
+      }
+      
+      // Pour Android et autres appareils
+      const blob = new Blob([htmlContent], { type: 'text/html;charset=utf-8' });
+      
+      if (isAndroid && navigator.share) {
+        // Utiliser l'API de partage native sur Android si disponible
+        const file = new File([blob], `${titleDocument}_${numero}.html`, { type: 'text/html' });
+        navigator.share({
+          files: [file],
+          title: `${titleDocument} - ${numero}`,
+          text: 'Document de bon d\'achat à imprimer'
+        }).then(() => {
+          showNotification("Document partagé ! Choisissez votre application d'impression", "success");
+        }).catch(() => {
+          // Fallback vers téléchargement traditionnel
+          downloadFileTraditional(blob, titleDocument, numero);
+        });
+      } else {
+        // Téléchargement traditionnel
+        downloadFileTraditional(blob, titleDocument, numero);
+      }
+      
+    } catch (error) {
+      console.error("Erreur dans downloadPrintFile:", error);
+      showNotification("Erreur lors de la création du fichier", "error");
+    }
+  }, [showNotification]);
+
+  // Fonction de téléchargement traditionnel
+  const downloadFileTraditional = useCallback((blob, titleDocument, numero) => {
+    try {
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      
+      link.href = url;
+      link.download = `${titleDocument}_${numero}_${new Date().toISOString().slice(0, 10)}.html`;
+      link.style.display = 'none';
+      
+      document.body.appendChild(link);
+      
+      setTimeout(() => {
+        try {
+          link.click();
+          document.body.removeChild(link);
+          
+          setTimeout(() => {
+            try {
+              URL.revokeObjectURL(url);
+            } catch (urlError) {
+              console.warn("Erreur lors de la libération de l'URL:", urlError);
+            }
+          }, 500);
+          
+          showNotification(`${titleDocument} téléchargé ! Ouvrez le fichier pour imprimer.`, "success");
+          
+        } catch (clickError) {
+          console.error("Erreur lors du téléchargement:", clickError);
+          document.body.removeChild(link);
+          URL.revokeObjectURL(url);
+          showNotification("Erreur lors du téléchargement", "error");
+        }
+      }, 100);
+      
+    } catch (error) {
+      console.error("Erreur dans downloadFileTraditional:", error);
+      showNotification("Erreur lors de la création du fichier", "error");
+    }
+  }, [showNotification]);
 
   // Mode édition d'un bon
-  const handleEditBon = (bon) => {
+  const handleEditBon = useCallback((bon) => {
     setEditId(bon.id);
     setIsEditing(true);
     setFournisseur(bon.fournisseur || "");
     
-    if (bon.date?.toDate) {
-      setDateAchat(bon.date.toDate().toISOString().split("T")[0]);
-    } else if (bon.timestamp?.toDate) {
-      setDateAchat(bon.timestamp.toDate().toISOString().split("T")[0]);
-    } else {
+    try {
+      if (bon.date?.toDate) {
+        setDateAchat(bon.date.toDate().toISOString().split("T")[0]);
+      } else if (bon.timestamp?.toDate) {
+        setDateAchat(bon.timestamp.toDate().toISOString().split("T")[0]);
+      } else if (typeof bon.date === 'string') {
+        setDateAchat(new Date(bon.date).toISOString().split("T")[0]);
+      } else {
+        setDateAchat("");
+      }
+    } catch (error) {
+      console.warn("Erreur formatage date pour édition:", error);
       setDateAchat("");
     }
     
@@ -1917,19 +1880,25 @@ export default function Achats() {
     setRemiseGlobale(bon.remiseGlobale || 0);
     setArticles(Array.isArray(bon.articles) ? bon.articles : []);
     setShowForm(true);
-  };
+  }, []);
 
-  // Suppression d'un bon AVEC ENREGISTREMENT D'ACTIVITÉ
-  const handleDeleteBon = async (bon) => {
-    if (!societeId) return alert("Aucune société sélectionnée !");
-    if (!user) return alert("Utilisateur non connecté !");
+  // Suppression d'un bon avec enregistrement d'activité
+  const handleDeleteBon = useCallback(async (bon) => {
+    if (!societeId) {
+      showNotification("Aucune société sélectionnée !", "error");
+      return;
+    }
+    if (!user) {
+      showNotification("Utilisateur non connecté !", "error");
+      return;
+    }
     
-    if (window.confirm("Supprimer ce bon ?")) {
+    if (window.confirm("Supprimer ce bon d'achat ? Cette action est irréversible.")) {
       setIsLoading(true);
       try {
         const montantTotal = Array.isArray(bon.articles) 
           ? bon.articles.reduce(
-              (sum, a) => sum + ((a.prixUnitaire || 0) * (a.quantite || 0) - (a.remise || 0)),
+              (sum, a) => sum + (((a.prixUnitaire || a.prixAchat || 0) * (a.quantite || 0)) - (a.remise || 0)),
               0
             ) - (bon.remiseGlobale || 0)
           : 0;
@@ -1950,35 +1919,39 @@ export default function Achats() {
           }
         });
         
-        fetchAchats();
-        fetchMedicaments();
-        fetchStockEntries(); // 🆕 Recharger les entrées de stock
+        await Promise.all([fetchAchats(), fetchMedicaments(), fetchStockEntries()]);
         showNotification("Bon d'achat supprimé avec succès!", "success");
         
       } catch (error) {
-        console.error("❌ Erreur lors de la suppression:", error);
-        showNotification("Erreur lors de la suppression", "error");
+        console.error("Erreur lors de la suppression:", error);
+        showNotification("Erreur lors de la suppression: " + error.message, "error");
       } finally {
         setIsLoading(false);
       }
     }
-  };
+  }, [societeId, user, updateStockOnDelete, fetchAchats, fetchMedicaments, fetchStockEntries, showNotification]);
 
   // Fonction pour formater la date d'affichage
-  const formatDateDisplay = (dateField) => {
-    if (dateField?.toDate) {
-      const date = dateField.toDate();
-      return date.toLocaleDateString() + " " + date.toLocaleTimeString();
+  const formatDateDisplay = useCallback((dateField) => {
+    try {
+      if (dateField?.toDate) {
+        const date = dateField.toDate();
+        return date.toLocaleDateString('fr-FR') + " " + date.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+      } else if (typeof dateField === 'string') {
+        return new Date(dateField).toLocaleDateString('fr-FR');
+      }
+      return "Date non spécifiée";
+    } catch (error) {
+      console.warn("Erreur formatage date:", error);
+      return "Date invalide";
     }
-    return "Date non spécifiée";
-  };
+  }, []);
 
   // Totaux/filtres
-  const totalBonCourant =
-    (articles || []).reduce(
-      (t, a) => t + ((a.prixUnitaire || 0) * (a.quantite || 0) - (a.remise || 0)),
-      0
-    ) - Number(remiseGlobale || 0);
+  const totalBonCourant = (articles || []).reduce(
+    (t, a) => t + (((a.prixUnitaire || a.prixAchat || 0) * (a.quantite || 0)) - (a.remise || 0)),
+    0
+  ) - Number(remiseGlobale || 0);
 
   const fournisseursUniques = Array.from(new Set(achats.map(a => a.fournisseur).filter(Boolean)));
   const medicamentsUniques = Array.from(
@@ -1999,57 +1972,18 @@ export default function Achats() {
       if (!hasMedicament) keep = false;
     }
     if (filterDateMin) {
-      const bDate = b.timestamp?.toDate?.() || b.date?.toDate?.() || null;
+      const bDate = b.timestamp?.toDate?.() || b.date?.toDate?.() || (typeof b.date === 'string' ? new Date(b.date) : null);
       if (!bDate || bDate < new Date(filterDateMin)) keep = false;
     }
     if (filterDateMax) {
-      const bDate = b.timestamp?.toDate?.() || b.date?.toDate?.() || null;
+      const bDate = b.timestamp?.toDate?.() || b.date?.toDate?.() || (typeof b.date === 'string' ? new Date(b.date) : null);
       if (!bDate || bDate > new Date(filterDateMax + "T23:59:59")) keep = false;
     }
     return keep;
   });
 
-  // AFFICHAGE conditionnel
-  if (waiting) {
-    return (
-      <div style={{ 
-        padding: isMobile ? 15 : 30, 
-        textAlign: "center", 
-        color: "#667eea",
-        background: "linear-gradient(135deg, #f7fafc 0%, #edf2f7 100%)",
-        minHeight: "100vh",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        fontSize: isMobile ? "1.2em" : "1.5em",
-        fontWeight: 600
-      }}>
-        🔄 Chargement en cours...
-      </div>
-    );
-  }
-
-  if (!user) {
-    return (
-      <div style={{ 
-        padding: isMobile ? 15 : 30, 
-        textAlign: "center", 
-        color: "#e53e3e",
-        background: "linear-gradient(135deg, #fed7d7 0%, #feb2b2 100%)",
-        minHeight: "100vh",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        fontSize: isMobile ? "1.2em" : "1.5em",
-        fontWeight: 600
-      }}>
-        ❌ Non connecté.
-      </div>
-    );
-  }
-
-  // 📱 STYLES CSS RESPONSIFS INTÉGRÉS
-  const getResponsiveStyles = () => ({
+  // Styles CSS responsifs intégrés
+  const getResponsiveStyles = useCallback(() => ({
     container: {
       background: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
       minHeight: "100vh",
@@ -2095,7 +2029,6 @@ export default function Achats() {
       border: "3px solid #e2e8f0",
       boxShadow: "0 15px 40px rgba(0,0,0,0.08)"
     },
-    // 🆕 Style pour le panneau des détails de stock
     stockDetailsCard: {
       background: "linear-gradient(135deg, #e6fffa 0%, #b2f5ea 100%)",
       borderRadius: isMobile ? "15px" : "25px",
@@ -2251,9 +2184,48 @@ export default function Achats() {
       textTransform: "uppercase",
       letterSpacing: isMobile ? "1px" : "2px"
     }
-  });
+  }), [isMobile, isTablet]);
 
   const styles = getResponsiveStyles();
+
+  // AFFICHAGE conditionnel
+  if (waiting) {
+    return (
+      <div style={{ 
+        padding: isMobile ? 15 : 30, 
+        textAlign: "center", 
+        color: "#667eea",
+        background: "linear-gradient(135deg, #f7fafc 0%, #edf2f7 100%)",
+        minHeight: "100vh",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        fontSize: isMobile ? "1.2em" : "1.5em",
+        fontWeight: 600
+      }}>
+        🔄 Chargement en cours...
+      </div>
+    );
+  }
+
+  if (!user) {
+    return (
+      <div style={{ 
+        padding: isMobile ? 15 : 30, 
+        textAlign: "center", 
+        color: "#e53e3e",
+        background: "linear-gradient(135deg, #fed7d7 0%, #feb2b2 100%)",
+        minHeight: "100vh",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        fontSize: isMobile ? "1.2em" : "1.5em",
+        fontWeight: 600
+      }}>
+        ❌ Non connecté.
+      </div>
+    );
+  }
 
   // RENDU PRINCIPAL avec les nouvelles fonctionnalités
   return (
@@ -2281,7 +2253,7 @@ export default function Achats() {
         </div>
 
         <div style={styles.content}>
-          {/* 🆕 Indicateur du stock multi-lots */}
+          {/* Indicateur du stock multi-lots */}
           <div style={{
             background: "linear-gradient(135deg, #e6fffa 0%, #b2f5ea 100%)",
             padding: "15px",
@@ -2368,7 +2340,7 @@ export default function Achats() {
               {showForm ? "➖ Masquer" : "➕ Afficher"} le formulaire
             </button>
 
-            {/* 🆕 Bouton pour afficher les détails de stock */}
+            {/* Bouton pour afficher les détails de stock */}
             <button
               style={{
                 ...styles.toggleButton,
@@ -2382,7 +2354,7 @@ export default function Achats() {
             </button>
           </div>
 
-          {/* 🆕 Panneau des détails de stock */}
+          {/* Panneau des détails de stock */}
           {showStockDetails && (
             <div style={styles.stockDetailsCard}>
               <h3 style={{ 
@@ -2458,7 +2430,7 @@ export default function Achats() {
             </div>
           )}
 
-          {/* Formulaire ajout/modif AVEC CHAMPS ÉTENDUS */}
+          {/* Formulaire ajout/modif avec champs étendus */}
           {showForm && (
             <div style={styles.formCard}>
               <h3 style={{ 
@@ -2473,7 +2445,7 @@ export default function Achats() {
                 {isEditing ? "✏️ Modification" : "➕ Création"} de Bon d'Achat Multi-Lots
               </h3>
 
-              {/* 🆕 Formulaire article avec champs étendus */}
+              {/* Formulaire article avec champs étendus */}
               <div style={{
                 background: "linear-gradient(135deg, #edf2f7 0%, #e2e8f0 100%)",
                 padding: isMobile ? "20px 15px" : "30px",
@@ -2519,6 +2491,7 @@ export default function Achats() {
                           value={produitNouveau} 
                           onChange={e => setProduitNouveau(e.target.value)} 
                           required 
+                          placeholder="Nom du nouveau médicament"
                         />
                       </div>
                     )}
@@ -2527,6 +2500,7 @@ export default function Achats() {
                       <label style={styles.label}>Quantité</label>
                       <input 
                         type="number" 
+                        min="1"
                         style={styles.input} 
                         value={quantite} 
                         onChange={e => setQuantite(e.target.value)} 
@@ -2535,9 +2509,10 @@ export default function Achats() {
                     </div>
                     
                     <div style={styles.inputGroup}>
-                      <label style={styles.label}>Prix Achat</label>
+                      <label style={styles.label}>Prix Achat (DH)</label>
                       <input 
                         type="number" 
+                        min="0"
                         step="0.01"
                         style={styles.input} 
                         value={prixUnitaire} 
@@ -2547,17 +2522,19 @@ export default function Achats() {
                     </div>
                     
                     <div style={styles.inputGroup}>
-                      <label style={styles.label}>Prix Vente</label>
+                      <label style={styles.label}>Prix Vente (DH)</label>
                       <input 
                         type="number" 
+                        min="0"
                         step="0.01"
                         style={styles.input} 
                         value={prixVente} 
                         onChange={e => setPrixVente(e.target.value)} 
+                        placeholder="Optionnel"
                       />
                     </div>
                     
-                    {/* 🆕 Nouveau champ : Fournisseur Article */}
+                    {/* Nouveau champ : Fournisseur Article */}
                     <div style={styles.inputGroup}>
                       <label style={styles.label}>Fournisseur Article (optionnel)</label>
                       <input 
@@ -2568,7 +2545,7 @@ export default function Achats() {
                       />
                     </div>
                     
-                    {/* 🆕 Nouveau champ : Numéro de lot */}
+                    {/* Nouveau champ : Numéro de lot */}
                     <div style={styles.inputGroup}>
                       <label style={styles.label}>Numéro de Lot (optionnel)</label>
                       <input 
@@ -2580,13 +2557,15 @@ export default function Achats() {
                     </div>
                     
                     <div style={styles.inputGroup}>
-                      <label style={styles.label}>Remise</label>
+                      <label style={styles.label}>Remise (DH)</label>
                       <input 
                         type="number" 
+                        min="0"
                         step="0.01"
                         style={styles.input} 
                         value={remiseArticle} 
                         onChange={e => setRemiseArticle(e.target.value)} 
+                        placeholder="0"
                       />
                     </div>
                     
@@ -2614,7 +2593,7 @@ export default function Achats() {
                 </form>
               </div>
 
-              {/* 🆕 Tableau des articles avec informations étendues */}
+              {/* Tableau des articles avec informations étendues */}
               {articles.length > 0 && (
                 <div style={{ marginBottom: isMobile ? "20px" : "30px" }}>
                   <h4 style={{
@@ -2643,52 +2622,57 @@ export default function Achats() {
                         </tr>
                       </thead>
                       <tbody>
-                        {articles.map((a, i) => (
-                          <tr key={i} style={{ 
-                            background: i % 2 === 0 ? "#f8fafc" : "white",
-                            transition: "all 0.3s ease"
-                          }}>
-                            <td style={{...styles.tableCell, fontWeight: 700, color: "#2d3748", textAlign: "left"}}>
-                              {a.produit}
-                              {isMobile && (
-                                <div style={{ fontSize: "0.7em", color: "#6b7280", marginTop: "2px" }}>
-                                  Lot: {a.numeroLot}<br />
-                                  {a.prixUnitaire} DH × {a.quantite}<br />
-                                  Exp: {a.datePeremption}
-                                </div>
-                              )}
-                            </td>
-                            <td style={{...styles.tableCell, color: "#667eea", fontWeight: 600}}>
-                              {a.numeroLot}
-                            </td>
-                            <td style={{...styles.tableCell, color: "#4a5568", fontSize: "0.8em"}}>
-                              {a.fournisseurArticle || fournisseur}
-                            </td>
-                            <td style={{...styles.tableCell, color: "#667eea", fontWeight: 700}}>{a.quantite}</td>
-                            {!isMobile && <td style={{...styles.tableCell, color: "#667eea", fontWeight: 700}}>{a.prixUnitaire} DH</td>}
-                            {!isMobile && <td style={{...styles.tableCell, color: "#667eea", fontWeight: 700}}>{a.prixVente} DH</td>}
-                            {!isMobile && <td style={styles.tableCell}>{a.datePeremption}</td>}
-                            <td style={{...styles.tableCell, color: "#48bb78", fontWeight: 800, fontSize: isMobile ? "0.9em" : "1.1em"}}>
-                              {(a.prixUnitaire * a.quantite - (a.remise || 0)) || 0} DH
-                            </td>
-                            <td style={styles.tableCell}>
-                              <button 
-                                type="button" 
-                                style={{
-                                  ...styles.button, 
-                                  ...styles.dangerButton, 
-                                  padding: isMobile ? "6px 12px" : "8px 16px", 
-                                  fontSize: "0.8em",
-                                  minWidth: isMobile ? "44px" : "auto",
-                                  minHeight: isMobile ? "44px" : "auto"
-                                }}
-                                onClick={() => handleRemoveArticle(i)}
-                              >
-                                🗑️
-                              </button>
-                            </td>
-                          </tr>
-                        ))}
+                        {articles.map((a, i) => {
+                          const prixAchatFinal = a.prixUnitaire || a.prixAchat || 0;
+                          const totalArticle = (prixAchatFinal * (a.quantite || 0)) - (a.remise || 0);
+                          
+                          return (
+                            <tr key={i} style={{ 
+                              background: i % 2 === 0 ? "#f8fafc" : "white",
+                              transition: "all 0.3s ease"
+                            }}>
+                              <td style={{...styles.tableCell, fontWeight: 700, color: "#2d3748", textAlign: "left"}}>
+                                {a.produit}
+                                {isMobile && (
+                                  <div style={{ fontSize: "0.7em", color: "#6b7280", marginTop: "2px" }}>
+                                    Lot: {a.numeroLot}<br />
+                                    {prixAchatFinal} DH × {a.quantite}<br />
+                                    Exp: {a.datePeremption}
+                                  </div>
+                                )}
+                              </td>
+                              <td style={{...styles.tableCell, color: "#667eea", fontWeight: 600}}>
+                                {a.numeroLot}
+                              </td>
+                              <td style={{...styles.tableCell, color: "#4a5568", fontSize: "0.8em"}}>
+                                {a.fournisseurArticle || fournisseur}
+                              </td>
+                              <td style={{...styles.tableCell, color: "#667eea", fontWeight: 700}}>{a.quantite}</td>
+                              {!isMobile && <td style={{...styles.tableCell, color: "#667eea", fontWeight: 700}}>{prixAchatFinal} DH</td>}
+                              {!isMobile && <td style={{...styles.tableCell, color: "#667eea", fontWeight: 700}}>{a.prixVente} DH</td>}
+                              {!isMobile && <td style={styles.tableCell}>{a.datePeremption}</td>}
+                              <td style={{...styles.tableCell, color: "#48bb78", fontWeight: 800, fontSize: isMobile ? "0.9em" : "1.1em"}}>
+                                {totalArticle.toFixed(2)} DH
+                              </td>
+                              <td style={styles.tableCell}>
+                                <button 
+                                  type="button" 
+                                  style={{
+                                    ...styles.button, 
+                                    ...styles.dangerButton, 
+                                    padding: isMobile ? "6px 12px" : "8px 16px", 
+                                    fontSize: "0.8em",
+                                    minWidth: isMobile ? "44px" : "auto",
+                                    minHeight: isMobile ? "44px" : "auto"
+                                  }}
+                                  onClick={() => handleRemoveArticle(i)}
+                                >
+                                  🗑️
+                                </button>
+                              </td>
+                            </tr>
+                          );
+                        })}
                         <tr style={{ 
                           background: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)", 
                           color: "white"
@@ -2697,7 +2681,7 @@ export default function Achats() {
                             💰 TOTAL BON
                           </td>
                           <td colSpan={2} style={{...styles.tableCell, fontWeight: 900, fontSize: isMobile ? "1.1em" : "1.3em"}}>
-                            {totalBonCourant} DH
+                            {totalBonCourant.toFixed(2)} DH
                           </td>
                         </tr>
                       </tbody>
@@ -2716,6 +2700,7 @@ export default function Achats() {
                       value={fournisseur} 
                       onChange={e => setFournisseur(e.target.value)} 
                       required 
+                      placeholder="Nom du fournisseur"
                     />
                   </div>
                   
@@ -2744,13 +2729,15 @@ export default function Achats() {
                   </div>
                   
                   <div style={styles.inputGroup}>
-                    <label style={styles.label}>Remise Globale</label>
+                    <label style={styles.label}>Remise Globale (DH)</label>
                     <input 
                       type="number" 
+                      min="0"
                       step="0.01"
                       style={styles.input} 
                       value={remiseGlobale} 
                       onChange={e => setRemiseGlobale(e.target.value)} 
+                      placeholder="0"
                     />
                   </div>
                 </div>
@@ -2764,6 +2751,7 @@ export default function Achats() {
                       width: isMobile ? "100%" : "auto"
                     }}
                     title={isEditing ? "Enregistrer les modifications" : "Créer le bon d'achat avec traçabilité"}
+                    disabled={articles.length === 0}
                   >
                     {isEditing ? "✏️ Modifier Bon" : "💾 Enregistrer Bon Multi-Lots"}
                   </button>
@@ -2899,7 +2887,7 @@ export default function Achats() {
                   sum + (
                     (Array.isArray(bon.articles)
                       ? bon.articles.reduce(
-                        (s, a) => s + ((a.prixUnitaire || 0) * (a.quantite || 0) - (a.remise || 0)),
+                        (s, a) => s + (((a.prixUnitaire || a.prixAchat || 0) * (a.quantite || 0)) - (a.remise || 0)),
                         0
                       )
                       : 0) - (bon.remiseGlobale || 0)
@@ -2938,104 +2926,111 @@ export default function Achats() {
                       </td>
                     </tr>
                   ) : (
-                    achatsFiltres.map((b, index) => (
-                      <tr key={b.id} style={{ 
-                        background: index % 2 === 0 ? "#f8fafc" : "white",
-                        transition: "all 0.3s ease"
-                      }}>
-                        <td style={{...styles.tableCell, fontWeight: 600, color: "black", textAlign: "left"}}>
-                          {isMobile ? b.fournisseur.substring(0, 15) + (b.fournisseur.length > 15 ? "..." : "") : b.fournisseur}
-                          {isMobile && (
-                            <div style={{ fontSize: "0.7em", color: "#6b7280", marginTop: "2px" }}>
-                              {formatDateDisplay(b.timestamp || b.date)}
-                            </div>
-                          )}
-                        </td>
-                        {!isMobile && <td style={{...styles.tableCell, color: "#4a5568", fontSize: "0.9em"}}>{formatDateDisplay(b.timestamp || b.date)}</td>}
-                        <td style={styles.tableCell}>
-                          <span style={{
-                            padding: isMobile ? "4px 8px" : "6px 12px",
-                            borderRadius: isMobile ? "15px" : "20px",
-                            fontWeight: 600,
-                            fontSize: isMobile ? "0.7em" : "0.8em",
-                            textTransform: "uppercase",
-                            background: b.statutPaiement === "payé" ? "linear-gradient(135deg, #48bb78 0%, #38a169 100%)" :
-                                       b.statutPaiement === "partiel" ? "linear-gradient(135deg, #ed8936 0%, #dd6b20 100%)" :
-                                       "linear-gradient(135deg, #f56565 0%, #e53e3e 100%)",
-                            color: "white"
-                          }}>
-                            {isMobile ? (
-                              b.statutPaiement === "payé" ? "✅" : 
-                              b.statutPaiement === "partiel" ? "⚠️" : "❌"
-                            ) : b.statutPaiement}
-                          </span>
-                        </td>
-                        <td style={{
-                          ...styles.tableCell, 
-                          color: "#667eea", 
-                          fontWeight: 700, 
-                          fontSize: isMobile ? "0.9em" : "1.1em",
-                          textAlign: "right"
+                    achatsFiltres.map((b, index) => {
+                      const montantTotal = (
+                        (Array.isArray(b.articles)
+                          ? b.articles.reduce(
+                            (sum, a) =>
+                              sum + (((a.prixUnitaire || a.prixAchat || 0) * (a.quantite || 0)) - (a.remise || 0)),
+                            0
+                          )
+                          : 0) - (b.remiseGlobale || 0)
+                      );
+                      
+                      return (
+                        <tr key={b.id} style={{ 
+                          background: index % 2 === 0 ? "#f8fafc" : "white",
+                          transition: "all 0.3s ease"
                         }}>
-                          {(
-                            (Array.isArray(b.articles)
-                              ? b.articles.reduce(
-                                (sum, a) =>
-                                  sum +
-                                  ((a.prixUnitaire || 0) * (a.quantite || 0) - (a.remise || 0)),
-                                0
-                              )
-                              : 0) - (b.remiseGlobale || 0)
-                          ).toFixed(2)} DH
-                        </td>
-                        <td style={styles.tableCell}>
-                          <div style={styles.mobileActionButtons}>
-                            <button 
-                              style={{
-                                ...styles.button, 
-                                background: "linear-gradient(135deg, #805ad5 0%, #6b46c1 100%)", 
-                                padding: isMobile ? "8px 12px" : "8px 12px", 
-                                fontSize: isMobile ? "0.8em" : "0.8em",
-                                minWidth: isMobile ? "44px" : "auto",
-                                minHeight: isMobile ? "44px" : "auto"
-                              }}
-                              title="Imprimer Bon d'Achat Multi-Lots"
-                              onClick={() => handlePrintBon(b)}
-                            >
-                              🖨️
-                            </button>
-                            <button 
-                              style={{
-                                ...styles.button, 
-                                ...styles.warningButton, 
-                                padding: isMobile ? "8px 12px" : "8px 12px", 
-                                fontSize: isMobile ? "0.8em" : "0.8em",
-                                minWidth: isMobile ? "44px" : "auto",
-                                minHeight: isMobile ? "44px" : "auto"
-                              }}
-                              title="Modifier"
-                              onClick={() => handleEditBon(b)}
-                            >
-                              ✏️
-                            </button>
-                            <button 
-                              style={{
-                                ...styles.button, 
-                                ...styles.dangerButton, 
-                                padding: isMobile ? "8px 12px" : "8px 12px", 
-                                fontSize: isMobile ? "0.8em" : "0.8em",
-                                minWidth: isMobile ? "44px" : "auto",
-                                minHeight: isMobile ? "44px" : "auto"
-                              }}
-                              title="Supprimer"
-                              onClick={() => handleDeleteBon(b)}
-                            >
-                              🗑️
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    ))
+                          <td style={{...styles.tableCell, fontWeight: 600, color: "black", textAlign: "left"}}>
+                            {isMobile ? (b.fournisseur || "").substring(0, 15) + ((b.fournisseur || "").length > 15 ? "..." : "") : b.fournisseur}
+                            {isMobile && (
+                              <div style={{ fontSize: "0.7em", color: "#6b7280", marginTop: "2px" }}>
+                                {formatDateDisplay(b.timestamp || b.date)}
+                              </div>
+                            )}
+                          </td>
+                          {!isMobile && (
+                            <td style={{...styles.tableCell, color: "#4a5568", fontSize: "0.9em"}}>
+                              {formatDateDisplay(b.timestamp || b.date)}
+                            </td>
+                          )}
+                          <td style={styles.tableCell}>
+                            <span style={{
+                              padding: isMobile ? "4px 8px" : "6px 12px",
+                              borderRadius: isMobile ? "15px" : "20px",
+                              fontWeight: 600,
+                              fontSize: isMobile ? "0.7em" : "0.8em",
+                              textTransform: "uppercase",
+                              background: b.statutPaiement === "payé" ? "linear-gradient(135deg, #48bb78 0%, #38a169 100%)" :
+                                         b.statutPaiement === "partiel" ? "linear-gradient(135deg, #ed8936 0%, #dd6b20 100%)" :
+                                         "linear-gradient(135deg, #f56565 0%, #e53e3e 100%)",
+                              color: "white"
+                            }}>
+                              {isMobile ? (
+                                b.statutPaiement === "payé" ? "✅" : 
+                                b.statutPaiement === "partiel" ? "⚠️" : "❌"
+                              ) : b.statutPaiement}
+                            </span>
+                          </td>
+                          <td style={{
+                            ...styles.tableCell, 
+                            color: "#667eea", 
+                            fontWeight: 700, 
+                            fontSize: isMobile ? "0.9em" : "1.1em",
+                            textAlign: "right"
+                          }}>
+                            {montantTotal.toFixed(2)} DH
+                          </td>
+                          <td style={styles.tableCell}>
+                            <div style={styles.mobileActionButtons}>
+                              <button 
+                                style={{
+                                  ...styles.button, 
+                                  background: "linear-gradient(135deg, #805ad5 0%, #6b46c1 100%)", 
+                                  padding: isMobile ? "8px 12px" : "8px 12px", 
+                                  fontSize: isMobile ? "0.8em" : "0.8em",
+                                  minWidth: isMobile ? "44px" : "auto",
+                                  minHeight: isMobile ? "44px" : "auto"
+                                }}
+                                title="Imprimer Bon d'Achat Multi-Lots"
+                                onClick={() => handlePrintBon(b)}
+                              >
+                                🖨️
+                              </button>
+                              <button 
+                                style={{
+                                  ...styles.button, 
+                                  ...styles.warningButton, 
+                                  padding: isMobile ? "8px 12px" : "8px 12px", 
+                                  fontSize: isMobile ? "0.8em" : "0.8em",
+                                  minWidth: isMobile ? "44px" : "auto",
+                                  minHeight: isMobile ? "44px" : "auto"
+                                }}
+                                title="Modifier"
+                                onClick={() => handleEditBon(b)}
+                              >
+                                ✏️
+                              </button>
+                              <button 
+                                style={{
+                                  ...styles.button, 
+                                  ...styles.dangerButton, 
+                                  padding: isMobile ? "8px 12px" : "8px 12px", 
+                                  fontSize: isMobile ? "0.8em" : "0.8em",
+                                  minWidth: isMobile ? "44px" : "auto",
+                                  minHeight: isMobile ? "44px" : "auto"
+                                }}
+                                title="Supprimer"
+                                onClick={() => handleDeleteBon(b)}
+                              >
+                                🗑️
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })
                   )}
                 </tbody>
               </table>
