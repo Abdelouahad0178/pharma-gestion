@@ -1,7 +1,11 @@
 // src/components/auth/Login.js
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
-import { signInWithEmailAndPassword, signOut } from "firebase/auth";
+import {
+  signInWithEmailAndPassword,
+  signOut,
+  sendPasswordResetEmail,
+} from "firebase/auth";
 import { auth, db } from "../../firebase/config";
 import { doc, getDoc } from "firebase/firestore";
 
@@ -57,29 +61,36 @@ export default function Login() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
 
-  const [notice, setNotice] = useState(""); // messages généraux (verrouillé/supprimé/inactif/infos)
+  const [notice, setNotice] = useState(""); // messages généraux (info/lock/etc.)
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
-  // --- Modal d'avertissement paiement (géré SEULEMENT dans Login.js) ---
+  // --- Modal d'avertissement paiement ---
   const [showPaymentModal, setShowPaymentModal] = useState(false);
   const [paymentMsg, setPaymentMsg] = useState("");
   const [paymentDueAt, setPaymentDueAt] = useState(null);
   const [paymentMsLeft, setPaymentMsLeft] = useState(0);
   const [paymentDismissKey, setPaymentDismissKey] = useState("");
   const [postLoginPath, setPostLoginPath] = useState("/dashboard");
+
+  // --- Modal mot de passe oublié ---
+  const [showResetModal, setShowResetModal] = useState(false);
+  const [resetEmail, setResetEmail] = useState("");
+
   const navigate = useNavigate();
 
-  // message forcé (verrouillage, etc.)
+  // Récupérer un message forcé (ex: lock) placé par d'autres pages
   useEffect(() => {
-    const msg = localStorage.getItem("forcedSignOutMessage");
-    if (msg) {
-      setNotice(msg);
-      localStorage.removeItem("forcedSignOutMessage");
-    }
+    try {
+      const msg = localStorage.getItem("forcedSignOutMessage");
+      if (msg) {
+        setNotice(msg);
+        localStorage.removeItem("forcedSignOutMessage");
+      }
+    } catch {}
   }, []);
 
-  // tick de compte à rebours quand le modal est ouvert
+  // Countdown du modal paiement
   useEffect(() => {
     if (!showPaymentModal || !paymentDueAt) return;
     setPaymentMsLeft(Math.max(0, paymentDueAt.getTime() - Date.now()));
@@ -89,107 +100,103 @@ export default function Login() {
     return () => clearInterval(id);
   }, [showPaymentModal, paymentDueAt]);
 
-  const handleLogin = async (e) => {
-    e.preventDefault();
-    setError("");
-    setNotice("");
-    setLoading(true);
-
+  const safeSetForcedMessage = (title, msg) => {
     try {
-      // Connexion Firebase Auth
-      const userCredential = await signInWithEmailAndPassword(auth, email.trim(), password);
-      const uid = userCredential.user.uid;
+      localStorage.setItem("forcedSignOutMessage", `${title} — ${msg}`);
+    } catch {}
+  };
 
-      // Doc Firestore de l'utilisateur
-      const snap = await getDoc(doc(db, "users", uid));
-      if (!snap.exists()) {
+  const hardSignOut = async (title, msg, uiError) => {
+    try {
+      safeSetForcedMessage(title, msg);
+      await signOut(auth);
+    } catch {}
+    setNotice(`${title} — ${msg}`);
+    setError(uiError);
+    setLoading(false);
+  };
+
+  // ================= Post-auth: vérifs, routage, paiement =================
+  const runChecksAndMaybeShowPayment = useCallback(
+    async (uid, emailFromAuth) => {
+      // 1) Charger doc user
+      let data = null;
+      try {
+        const snap = await getDoc(doc(db, "users", uid));
+        if (snap.exists()) data = snap.data() || null;
+      } catch (e) {
+        console.warn("[Login] Firestore getDoc error:", e);
+        data = null;
+      }
+
+      // Pas de doc → onboarding société
+      if (!data) {
         setPostLoginPath("/societe");
         navigate("/societe");
-        return;
-      }
-
-      const data = snap.data();
-
-      // 1) Compte supprimé - STRICT COMME AVANT
-      if (data?.deleted === true) {
-        const deletedAt = data?.deletedAt
-          ? toDateSafe(data.deletedAt)?.toLocaleDateString("fr-FR") ?? "récemment"
-          : "récemment";
-        const title = "🗑️ Compte supprimé";
-        const msg = `Ce compte a été supprimé par l'administrateur le ${deletedAt}. Contactez le support pour plus d'informations.`;
-        try { localStorage.setItem("forcedSignOutMessage", `${title} — ${msg}`); } catch {}
-        await signOut(auth);
-        setNotice(`${title} — ${msg}`);
-        setError("Accès refusé : ce compte a été supprimé.");
         setLoading(false);
         return;
       }
 
-      // 2) Compte verrouillé - RENFORCER LA LOGIQUE
-      const isLocked = 
-        data?.locked === true || 
-        data?.isLocked === true || 
-        data?.status === "disabled" ||
-        data?.actif === false; // Ajouter cette condition pour les vendeuses
+      // (a) supprimé
+      if (data?.deleted === true) {
+        const deletedAtStr =
+          data?.deletedAt ? toDateSafe(data.deletedAt)?.toLocaleDateString("fr-FR") ?? "récemment" : "récemment";
+        const title = "🗑️ Compte supprimé";
+        const msg = `Ce compte a été supprimé par l'administrateur le ${deletedAtStr}. Contactez le support pour plus d'informations.`;
+        await hardSignOut(title, msg, "Accès refusé : ce compte a été supprimé.");
+        return;
+      }
 
+      // (b) verrouillé / désactivé / inactif
+      const isLocked =
+        data?.locked === true ||
+        data?.isLocked === true ||
+        data?.status === "disabled" ||
+        data?.actif === false;
       if (isLocked) {
         const title = data?.adminPopup?.title || "🔒 Compte verrouillé";
-        const msg = data?.adminPopup?.message || 
-          "Votre compte a été verrouillé par l'administrateur. Vous ne pouvez plus accéder à l'application. Veuillez contacter le support.";
-        
-        try { localStorage.setItem("forcedSignOutMessage", `${title} — ${msg}`); } catch {}
-        await signOut(auth);
-        setNotice(`${title} — ${msg}`);
-        setError("Accès refusé : votre compte est verrouillé.");
-        setLoading(false);
+        const msg =
+          data?.adminPopup?.message ||
+          "Votre compte a été verrouillé par l'administrateur. Veuillez contacter le support.";
+        await hardSignOut(title, msg, "Accès refusé : votre compte est verrouillé.");
         return;
       }
 
-      // 3) Compte inactif - STRICT
-      const isInactive = 
-        data?.active === false || 
-        data?.isActive === false;
-        
+      const isInactive = data?.active === false || data?.isActive === false;
       if (isInactive) {
         const title = "⏸️ Compte inactif";
         const msg = "Votre compte a été désactivé par l'administrateur. Contactez le support pour réactivation.";
-        try { localStorage.setItem("forcedSignOutMessage", `${title} — ${msg}`); } catch {}
-        await signOut(auth);
-        setNotice(`${title} — ${msg}`);
-        setError("Accès refusé : votre compte est inactif.");
-        setLoading(false);
+        await hardSignOut(title, msg, "Accès refusé : votre compte est inactif.");
         return;
       }
 
-      // 4) Vérification spécifique pour les vendeuses
-      const userRole = (data?.role || "").toLowerCase();
-      if (["vendeuse", "assistant", "employee"].includes(userRole)) {
-        // Vérifications supplémentaires pour les vendeuses
-        const hasAccess = 
-          data?.actif !== false && // doit être actif
-          data?.locked !== true && // pas verrouillé
-          data?.isLocked !== true && // pas verrouillé (autre champ)
-          data?.status !== "disabled" && // statut non désactivé
-          data?.active !== false && // actif
-          data?.isActive !== false; // actif (autre champ)
-
-        if (!hasAccess) {
+      // (c) règles employé(e)
+      const role = (data?.role || "").toLowerCase();
+      const isEmployee = ["vendeuse", "assistant", "employee", "employe", "employée"].includes(role);
+      if (isEmployee) {
+        const okAccess =
+          data?.actif !== false &&
+          data?.locked !== true &&
+          data?.isLocked !== true &&
+          data?.status !== "disabled" &&
+          data?.active !== false &&
+          data?.isActive !== false;
+        if (!okAccess) {
           const title = "🔒 Accès refusé";
-          const msg = "Votre compte vendeuse a été désactivé. Contactez votre pharmacien ou administrateur.";
-          try { localStorage.setItem("forcedSignOutMessage", `${title} — ${msg}`); } catch {}
-          await signOut(auth);
-          setNotice(`${title} — ${msg}`);
-          setError("Accès refusé : compte vendeuse désactivé.");
-          setLoading(false);
+          const msg = "Votre compte employé a été désactivé. Contactez votre pharmacien ou administrateur.";
+          await hardSignOut(title, msg, "Accès refusé : compte employé désactivé.");
           return;
         }
       }
 
-      // Chemin post-login
-      const nextPath = data?.societeId ? "/dashboard" : "/societe";
+      // Routage: pas de société
+      let nextPath = "/dashboard";
+      if (!data?.societeId) {
+        nextPath = isEmployee ? "/invitations" : "/societe";
+      }
       setPostLoginPath(nextPath);
 
-      // --- Avertissement paiement actif (NON bloquant par lock, mais on affiche le modal ici) ---
+      // Avertissement paiement (non-bloquant)
       const pw = data?.paymentWarning;
       const isPaid = data?.isPaid === true;
       const isActiveWarning = pw?.status === "active" && !isPaid;
@@ -198,63 +205,123 @@ export default function Login() {
         const sentAt = toDateSafe(pw?.sentAt);
         const dueAt = sentAt ? new Date(sentAt.getTime() + GRACE_MS) : null;
 
-        // message
         const msg = buildPaymentMessage(data);
         setPaymentMsg(msg || "⚠️ Avertissement de paiement actif (48h).");
         setPaymentDueAt(dueAt);
 
-        // mémorisation fermeture par envoi
         const dKey = dismissKeyFor(uid, sentAt);
         setPaymentDismissKey(dKey);
 
-        const alreadyDismissed = localStorage.getItem(dKey) === "1";
+        let alreadyDismissed = false;
+        try {
+          alreadyDismissed = localStorage.getItem(dKey) === "1";
+        } catch {
+          alreadyDismissed = false;
+        }
+
         if (!alreadyDismissed) {
-          // garder la main sur la navigation jusqu'à fermeture manuelle
           try {
             localStorage.setItem(
               "paymentNotice",
               JSON.stringify({
                 message: msg,
                 createdAt: Date.now(),
-                user: data?.email || email.trim(),
+                user: data?.email || emailFromAuth || "",
               })
             );
           } catch {}
           setShowPaymentModal(true);
           setLoading(false);
-          return; // STOP: on attend que l'utilisateur ferme manuellement
+          return; // attendre fermeture manuelle du modal
         }
       } else {
-        // Nettoyage éventuel
-        try { localStorage.removeItem("paymentNotice"); } catch {}
+        try {
+          localStorage.removeItem("paymentNotice");
+        } catch {}
       }
 
-      // Si tout est OK, on navigue
+      // OK → navigate
       navigate(nextPath);
-      
+      setLoading(false);
+    },
+    [navigate]
+  );
+
+  // ===================== Email/Password Login =====================
+  const handleLogin = async (e) => {
+    e.preventDefault();
+    setError("");
+    setNotice("");
+    setLoading(true);
+
+    try {
+      const userCredential = await signInWithEmailAndPassword(auth, email.trim(), password);
+      const uid = userCredential.user.uid;
+      await runChecksAndMaybeShowPayment(uid, userCredential.user.email || email.trim());
     } catch (err) {
       console.error("[Login] Erreur:", err);
-      if (err.code === "auth/user-not-found") {
+      const c = err?.code;
+      if (c === "auth/user-not-found") {
         setError("Aucun compte trouvé avec cet email !");
-      } else if (err.code === "auth/wrong-password") {
+      } else if (c === "auth/wrong-password") {
         setError("Mot de passe incorrect !");
-      } else if (err.code === "auth/invalid-email") {
+      } else if (c === "auth/invalid-email") {
         setError("Email invalide !");
-      } else if (err.code === "auth/user-disabled") {
+      } else if (c === "auth/user-disabled") {
         setError("Ce compte a été désactivé !");
-      } else if (err.code === "auth/too-many-requests") {
+      } else if (c === "auth/too-many-requests") {
         setError("Trop de tentatives de connexion. Réessayez plus tard.");
-      } else if (err.code === "auth/network-request-failed") {
+      } else if (c === "auth/network-request-failed") {
         setError("Erreur de connexion réseau. Vérifiez votre connexion internet.");
       } else {
         setError("Email ou mot de passe incorrect !");
       }
-    } finally {
       setLoading(false);
     }
   };
 
-  // Style du panneau de notice - AJOUTER STYLE POUR VENDEUSE
+  // ===================== Mot de passe oublié =====================
+  const openResetModal = () => {
+    setResetEmail(email.trim());
+    setShowResetModal(true);
+  };
+
+  const handleSendReset = async () => {
+    setError("");
+    if (!resetEmail) {
+      setError("Veuillez saisir votre email pour réinitialiser le mot de passe.");
+      return;
+    }
+    try {
+      await sendPasswordResetEmail(auth, resetEmail);
+      setNotice("📧 Email de réinitialisation envoyé. Vérifiez votre boîte mail.");
+      setShowResetModal(false);
+    } catch (e) {
+      console.error("[Reset Password] error:", e);
+      const c = e?.code;
+      if (c === "auth/invalid-email") setError("Email invalide.");
+      else if (c === "auth/user-not-found") setError("Aucun compte trouvé avec cet email.");
+      else setError("Échec d'envoi de l'email de réinitialisation.");
+    }
+  };
+
+  // Fermer modal paiement → mémoriser dismissal & router
+  const handleClosePaymentModal = () => {
+    if (paymentDismissKey) {
+      try {
+        localStorage.setItem(paymentDismissKey, "1");
+      } catch {}
+    }
+    setShowPaymentModal(false);
+    if (postLoginPath) navigate(postLoginPath);
+  };
+
+  const expired = useMemo(() => {
+    if (!paymentDueAt) return false;
+    return paymentDueAt.getTime() - Date.now() <= 0;
+  }, [paymentDueAt, paymentMsLeft]);
+
+  // Style de la notice (icône + couleurs)
   const getNoticeStyle = () => {
     const n = (notice || "").toLowerCase();
     if (n.includes("supprimé")) {
@@ -276,20 +343,6 @@ export default function Login() {
   };
   const noticeStyle = getNoticeStyle();
 
-  // Fermer le modal manuellement => mémoriser + naviguer
-  const handleClosePaymentModal = () => {
-    if (paymentDismissKey) {
-      try { localStorage.setItem(paymentDismissKey, "1"); } catch {}
-    }
-    setShowPaymentModal(false);
-    if (postLoginPath) navigate(postLoginPath);
-  };
-
-  const expired = useMemo(() => {
-    if (!paymentDueAt) return false;
-    return paymentDueAt.getTime() - Date.now() <= 0;
-  }, [paymentDueAt, paymentMsLeft]);
-
   return (
     <div
       className="fullscreen-table-wrap"
@@ -301,7 +354,7 @@ export default function Login() {
         background: "linear-gradient(120deg, #1a2340 0%, #253060 100%)",
       }}
     >
-      {/* MODAL: Avertissement de paiement (persiste jusqu'à fermeture manuelle) */}
+      {/* MODAL: Avertissement de paiement */}
       {showPaymentModal && (
         <div
           aria-live="polite"
@@ -371,13 +424,16 @@ export default function Login() {
                     }}
                   >
                     {expired ? "⛔ Délai dépassé" : "⏳ Temps restant"}
-                    {!expired && <span style={{ color: "#fff" }}>{fmtCountdown(paymentMsLeft)}</span>}
+                    {!expired && <span style={{ color: "#fff", marginLeft: 6 }}>{fmtCountdown(paymentMsLeft)}</span>}
                   </div>
                 )}
 
                 <div style={{ marginTop: 14, display: "flex", gap: 10, flexWrap: "wrap" }}>
-                  <a
-                    href="#/paiement"
+                  <button
+                    onClick={() => {
+                      setShowPaymentModal(false);
+                      navigate("/paiement");
+                    }}
                     style={{
                       textDecoration: "none",
                       padding: "10px 14px",
@@ -386,10 +442,12 @@ export default function Login() {
                       color: "#0b1220",
                       fontWeight: 800,
                       border: "1px solid #ff8b00",
+                      cursor: "pointer",
                     }}
+                    type="button"
                   >
                     Régler maintenant
-                  </a>
+                  </button>
 
                   <button
                     onClick={handleClosePaymentModal}
@@ -418,11 +476,113 @@ export default function Login() {
         </div>
       )}
 
+      {/* MODAL: Mot de passe oublié */}
+      {showResetModal && (
+        <div
+          role="dialog"
+          aria-label="Réinitialiser le mot de passe"
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 9999,
+            background: "rgba(0,0,0,0.5)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 16,
+          }}
+        >
+          <div
+            style={{
+              width: "min(480px, 96vw)",
+              background: "#0f1b33",
+              color: "#e1e6ef",
+              border: "1px solid #2a3b55",
+              borderRadius: 12,
+              boxShadow: "0 12px 40px rgba(0,0,0,0.45)",
+              padding: "18px",
+              position: "relative",
+            }}
+          >
+            <button
+              onClick={() => setShowResetModal(false)}
+              aria-label="Fermer"
+              style={{
+                position: "absolute",
+                top: 8,
+                right: 8,
+                background: "transparent",
+                border: "none",
+                color: "#9fb5e1",
+                fontSize: 20,
+                cursor: "pointer",
+              }}
+            >
+              ✕
+            </button>
+
+            <h3 style={{ marginBottom: 10, color: "#7ee4e6" }}>Réinitialiser le mot de passe</h3>
+            <p style={{ marginBottom: 12, fontSize: "0.95em", color: "#cfe0ff" }}>
+              Entrez votre adresse e-mail. Nous vous enverrons un lien de réinitialisation.
+            </p>
+
+            <input
+              type="email"
+              placeholder="votre@email.com"
+              value={resetEmail}
+              onChange={(e) => setResetEmail(e.target.value)}
+              style={{
+                width: "100%",
+                padding: "10px 12px",
+                borderRadius: 8,
+                border: "1px solid #2a3b55",
+                background: "#0b1220",
+                color: "#e1e6ef",
+                outline: "none",
+                marginBottom: 12,
+              }}
+            />
+
+            <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+              <button
+                onClick={() => setShowResetModal(false)}
+                type="button"
+                style={{
+                  padding: "10px 14px",
+                  borderRadius: 10,
+                  background: "transparent",
+                  color: "#9fb5e1",
+                  border: "1px solid #2a3b55",
+                  cursor: "pointer",
+                }}
+              >
+                Annuler
+              </button>
+              <button
+                onClick={handleSendReset}
+                type="button"
+                style={{
+                  padding: "10px 14px",
+                  borderRadius: 10,
+                  background: "#2dd4bf",
+                  color: "#0b1220",
+                  border: "1px solid #2dd4bf",
+                  fontWeight: 800,
+                  cursor: "pointer",
+                }}
+              >
+                Envoyer
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Carte de login */}
       <div
         className="paper-card"
         style={{
-          maxWidth: 450,
+          maxWidth: 480,
           width: "96%",
           margin: "0 auto",
           borderRadius: 18,
@@ -430,12 +590,9 @@ export default function Login() {
           position: "relative",
         }}
       >
-        {/* Indicateur de statut en haut à droite */}
+        {/* Icône statut */}
         {notice && (
-          <div
-            style={{ position: "absolute", top: "15px", right: "15px", fontSize: "24px" }}
-            aria-hidden
-          >
+          <div style={{ position: "absolute", top: "15px", right: "15px", fontSize: "24px" }} aria-hidden>
             {noticeStyle.icon}
           </div>
         )}
@@ -465,7 +622,7 @@ export default function Login() {
           Connexion à votre compte
         </h3>
 
-        {/* Notice (verrouillage / suppression / inactif / infos) */}
+        {/* Notice */}
         {notice && (
           <div
             style={{
@@ -484,7 +641,7 @@ export default function Login() {
           </div>
         )}
 
-        {/* Erreurs d'auth */}
+        {/* Erreurs */}
         {error && (
           <div
             className="status-chip danger"
@@ -495,6 +652,10 @@ export default function Login() {
               display: "flex",
               alignItems: "center",
               gap: "8px",
+              background: "rgba(220, 38, 38, 0.15)",
+              color: "#fecaca",
+              borderRadius: 8,
+              border: "1px solid #dc2626",
             }}
           >
             <span>❌</span>
@@ -502,10 +663,7 @@ export default function Login() {
           </div>
         )}
 
-        <form
-          onSubmit={handleLogin}
-          style={{ display: "flex", flexDirection: "column", gap: 15, marginTop: 22 }}
-        >
+        <form onSubmit={handleLogin} style={{ display: "flex", flexDirection: "column", gap: 15, marginTop: 22 }}>
           <div>
             <label
               style={{
@@ -556,28 +714,50 @@ export default function Login() {
             />
           </div>
 
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <button
+              className="btn"
+              style={{
+                flex: 1,
+                fontSize: "1.05rem",
+                marginTop: 10,
+                padding: "12px",
+                background: loading ? "#4a5a7a" : undefined,
+                cursor: loading ? "not-allowed" : "pointer",
+                transition: "all 0.3s ease",
+              }}
+              type="submit"
+              disabled={loading}
+            >
+              {loading ? (
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "8px" }}>
+                  <span>⏳</span>
+                  <span>Connexion...</span>
+                </div>
+              ) : (
+                "Se connecter"
+              )}
+            </button>
+          </div>
+
           <button
-            className="btn"
-            style={{
-              width: "100%",
-              fontSize: "1.1rem",
-              marginTop: 10,
-              padding: "12px",
-              background: loading ? "#4a5a7a" : undefined,
-              cursor: loading ? "not-allowed" : "pointer",
-              transition: "all 0.3s ease",
-            }}
-            type="submit"
+            type="button"
+            onClick={openResetModal}
             disabled={loading}
+            style={{
+              marginTop: 8,
+              alignSelf: "flex-start",
+              background: "transparent",
+              border: "none",
+              color: "#70d6ff",
+              cursor: loading ? "not-allowed" : "pointer",
+              fontWeight: 700,
+              padding: 0,
+            }}
+            onMouseOver={(e) => !loading && (e.target.style.textDecoration = "underline")}
+            onMouseOut={(e) => (e.target.style.textDecoration = "none")}
           >
-            {loading ? (
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "8px" }}>
-                <span>⏳</span>
-                <span>Connexion en cours...</span>
-              </div>
-            ) : (
-              "Se connecter"
-            )}
+            Mot de passe oublié ?
           </button>
         </form>
 
@@ -613,8 +793,11 @@ export default function Login() {
           </button>
         </div>
 
-        {/* Section d'aide renforcée pour tous les cas de blocage */}
-        {(notice.includes("supprimé") || notice.includes("verrouillé") || notice.includes("inactif") || notice.includes("désactivé") || notice.includes("refusé")) && (
+        {(notice.includes("supprimé") ||
+          notice.includes("verrouillé") ||
+          notice.includes("inactif") ||
+          notice.includes("désactivé") ||
+          notice.includes("refusé")) && (
           <div
             style={{
               marginTop: 25,
@@ -645,16 +828,6 @@ export default function Login() {
               <br />
               • Attendez la réactivation par l'administrateur
               <br />
-              {notice.includes("vendeuse") && (
-                <>
-                  <br />
-                  <strong>Pour les vendeuses :</strong>
-                  <br />
-                  • Votre accès peut être géré par votre pharmacien
-                  <br />
-                  • Contactez directement votre équipe ou pharmacie
-                </>
-              )}
             </div>
           </div>
         )}
@@ -669,15 +842,13 @@ export default function Login() {
               border: "1px solid #2a3b55",
             }}
           >
-            <h4 style={{ color: "#7ee4e6", fontSize: "0.95em", marginBottom: 10 }}>
-              ℹ️ Informations de connexion :
-            </h4>
+            <h4 style={{ color: "#7ee4e6", fontSize: "0.95em", marginBottom: 10 }}>ℹ️ Informations de connexion :</h4>
             <div style={{ color: "#e1e6ef", fontSize: "0.85em", lineHeight: 1.6 }}>
               <strong>Première connexion ?</strong>
               <br />
               Vous serez redirigé vers la page de gestion de société pour :
               <br />• Créer votre société (si vous êtes pharmacien)
-              <br />• Rejoindre une société (si vous êtes vendeuse)
+              <br />• Rejoindre une société (si vous êtes vendeuse via code d’invitation)
             </div>
           </div>
         )}

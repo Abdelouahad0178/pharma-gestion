@@ -49,6 +49,12 @@ export default function Homepage({ onLogin, onRegister }) {
     onRegister && onRegister();
   };
 
+  // Lien WhatsApp (numéro fourni : 0033749618704 => +33 7 49 61 87 04)
+  const whatsappNumberIntl = "33749618704";
+  const whatsappHref = `https://wa.me/${whatsappNumberIntl}?text=${encodeURIComponent(
+    "Bonjour PharmaGest Pro, j’ai besoin d’aide concernant…"
+  )}`;
+
   return (
     <div className={`homepage ${animationClass}`}>
       <style>{`
@@ -308,11 +314,66 @@ export default function Homepage({ onLogin, onRegister }) {
           font-weight: 600;
         }
 
+        .support-contact {
+          max-width: 800px;
+          margin: 30px auto 0;
+          padding: 16px 20px;
+          background: rgba(255, 255, 255, 0.12);
+          border: 1px solid rgba(255, 255, 255, 0.25);
+          border-radius: 14px;
+          color: #fff;
+          display: grid;
+          grid-template-columns: 1fr;
+          gap: 10px;
+          text-align: center;
+        }
+
+        .support-contact a {
+          color: #eaffd0;
+          text-decoration: none;
+          font-weight: 700;
+        }
+
+        .support-contact a:hover {
+          text-decoration: underline;
+        }
+
         .footer-text {
           text-align: center;
           color: rgba(255, 255, 255, 0.6);
           font-size: 0.85rem;
-          margin-top: 30px;
+          margin-top: 20px;
+        }
+
+        /* Bouton WhatsApp flottant */
+        .floating-whatsapp {
+          position: fixed;
+          right: 24px;
+          bottom: 24px;
+          z-index: 50;
+        }
+
+        .floating-whatsapp a {
+          display: inline-flex;
+          align-items: center;
+          gap: 10px;
+          padding: 12px 16px;
+          border-radius: 999px;
+          background: linear-gradient(135deg, #19c37d 0%, #128C7E 100%);
+          color: #fff;
+          font-weight: 800;
+          box-shadow: 0 10px 25px rgba(0,0,0,0.25);
+          transition: transform 0.2s ease, box-shadow 0.2s ease;
+        }
+
+        .floating-whatsapp a:hover {
+          transform: translateY(-2px);
+          box-shadow: 0 14px 30px rgba(0,0,0,0.3);
+        }
+
+        .wa-icon {
+          width: 20px;
+          height: 20px;
         }
 
         /* Responsive Design */
@@ -354,6 +415,10 @@ export default function Homepage({ onLogin, onRegister }) {
           .stat-number {
             font-size: 1.6rem;
           }
+
+          .floating-whatsapp a span.hide-sm {
+            display: none;
+          }
         }
 
         @media (max-width: 480px) {
@@ -374,9 +439,10 @@ export default function Homepage({ onLogin, onRegister }) {
           }
         }
 
-        /* Enhanced accessibility */
+        /* Accessibility */
         .cta-btn:focus,
-        .nav-btn:focus {
+        .nav-btn:focus,
+        .floating-whatsapp a:focus {
           outline: 2px solid rgba(255, 255, 255, 0.8);
           outline-offset: 2px;
         }
@@ -411,11 +477,11 @@ export default function Homepage({ onLogin, onRegister }) {
             <h1 className="hero-title">
               Gestion Pharmaceutique Moderne
             </h1>
-            
+
             <h2 className="hero-subtitle">
               Solution complète pour votre pharmacie
             </h2>
-            
+
             <p className="hero-description">
               Gérez efficacement votre stock, ventes, achats et équipe avec une interface moderne
               et intuitive. Traçabilité multi-lots, analytics avancés et sécurité maximale.
@@ -434,7 +500,7 @@ export default function Homepage({ onLogin, onRegister }) {
           {/* Fonctionnalités */}
           <div className="features-grid">
             {features.map((feature, index) => (
-              <div key={index} className="feature-card">
+              <div key={index} className="feature-card" aria-live={index === currentFeature ? "polite" : "off"}>
                 <span className="feature-icon">{feature.icon}</span>
                 <h3 className="feature-title">{feature.title}</h3>
                 <p className="feature-description">{feature.description}</p>
@@ -451,6 +517,7 @@ export default function Homepage({ onLogin, onRegister }) {
             <span className="stat-number">100%</span>
             <span className="stat-label">Sécurisé</span>
           </div>
+        {/* On garde la mise en page, mais on précise le support réel */}
           <div className="stat-item">
             <span className="stat-number">24/7</span>
             <span className="stat-label">Support</span>
@@ -461,10 +528,40 @@ export default function Homepage({ onLogin, onRegister }) {
           </div>
         </div>
 
+        {/* Coordonnées de support technique */}
+        <div className="support-contact" role="contentinfo" aria-label="Coordonnées du support technique">
+          <div>
+            <strong>Support technique :</strong> WhatsApp&nbsp;
+            <strong>0033749618704</strong>
+          </div>
+          <div>
+            <a href={whatsappHref} target="_blank" rel="noopener noreferrer">
+              Ouvrir WhatsApp et nous écrire
+            </a>
+          </div>
+        </div>
+
         <div className="footer-text">
           PharmaGest Pro - Solution professionnelle pour pharmacies
         </div>
       </section>
+
+      {/* Bouton WhatsApp flottant */}
+      <div className="floating-whatsapp">
+        <a
+          href={whatsappHref}
+          target="_blank"
+          rel="noopener noreferrer"
+          aria-label="Contacter le support sur WhatsApp"
+          title="Support WhatsApp"
+        >
+          {/* Icône WhatsApp en SVG (léger) */}
+          <svg className="wa-icon" viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+            <path d="M19.11 17.37c-.27-.14-1.6-.78-1.85-.87-.25-.09-.43-.14-.61.14-.18.27-.7.87-.86 1.05-.16.18-.32.2-.59.07-.27-.14-1.14-.42-2.18-1.34-.81-.72-1.35-1.61-1.51-1.88-.16-.27-.02-.41.12-.55.12-.12.27-.32.41-.48.14-.16.18-.27.27-.45.09-.18.05-.34-.02-.48-.07-.14-.61-1.47-.83-2.01-.22-.53-.44-.45-.61-.45-.16 0-.34-.02-.52-.02s-.48.07-.73.34c-.25.27-.96.94-.96 2.28 0 1.34.98 2.64 1.12 2.82.14.18 1.93 2.95 4.69 4.02.66.28 1.17.45 1.57.58.66.21 1.27.18 1.75.11.53-.08 1.6-.65 1.83-1.28.23-.63.23-1.17.16-1.28-.07-.11-.25-.18-.52-.32zM16.03 3.2c-7.07 0-12.8 5.74-12.8 12.8 0 2.26.6 4.39 1.66 6.23L3.2 28.8l6.77-1.77c1.79.98 3.84 1.54 6.05 1.54 7.06 0 12.8-5.74 12.8-12.8 0-7.06-5.74-12.8-12.8-12.8zm0 23.08c-1.97 0-3.8-.58-5.33-1.58l-.38-.24-4.02 1.05 1.07-3.92-.25-.4c-1.04-1.66-1.65-3.63-1.65-5.77 0-5.86 4.77-10.62 10.62-10.62 5.86 0 10.62 4.76 10.62 10.62 0 5.86-4.76 10.62-10.62 10.62z" fill="currentColor"/>
+          </svg>
+          <span className="hide-sm">Support</span>
+        </a>
+      </div>
     </div>
   );
 }

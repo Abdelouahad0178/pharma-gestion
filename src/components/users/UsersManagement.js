@@ -715,7 +715,7 @@ export default function UsersManagement() {
       {showInviteForm && (
         <div style={styles.modalOverlay}>
           <div style={styles.modalContent}>
-            <h3 style={{ marginBottom: "20px", fontSize: screenSize.isMobile ? "1.3em" : "1.5em" }}>
+            <h3 style={{ marginBottom: "20px", color:"black", fontSize: screenSize.isMobile ? "1.3em" : "1.5em" }}>
               Inviter un utilisateur
             </h3>
             
@@ -839,16 +839,7 @@ export default function UsersManagement() {
               >
                 Copier le lien
               </button>
-              <button
-                style={{
-                  ...styles.button,
-                  background: "linear-gradient(135deg, #ed8936 0%, #dd6b20 100%)",
-                  flex: 1
-                }}
-                onClick={() => copyText(invitationCode.token)}
-              >
-                Copier le code
-              </button>
+             
             </div>
 
             <div style={{ textAlign: "center" }}>

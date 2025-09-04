@@ -60,6 +60,10 @@ export default function Achats() {
   const [editId, setEditId] = useState(null);
   const [isEditing, setIsEditing] = useState(false);
 
+  // Réception
+  const [receptionId, setReceptionId] = useState(null);
+  const [receptionArticles, setReceptionArticles] = useState([]);
+
   // Filtres
   const [filterFournisseur, setFilterFournisseur] = useState("");
   const [filterMedicament, setFilterMedicament] = useState("");
@@ -189,7 +193,7 @@ export default function Achats() {
         if (
           Array.isArray(data.articles) &&
           data.articles.length > 0 &&
-          data.articles.some(a => a.produit && a.quantite > 0 && (a.prixUnitaire > 0 || a.prixAchat > 0))
+          data.articles.some(a => a.commandee && a.commandee.quantite > 0 && (a.commandee.prixUnitaire > 0 || a.commandee.prixAchat > 0))
         ) {
           arr.push({ id: docSnap.id, ...data });
         }
@@ -323,14 +327,17 @@ export default function Achats() {
     
     const nouvelArticle = {
       produit: nomProduitFinal,
-      quantite: qte,
-      prixUnitaire: prix,
-      prixAchat: prix,
-      prixVente: prixV,
-      remise: Number(remiseArticle) || 0,
-      datePeremption,
-      numeroLot: lotFinal,
-      fournisseurArticle: fournisseurFinal,
+      commandee: {
+        quantite: qte,
+        prixUnitaire: prix,
+        prixAchat: prix,
+        prixVente: prixV,
+        remise: Number(remiseArticle) || 0,
+        datePeremption,
+        numeroLot: lotFinal,
+        fournisseurArticle: fournisseurFinal,
+      },
+      recu: null
     };
     
     setArticles(prev => [...prev, nouvelArticle]);
@@ -363,7 +370,7 @@ export default function Achats() {
       try {
         // Créer une nouvelle entrée de stock pour chaque article
         await addDoc(collection(db, "societe", societeId, "stock_entries"), {
-          nom: art.produit || "",
+          nom: bon.produit || art.produit || "",
           quantite: Number(art.quantite || 0),
           quantiteInitiale: Number(art.quantite || 0),
           prixAchat: Number(art.prixUnitaire || art.prixAchat || 0),
@@ -383,7 +390,7 @@ export default function Achats() {
 
         // Mettre à jour ou créer l'entrée dans le stock traditionnel pour compatibilité
         const stockRef = collection(db, "societe", societeId, "stock");
-        const q = query(stockRef, where("nom", "==", art.produit || ""));
+        const q = query(stockRef, where("nom", "==", bon.produit || art.produit || ""));
         const stockSnap = await getDocs(q);
         
         if (!stockSnap.empty) {
@@ -404,7 +411,7 @@ export default function Achats() {
         } else {
           // Créer nouvelle entrée stock traditionnel
           await addDoc(stockRef, {
-            nom: art.produit || "",
+            nom: bon.produit || art.produit || "",
             quantite: Number(art.quantite || 0),
             prixAchat: Number(art.prixUnitaire || art.prixAchat || 0),
             prixVente: Number(art.prixVente || art.prixUnitaire || art.prixAchat || 0),
@@ -482,7 +489,7 @@ export default function Achats() {
       return;
     }
     
-    const articlesValid = articles.filter(a => a.produit && a.quantite > 0 && (a.prixUnitaire > 0 || a.prixAchat > 0));
+    const articlesValid = articles.filter(a => a.produit && a.commandee.quantite > 0 && (a.commandee.prixUnitaire > 0 || a.commandee.prixAchat > 0));
     if (articlesValid.length === 0) {
       showNotification("Aucun article valide trouvé", "error");
       return;
@@ -490,23 +497,26 @@ export default function Achats() {
 
     setIsLoading(true);
 
-    const montantTotal = articlesValid.reduce(
-      (sum, a) => sum + (((a.prixUnitaire || a.prixAchat || 0) * (a.quantite || 0)) - (a.remise || 0)),
+    const articlesToSave = articlesValid.map(art => ({
+      produit: art.produit,
+      commandee: art.commandee,
+      recu: isEditing ? achats.find(b => b.id === editId)?.articles.find(ap => ap.produit === art.produit)?.recu || null : null
+    }));
+
+    const montantTotal = articlesToSave.reduce(
+      (sum, a) => sum + (((a.commandee.prixUnitaire || a.commandee.prixAchat || 0) * (a.commandee.quantite || 0)) - (a.commandee.remise || 0)),
       0
     ) - (Number(remiseGlobale) || 0);
 
     try {
       if (isEditing && editId) {
-        const oldBon = achats.find(b => b.id === editId);
-        if (oldBon) await updateStockOnDelete(oldBon);
-        
         await updateDoc(doc(db, "societe", societeId, "achats", editId), {
           fournisseur: fournisseur.trim(),
           date: Timestamp.fromDate(new Date(dateAchat)),
           timestamp: Timestamp.now(),
           statutPaiement,
           remiseGlobale: Number(remiseGlobale) || 0,
-          articles: articlesValid,
+          articles: articlesToSave,
           modifiePar: user.uid,
           modifieParEmail: user.email,
           modifieLe: Timestamp.now()
@@ -520,18 +530,11 @@ export default function Achats() {
           details: {
             fournisseur: fournisseur.trim(),
             montant: montantTotal,
-            articles: articlesValid.length,
+            articles: articlesToSave.length,
             action: 'modification',
             achatId: editId,
             statutPaiement
           }
-        });
-        
-        await updateStockOnAdd({ 
-          id: editId, 
-          fournisseur: fournisseur.trim(), 
-          articles: articlesValid, 
-          date: Timestamp.fromDate(new Date(dateAchat)) 
         });
         
         setIsEditing(false); 
@@ -545,7 +548,8 @@ export default function Achats() {
           timestamp: Timestamp.now(),
           statutPaiement,
           remiseGlobale: Number(remiseGlobale) || 0,
-          articles: articlesValid,
+          articles: articlesToSave,
+          statutReception: "en_attente",
           creePar: user.uid,
           creeParEmail: user.email,
           creeLe: Timestamp.now(),
@@ -560,18 +564,11 @@ export default function Achats() {
           details: {
             fournisseur: fournisseur.trim(),
             montant: montantTotal,
-            articles: articlesValid.length,
+            articles: articlesToSave.length,
             action: 'création',
             achatId: achatRef.id,
             statutPaiement
           }
-        });
-        
-        await updateStockOnAdd({ 
-          id: achatRef.id, 
-          fournisseur: fournisseur.trim(), 
-          articles: articlesValid, 
-          date: Timestamp.fromDate(new Date(dateAchat)) 
         });
         
         if (statutPaiement === "payé") {
@@ -611,6 +608,93 @@ export default function Achats() {
       setIsLoading(false);
     }
   };
+
+  // Début de la réception
+  const handleStartReception = useCallback((bon) => {
+    if (bon.statutReception !== "en_attente") {
+      showNotification("Bon déjà traité", "error");
+      return;
+    }
+    setReceptionId(bon.id);
+    setReceptionArticles(bon.articles.map(a => ({
+      ...a,
+      recu: { ...a.commandee } // Copie par défaut pour édition
+    })));
+  }, [showNotification]);
+
+  // Soumission de la réception
+  const handleSubmitReception = useCallback(async () => {
+    if (!societeId || !user) return;
+
+    setIsLoading(true);
+    try {
+      let isFull = true;
+      let hasSome = false;
+      receptionArticles.forEach(a => {
+        if (a.recu.quantite < a.commandee.quantite) isFull = false;
+        if (a.recu.quantite > 0) hasSome = true;
+      });
+      const newStatut = !hasSome ? "annulé" : isFull ? "reçu" : "partiel";
+
+      await updateDoc(doc(db, "societe", societeId, "achats", receptionId), {
+        articles: receptionArticles,
+        statutReception: newStatut,
+        dateReception: Timestamp.now(),
+        recuPar: user.uid,
+        recuParEmail: user.email
+      });
+
+      await addDoc(collection(db, "societe", societeId, "activities"), {
+        type: "reception_achat",
+        userId: user.uid,
+        userEmail: user.email,
+        timestamp: Timestamp.now(),
+        details: {
+          achatId: receptionId,
+          statut: newStatut,
+          action: 'confirmation'
+        }
+      });
+
+      if (hasSome) {
+        await updateStockOnAdd({
+          id: receptionId,
+          fournisseur: achats.find(b => b.id === receptionId)?.fournisseur || "",
+          articles: receptionArticles.filter(a => a.recu.quantite > 0).map(a => ({
+            produit: a.produit,
+            ...a.recu
+          })),
+          date: Timestamp.now()
+        });
+      }
+
+      showNotification(`Réception confirmée (${newStatut}) !`, "success");
+      setReceptionId(null);
+      setReceptionArticles([]);
+      await Promise.all([fetchAchats(), fetchStockEntries(), fetchMedicaments()]);
+    } catch (error) {
+      console.error("Erreur lors de la confirmation de réception:", error);
+      showNotification("Erreur lors de la confirmation", "error");
+    } finally {
+      setIsLoading(false);
+    }
+  }, [receptionId, receptionArticles, societeId, user, achats, updateStockOnAdd, showNotification, fetchAchats, fetchStockEntries, fetchMedicaments]);
+
+  // Mise à jour d'un article en réception
+  const handleUpdateReceptionArticle = useCallback((index, field, value) => {
+    const newArts = [...receptionArticles];
+    newArts[index].recu = {
+      ...newArts[index].recu,
+      [field]: field === 'quantite' || field === 'prixUnitaire' || field === 'prixVente' || field === 'remise' ? Number(value) : value
+    };
+    if (field === 'prixUnitaire') {
+      newArts[index].recu.prixAchat = Number(value);
+    }
+    if (field === 'quantite') {
+      newArts[index].recu.quantite = Math.max(0, Math.min(newArts[index].commandee.quantite, Number(value)));
+    }
+    setReceptionArticles(newArts);
+  }, [receptionArticles]);
 
   // Réinitialisation du formulaire
   const resetForm = useCallback(() => {
@@ -711,6 +795,8 @@ export default function Achats() {
       console.warn("Erreur formatage date:", dateError);
       dateStr = "Date non disponible";
     }
+
+    let titleDocument = bon.statutReception === "en_attente" ? "Bon de Commande Multi-Lots" : "Bon de Réception Multi-Lots";
     
     // Adaptations pour les petites dimensions
     const mobileOptimizations = isMobileDevice ? {
@@ -736,7 +822,7 @@ export default function Achats() {
     return `<!DOCTYPE html>
       <html lang="fr">
         <head>
-          <title>Bon d'Achat Multi-Lots - ${bon.fournisseur}</title>
+          <title>${titleDocument} - ${bon.fournisseur}</title>
           <meta charset="UTF-8">
           <meta name="viewport" content="width=device-width, initial-scale=1.0">
           <style>
@@ -1297,14 +1383,14 @@ export default function Achats() {
           </style>
         </head>
         <body>
-          <div class="watermark">BON D'ACHAT MULTI-LOTS</div>
+          <div class="watermark">${titleDocument.toUpperCase()}</div>
           
           <div class="document-container">
             <div class="header-section">
-              <div class="document-type-indicator">Bon d'Achat Multi-Lots</div>
+              <div class="document-type-indicator">${titleDocument}</div>
               <div class="header-content">
                 <h1 class="company-title">${parametres.entete || "PHARMACIE"}</h1>
-                <div class="document-badge">🛒 Bon de Commande Multi-Lots</div>
+                <div class="document-badge">🛒 ${titleDocument}</div>
                 <div class="document-number">N° ${bon.id.substring(0, 8).toUpperCase()}</div>
               </div>
             </div>
@@ -1352,20 +1438,21 @@ export default function Achats() {
                   </thead>
                   <tbody>
                     ${articles.map((a, index) => {
-                      const prixAchatFinal = a.prixUnitaire || a.prixAchat || 0;
-                      const totalArticle = (prixAchatFinal * (a.quantite || 0)) - (a.remise || 0);
-                      const isExpiringSoon = a.datePeremption && new Date(a.datePeremption) < new Date(Date.now() + 30*24*60*60*1000);
+                      const item = a.recu || a.commandee || {};
+                      const prixAchatFinal = item.prixUnitaire || item.prixAchat || 0;
+                      const totalArticle = (prixAchatFinal * (item.quantite || 0)) - (item.remise || 0);
+                      const isExpiringSoon = item.datePeremption && new Date(item.datePeremption) < new Date(Date.now() + 30*24*60*60*1000);
                       
                       return `
                         <tr>
                           <td class="product-name">${a.produit || ""}</td>
-                          <td><span class="lot-number">${a.numeroLot || "N/A"}</span></td>
-                          <td class="supplier-cell">${a.fournisseurArticle || bon.fournisseur || ""}</td>
-                          <td><span class="quantity-cell">${a.quantite || 0}</span></td>
+                          <td><span class="lot-number">${item.numeroLot || "N/A"}</span></td>
+                          <td class="supplier-cell">${item.fournisseurArticle || bon.fournisseur || ""}</td>
+                          <td><span class="quantity-cell">${item.quantite || 0}</span></td>
                           <td class="price-cell">${prixAchatFinal.toFixed(2)} DH</td>
-                          <td class="price-cell">${(a.prixVente || 0).toFixed(2)} DH</td>
+                          <td class="price-cell">${(item.prixVente || 0).toFixed(2)} DH</td>
                           <td style="color: ${isExpiringSoon ? '#e53e3e' : '#4a5568'};">
-                            ${a.datePeremption || ""}
+                            ${item.datePeremption || ""}
                           </td>
                           <td class="total-cell">
                             ${totalArticle.toFixed(2)} DH
@@ -1401,7 +1488,7 @@ export default function Achats() {
                 ${parametres.pied || "Merci pour votre confiance ! 🙏"} - Gestion Multi-Lots Activée
               </div>
               <div class="print-info">
-                Bon d'Achat Multi-Lots généré le ${new Date().toLocaleString('fr-FR')} par ${user?.email || 'Utilisateur'}
+                ${titleDocument} généré le ${new Date().toLocaleString('fr-FR')} par ${user?.email || 'Utilisateur'}
               </div>
             </div>
           </div>
@@ -1413,7 +1500,7 @@ export default function Achats() {
   // Impression optimisée avec gestion d'erreurs améliorée
   const handlePrintBon = useCallback((bon) => {
     try {
-      const articles = Array.isArray(bon.articles) ? bon.articles : [];
+      const articles = bon.articles.map(a => ({produit: a.produit, ...(a.recu || a.commandee)}));
       const totalArticles = articles.reduce(
         (sum, a) => sum + (((a.prixUnitaire || a.prixAchat || 0) * (a.quantite || 0)) - (a.remise || 0)),
         0
@@ -1437,13 +1524,13 @@ export default function Achats() {
       
       if (isMobileDevice) {
         // Stratégie mobile avec fallback automatique
-        handleMobilePrint(htmlContent, "Bon d'Achat", bon.id);
+        handleMobilePrint(htmlContent, bon.statutReception === "en_attente" ? "Bon de Commande" : "Bon de Réception", bon.id);
       } else {
         // Stratégie desktop avec fallback automatique
-        handleDesktopPrint(htmlContent, "Bon d'Achat", bon.id);
+        handleDesktopPrint(htmlContent, bon.statutReception === "en_attente" ? "Bon de Commande" : "Bon de Réception", bon.id);
       }
       
-      showNotification(`Bon d'Achat préparé ! ${isMobileDevice ? 'Choisissez votre méthode d\'impression' : 'Envoyé vers l\'imprimante'}`, "success");
+      showNotification(`Document préparé ! ${isMobileDevice ? 'Choisissez votre méthode d\'impression' : 'Envoyé vers l\'imprimante'}`, "success");
       
     } catch (error) {
       console.error("Erreur lors de la préparation d'impression:", error);
@@ -1857,6 +1944,10 @@ export default function Achats() {
 
   // Mode édition d'un bon
   const handleEditBon = useCallback((bon) => {
+    if (bon.statutReception !== "en_attente") {
+      showNotification("Impossible de modifier un bon déjà reçu", "error");
+      return;
+    }
     setEditId(bon.id);
     setIsEditing(true);
     setFournisseur(bon.fournisseur || "");
@@ -1878,9 +1969,19 @@ export default function Achats() {
     
     setStatutPaiement(bon.statutPaiement || "payé");
     setRemiseGlobale(bon.remiseGlobale || 0);
-    setArticles(Array.isArray(bon.articles) ? bon.articles : []);
+    setArticles(bon.articles.map(a => ({
+      produit: a.produit,
+      quantite: a.commandee.quantite,
+      prixUnitaire: a.commandee.prixUnitaire,
+      prixAchat: a.commandee.prixAchat,
+      prixVente: a.commandee.prixVente,
+      remise: a.commandee.remise,
+      datePeremption: a.commandee.datePeremption,
+      numeroLot: a.commandee.numeroLot,
+      fournisseurArticle: a.commandee.fournisseurArticle,
+    })));
     setShowForm(true);
-  }, []);
+  }, [showNotification]);
 
   // Suppression d'un bon avec enregistrement d'activité
   const handleDeleteBon = useCallback(async (bon) => {
@@ -1896,14 +1997,16 @@ export default function Achats() {
     if (window.confirm("Supprimer ce bon d'achat ? Cette action est irréversible.")) {
       setIsLoading(true);
       try {
-        const montantTotal = Array.isArray(bon.articles) 
-          ? bon.articles.reduce(
-              (sum, a) => sum + (((a.prixUnitaire || a.prixAchat || 0) * (a.quantite || 0)) - (a.remise || 0)),
-              0
-            ) - (bon.remiseGlobale || 0)
-          : 0;
+        const receivedArticles = bon.articles.filter(a => a.recu && a.recu.quantite > 0).map(a => ({
+          produit: a.produit,
+          ...a.recu
+        }));
+        const montantTotal = receivedArticles.length > 0 ? receivedArticles.reduce(
+          (sum, a) => sum + (((a.prixUnitaire || a.prixAchat || 0) * (a.quantite || 0)) - (a.remise || 0)),
+          0
+        ) - (bon.remiseGlobale || 0) : 0;
         
-        await updateStockOnDelete(bon);
+        if (bon.statutReception !== "en_attente") await updateStockOnDelete({ ...bon, articles: receivedArticles });
         await deleteDoc(doc(db, "societe", societeId, "achats", bon.id));
         
         await addDoc(collection(db, "societe", societeId, "activities"), {
@@ -1947,9 +2050,18 @@ export default function Achats() {
     }
   }, []);
 
+  // Fonction pour obtenir le total d'un bon
+  const getTotalBon = useCallback((bon) => {
+    const arts = bon.articles || [];
+    return arts.reduce((sum, a) => {
+      const item = a.recu || a.commandee || {};
+      return sum + ((item.prixUnitaire || item.prixAchat || 0) * (item.quantite || 0) - (item.remise || 0));
+    }, 0) - (bon.remiseGlobale || 0);
+  }, []);
+
   // Totaux/filtres
-  const totalBonCourant = (articles || []).reduce(
-    (t, a) => t + (((a.prixUnitaire || a.prixAchat || 0) * (a.quantite || 0)) - (a.remise || 0)),
+  const totalBonCourant = articles.reduce(
+    (t, a) => t + (((a.commandee.prixUnitaire || a.commandee.prixAchat || 0) * (a.commandee.quantite || 0)) - (a.commandee.remise || 0)),
     0
   ) - Number(remiseGlobale || 0);
 
@@ -2430,7 +2542,7 @@ export default function Achats() {
             </div>
           )}
 
-          {/* Formulaire ajout/modif avec champs étendus */}
+          {/* Formulaire ajout/modif avec champs étendues */}
           {showForm && (
             <div style={styles.formCard}>
               <h3 style={{ 
@@ -2623,8 +2735,9 @@ export default function Achats() {
                       </thead>
                       <tbody>
                         {articles.map((a, i) => {
-                          const prixAchatFinal = a.prixUnitaire || a.prixAchat || 0;
-                          const totalArticle = (prixAchatFinal * (a.quantite || 0)) - (a.remise || 0);
+                          const item = a.commandee || {};
+                          const prixAchatFinal = item.prixUnitaire || item.prixAchat || 0;
+                          const totalArticle = (prixAchatFinal * (item.quantite || 0)) - (item.remise || 0);
                           
                           return (
                             <tr key={i} style={{ 
@@ -2635,22 +2748,22 @@ export default function Achats() {
                                 {a.produit}
                                 {isMobile && (
                                   <div style={{ fontSize: "0.7em", color: "#6b7280", marginTop: "2px" }}>
-                                    Lot: {a.numeroLot}<br />
-                                    {prixAchatFinal} DH × {a.quantite}<br />
-                                    Exp: {a.datePeremption}
+                                    Lot: {item.numeroLot}<br />
+                                    {prixAchatFinal} DH × {item.quantite}<br />
+                                    Exp: {item.datePeremption}
                                   </div>
                                 )}
                               </td>
                               <td style={{...styles.tableCell, color: "#667eea", fontWeight: 600}}>
-                                {a.numeroLot}
+                                {item.numeroLot}
                               </td>
                               <td style={{...styles.tableCell, color: "#4a5568", fontSize: "0.8em"}}>
-                                {a.fournisseurArticle || fournisseur}
+                                {item.fournisseurArticle || fournisseur}
                               </td>
-                              <td style={{...styles.tableCell, color: "#667eea", fontWeight: 700}}>{a.quantite}</td>
+                              <td style={{...styles.tableCell, color: "#667eea", fontWeight: 700}}>{item.quantite}</td>
                               {!isMobile && <td style={{...styles.tableCell, color: "#667eea", fontWeight: 700}}>{prixAchatFinal} DH</td>}
-                              {!isMobile && <td style={{...styles.tableCell, color: "#667eea", fontWeight: 700}}>{a.prixVente} DH</td>}
-                              {!isMobile && <td style={styles.tableCell}>{a.datePeremption}</td>}
+                              {!isMobile && <td style={{...styles.tableCell, color: "#667eea", fontWeight: 700}}>{item.prixVente} DH</td>}
+                              {!isMobile && <td style={styles.tableCell}>{item.datePeremption}</td>}
                               <td style={{...styles.tableCell, color: "#48bb78", fontWeight: 800, fontSize: isMobile ? "0.9em" : "1.1em"}}>
                                 {totalArticle.toFixed(2)} DH
                               </td>
@@ -2774,6 +2887,126 @@ export default function Achats() {
             </div>
           )}
 
+          {/* Section de confirmation de réception */}
+          {receptionId && (
+            <div style={styles.formCard}>
+              <h3 style={{ 
+                color: "#2d3748", 
+                fontSize: isMobile ? "1.3em" : "1.6em", 
+                fontWeight: 800, 
+                marginBottom: isMobile ? "20px" : "30px",
+                textAlign: "center",
+                textTransform: "uppercase",
+                
+              }}>
+                ✅ Confirmer la Réception du Bon
+              </h3>
+
+              {receptionArticles.map((a, i) => (
+                <div key={i} style={{
+                  background: "linear-gradient(135deg, #edf2f7 0%, #e2e8f0 100%)",
+                  padding: isMobile ? "15px" : "20px",
+                  borderRadius: "10px",
+                  marginBottom: "15px",
+                  border: "1px solid #cbd5e0"
+                }}>
+                  <h5 style={{ color: "#2d3748", fontWeight: 700, marginBottom: "10px" }}>{a.produit}</h5>
+                  <p style={{ color: "#4a5568", marginBottom: "15px" }}>
+                    Commandée: {a.commandee.quantite} unités à {a.commandee.prixUnitaire} DH, Lot: {a.commandee.numeroLot}, Exp: {a.commandee.datePeremption}
+                  </p>
+
+                  <div style={styles.mobileFormGrid}>
+                    <div style={styles.inputGroup}>
+                      <label style={styles.label}>Quantité Reçue (0 à {a.commandee.quantite})</label>
+                      <input
+                        type="number"
+                        min="0"
+                        max={a.commandee.quantite}
+                        step="1"
+                        style={styles.input}
+                        value={a.recu.quantite}
+                        onChange={e => handleUpdateReceptionArticle(i, 'quantite', e.target.value)}
+                      />
+                    </div>
+
+                    <div style={styles.inputGroup}>
+                      <label style={styles.label}>Prix Unitaire Reçu (DH)</label>
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        style={styles.input}
+                        value={a.recu.prixUnitaire}
+                        onChange={e => handleUpdateReceptionArticle(i, 'prixUnitaire', e.target.value)}
+                      />
+                    </div>
+
+                    <div style={styles.inputGroup}>
+                      <label style={styles.label}>Prix Vente Reçu (DH)</label>
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        style={styles.input}
+                        value={a.recu.prixVente}
+                        onChange={e => handleUpdateReceptionArticle(i, 'prixVente', e.target.value)}
+                      />
+                    </div>
+
+                    <div style={styles.inputGroup}>
+                      <label style={styles.label}>Date Expiration Reçue</label>
+                      <input
+                        type="date"
+                        style={styles.input}
+                        value={a.recu.datePeremption}
+                        onChange={e => handleUpdateReceptionArticle(i, 'datePeremption', e.target.value)}
+                      />
+                    </div>
+
+                    <div style={styles.inputGroup}>
+                      <label style={styles.label}>Numéro de Lot Reçu</label>
+                      <input
+                        style={styles.input}
+                        value={a.recu.numeroLot}
+                        onChange={e => handleUpdateReceptionArticle(i, 'numeroLot', e.target.value)}
+                      />
+                    </div>
+
+                    <div style={styles.inputGroup}>
+                      <label style={styles.label}>Remise Reçue (DH)</label>
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        style={styles.input}
+                        value={a.recu.remise}
+                        onChange={e => handleUpdateReceptionArticle(i, 'remise', e.target.value)}
+                      />
+                    </div>
+                  </div>
+                </div>
+              ))}
+
+              <div style={styles.mobileActionButtons}>
+                <button 
+                  style={{...styles.button, ...styles.successButton, width: isMobile ? "100%" : "auto"}}
+                  onClick={handleSubmitReception}
+                >
+                  ✅ Soumettre Réception
+                </button>
+                <button 
+                  style={{...styles.button, ...styles.dangerButton, width: isMobile ? "100%" : "auto"}}
+                  onClick={() => {
+                    setReceptionId(null);
+                    setReceptionArticles([]);
+                  }}
+                >
+                  ❌ Annuler
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* Toggle filtres */}
           <div style={{ display: "flex", alignItems: "center", gap: "15px", marginTop: "30px", marginBottom: "20px", flexWrap: "wrap" }}>
             <button
@@ -2883,16 +3116,7 @@ export default function Achats() {
               border: "2px solid #cbd5e0"
             }}>
               <span style={{ fontWeight: 700, color: "#4a5568", fontSize: isMobile ? "0.9em" : "1em" }}>
-                💰 Total affiché: {achatsFiltres.reduce((sum, bon) => 
-                  sum + (
-                    (Array.isArray(bon.articles)
-                      ? bon.articles.reduce(
-                        (s, a) => s + (((a.prixUnitaire || a.prixAchat || 0) * (a.quantite || 0)) - (a.remise || 0)),
-                        0
-                      )
-                      : 0) - (bon.remiseGlobale || 0)
-                  ), 0
-                ).toFixed(2)} DH
+                💰 Total affiché: {achatsFiltres.reduce((sum, bon) => sum + getTotalBon(bon), 0).toFixed(2)} DH
               </span>
               <span style={{ fontWeight: 600, color: "#6b7280", fontSize: isMobile ? "0.8em" : "1em" }}>
                 📊 {achatsFiltres.filter(b => b.statutPaiement === "payé").length} payés • {achatsFiltres.filter(b => b.statutPaiement === "impayé").length} impayés
@@ -2905,7 +3129,8 @@ export default function Achats() {
                   <tr>
                     <th style={styles.tableCell}>Fournisseur</th>
                     {!isMobile && <th style={styles.tableCell}>Date & Heure</th>}
-                    <th style={styles.tableCell}>Statut</th>
+                    <th style={styles.tableCell}>Statut Paiement</th>
+                    <th style={styles.tableCell}>Statut Réception</th>
                     <th style={styles.tableCell}>Total</th>
                     <th style={styles.tableCell}>Actions</th>
                   </tr>
@@ -2913,7 +3138,7 @@ export default function Achats() {
                 <tbody>
                   {achatsFiltres.length === 0 ? (
                     <tr>
-                      <td colSpan={isMobile ? 4 : 5} style={{ 
+                      <td colSpan={isMobile ? 5 : 6} style={{ 
                         padding: isMobile ? "30px 15px" : "50px", 
                         textAlign: "center",
                         color: "#6b7280",
@@ -2927,15 +3152,7 @@ export default function Achats() {
                     </tr>
                   ) : (
                     achatsFiltres.map((b, index) => {
-                      const montantTotal = (
-                        (Array.isArray(b.articles)
-                          ? b.articles.reduce(
-                            (sum, a) =>
-                              sum + (((a.prixUnitaire || a.prixAchat || 0) * (a.quantite || 0)) - (a.remise || 0)),
-                            0
-                          )
-                          : 0) - (b.remiseGlobale || 0)
-                      );
+                      const montantTotal = getTotalBon(b);
                       
                       return (
                         <tr key={b.id} style={{ 
@@ -2973,6 +3190,26 @@ export default function Achats() {
                               ) : b.statutPaiement}
                             </span>
                           </td>
+                          <td style={styles.tableCell}>
+                            <span style={{
+                              padding: isMobile ? "4px 8px" : "6px 12px",
+                              borderRadius: isMobile ? "15px" : "20px",
+                              fontWeight: 600,
+                              fontSize: isMobile ? "0.7em" : "0.8em",
+                              textTransform: "uppercase",
+                              background: b.statutReception === "reçu" ? "linear-gradient(135deg, #48bb78 0%, #38a169 100%)" :
+                                         b.statutReception === "partiel" ? "linear-gradient(135deg, #ed8936 0%, #dd6b20 100%)" :
+                                         b.statutReception === "annulé" ? "linear-gradient(135deg, #f56565 0%, #e53e3e 100%)" :
+                                         "linear-gradient(135deg, #4299e1 0%, #3182ce 100%)",
+                              color: "white"
+                            }}>
+                              {isMobile ? (
+                                b.statutReception === "reçu" ? "✅" : 
+                                b.statutReception === "partiel" ? "⚠️" : 
+                                b.statutReception === "annulé" ? "❌" : "⌛"
+                              ) : b.statutReception || "en_attente"}
+                            </span>
+                          </td>
                           <td style={{
                             ...styles.tableCell, 
                             color: "#667eea", 
@@ -2998,20 +3235,38 @@ export default function Achats() {
                               >
                                 🖨️
                               </button>
-                              <button 
-                                style={{
-                                  ...styles.button, 
-                                  ...styles.warningButton, 
-                                  padding: isMobile ? "8px 12px" : "8px 12px", 
-                                  fontSize: isMobile ? "0.8em" : "0.8em",
-                                  minWidth: isMobile ? "44px" : "auto",
-                                  minHeight: isMobile ? "44px" : "auto"
-                                }}
-                                title="Modifier"
-                                onClick={() => handleEditBon(b)}
-                              >
-                                ✏️
-                              </button>
+                              {b.statutReception === "en_attente" && (
+                                <>
+                                  <button 
+                                    style={{
+                                      ...styles.button, 
+                                      ...styles.warningButton, 
+                                      padding: isMobile ? "8px 12px" : "8px 12px", 
+                                      fontSize: isMobile ? "0.8em" : "0.8em",
+                                      minWidth: isMobile ? "44px" : "auto",
+                                      minHeight: isMobile ? "44px" : "auto"
+                                    }}
+                                    title="Modifier"
+                                    onClick={() => handleEditBon(b)}
+                                  >
+                                    ✏️
+                                  </button>
+                                  <button 
+                                    style={{
+                                      ...styles.button, 
+                                      ...styles.successButton, 
+                                      padding: isMobile ? "8px 12px" : "8px 12px", 
+                                      fontSize: isMobile ? "0.8em" : "0.8em",
+                                      minWidth: isMobile ? "44px" : "auto",
+                                      minHeight: isMobile ? "44px" : "auto"
+                                    }}
+                                    title="Confirmer Réception"
+                                    onClick={() => handleStartReception(b)}
+                                  >
+                                    ✅
+                                  </button>
+                                </>
+                              )}
                               <button 
                                 style={{
                                   ...styles.button, 
