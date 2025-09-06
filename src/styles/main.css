@@ -52,7 +52,7 @@ h1, h2, h3, h4, h5, h6, .fullscreen-table-title {
   letter-spacing: 0.02em;
   margin: 0;
   padding: 0;
-  color: var(--text-secondary);
+
   line-height: 1.3;
 }
 
@@ -279,10 +279,10 @@ input, select, textarea,
   border-radius: var(--border-radius-small) !important;
   font-family: 'Inter', Arial, sans-serif;
   font-size: var(--font-base) !important;
-  background: #27385d !important;
+  background: #58a5e1 !important;
   padding: var(--spacing-sm) var(--spacing-md) !important;
   border: 1.2px solid #34518b !important;
-  color: #e5eeff !important;
+  color: #120b79 !important;
   margin-bottom: var(--spacing-xs) !important;
   box-shadow: 0 2px 8px #23376b1b;
   outline: none !important;
@@ -293,8 +293,8 @@ input, select, textarea,
 
 input:focus, select:focus, textarea:focus {
   border-color: #56b8e9 !important;
-  background: #283c60 !important;
-  color: #fff !important;
+  background: #dfe1e7 !important;
+  color: #110e16 !important;
 }
 
 .w-full {
@@ -643,7 +643,7 @@ label {
   }
   
   input, select, textarea {
-    width: 90% !important;
+    width: 100% !important;
     max-width: none !important;
     padding: var(--spacing-xs) var(--spacing-xs) !important;
     font-size: 13px !important;
@@ -701,7 +701,6 @@ label {
     min-height: 56px;
     flex-direction: column;
 }
-
 
 
 }
@@ -789,4 +788,7 @@ label {
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
   }
+}
+.field{
+  background: #1c0454;
 }

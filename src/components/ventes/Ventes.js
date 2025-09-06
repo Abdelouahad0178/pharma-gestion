@@ -237,43 +237,65 @@ export default function Ventes() {
     }
   }, [societeId]);
 
-  const getAllAvailableMedicaments = useMemo(() => {
-    const medicamentMap = new Map();
-    
-    const lotGroups = {};
-    stockEntries.filter(e => safeNumber(e.quantite) > 0).forEach(entry => {
-      if (!lotGroups[entry.nom]) {
-        lotGroups[entry.nom] = [];
-      }
-      lotGroups[entry.nom].push(entry);
+// Fusionne le stock "traditionnel" et les lots, et retourne TOUS les articles avec leur quantité totale
+const getAllAvailableMedicaments = useMemo(() => {
+  const num = (v) => {
+    if (typeof v === "number") return v || 0;
+    if (v == null) return 0;
+    const n = parseFloat(String(v).replace(",", "."));
+    return isNaN(n) ? 0 : n;
+  };
+
+  const map = new Map();
+
+  // 1) Stock "traditionnel"
+  (Array.isArray(medicaments) ? medicaments : []).forEach((m) => {
+    const key = m?.nom ?? m?.name ?? "";
+    if (!key) return;
+    const qStock = num(m?.quantite ?? m?.qty ?? 0);
+    const prix = num(m?.prixVente ?? m?.price ?? 0);
+
+    map.set(key, {
+      nom: key,
+      quantiteStock: qStock,
+      quantiteLots: 0,
+      quantiteTotal: qStock,    // sera ajusté après ajout des lots
+      hasLots: false,
+      lastPrice: prix,
     });
-    
-    Object.keys(lotGroups).forEach(nom => {
-      const lots = lotGroups[nom];
-      const totalQuantity = lots.reduce((sum, lot) => sum + safeNumber(lot.quantite), 0);
-      medicamentMap.set(nom, {
-        nom,
-        quantiteTotal: totalQuantity,
-        hasLots: true,
-       lastPrice: safeNumber(lots[0]?.prixVente)
+  });
+
+  // 2) Lots (stock_entries)
+  (Array.isArray(stockEntries) ? stockEntries : []).forEach((lot) => {
+    const key = lot?.nom ?? lot?.name ?? "";
+    if (!key) return;
+    const qLot = num(lot?.quantite ?? lot?.qty ?? 0);
+    const prixLot = num(lot?.prixVente ?? lot?.price ?? 0);
+
+    if (!map.has(key)) {
+      map.set(key, {
+        nom: key,
+        quantiteStock: 0,
+        quantiteLots: 0,
+        quantiteTotal: 0,
+        hasLots: false,
+        lastPrice: 0,
       });
-    });
-    
-   medicaments.filter(m => safeNumber(m.quantite) > 0).forEach(med => {
-      if (!medicamentMap.has(med.nom)) {
-        medicamentMap.set(med.nom, {
-          nom: med.nom,
-         quantiteTotal: safeNumber(med.quantite),
-          hasLots: false,
-          lastPrice: safeNumber(med.prixVente)
-        });
-      }
-    });
-    
-    return Array.from(medicamentMap.values())
-      .filter(m => m.quantiteTotal > 0)
-      .sort((a, b) => a.nom.localeCompare(b.nom));
-  }, [medicaments, stockEntries]);
+    }
+
+    const item = map.get(key);
+    item.quantiteLots += qLot;
+    item.quantiteTotal = num(item.quantiteStock) + num(item.quantiteLots);
+    if (qLot > 0) item.hasLots = true;
+
+    // Conserver un prix de référence si manquant
+    if (!item.lastPrice && prixLot) item.lastPrice = prixLot;
+  });
+
+  // 3) Retourner TOUTES les références (même si quantiteTotal = 0), triées par nom
+  return Array.from(map.values()).sort((a, b) => a.nom.localeCompare(b.nom));
+}, [medicaments, stockEntries]);
+
 
   // ============ GESTION FORMULAIRE ============
   const handleProduitChange = (value) => {
@@ -1193,7 +1215,7 @@ export default function Ventes() {
                       borderRadius: '12px',
                       border: '2px solid #e5e7eb',
                       fontSize: '16px',
-                      background: 'white',
+                      background: 'black',
                       transition: 'all 0.2s ease',
                       outline: 'none'
                     }}

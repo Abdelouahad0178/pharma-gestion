@@ -1,12 +1,14 @@
 // src/components/paiements/Paiements.js
 /*
  * GESTION DES PAIEMENTS (compat Achats multi-lots)
- * - Compatible avec Achats.js: articles { commandee | recu }, remiseGlobale, statutPaiement
+ * - ✅ N'agrège que les BONS D'ACHAT "REÇUS" (statutReception = reçu | partiel)
+ * - ✅ Totaux Achats basés UNIQUEMENT sur les lignes "reçues" (a.recu)
  * - Mise à jour automatique du statut (impayé/partiel/payé) côté document source
  * - Historique activities
+ * - UI responsive avec scroll horizontal pour les tableaux
  */
 
-import React, { useEffect, useState, useCallback, useRef } from "react";
+import React, { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import { db } from "../../firebase/config";
 import {
   collection,
@@ -43,13 +45,70 @@ function formatDate(v, locale = "fr-FR") {
   return d ? d.toLocaleDateString(locale) : "—";
 }
 
-/* ===== Composant ===== */
 export default function Paiements() {
   const { societeId, user, loading } = useUserRole();
 
+  /* ===== Styles injectés (scroll horizontal, design cohérent Achats) ===== */
+  const injectStyles = useCallback(() => {
+    if (document.getElementById("paiements-styles")) return;
+    const style = document.createElement("style");
+    style.id = "paiements-styles";
+    style.textContent = `
+      :root{
+        --p:#6366f1; --p2:#8b5cf6; --bg:#f8fafc; --card:#ffffff; --border:#e5e7eb; --text:#111827;
+      }
+      .pay-page{ max-width:1280px; margin:0 auto; padding:16px; }
+      .card{ background:var(--card); border:1px solid var(--border); border-radius:14px; padding:16px; box-shadow:0 6px 20px rgba(99,102,241,.06); }
+      .card + .card{ margin-top:16px; }
+      .header{
+        background:linear-gradient(135deg,var(--p),var(--p2)); color:#fff; border-radius:16px; padding:16px; margin-bottom:16px; box-shadow:0 12px 30px rgba(99,102,241,.25);
+      }
+      .header h1{ margin:0; font-weight:900; letter-spacing:.3px; }
+      .sub{ opacity:.9; margin-top:6px; }
+
+      .notice{ border-radius:12px; padding:12px; font-weight:600; margin-bottom:12px; }
+      .notice.success{ background:#dcfce7; color:#065f46; }
+      .notice.error{ background:#fee2e2; color:#7f1d1d; }
+      .notice.info{ background:#e0f2fe; color:#0c4a6e; }
+
+      .controls{ display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+      .btn{
+        padding:10px 12px; border-radius:10px; border:1px solid var(--border);
+        font-weight:700; cursor:pointer;
+      }
+      .btn.active{ background:#10b981; color:#fff; border-color:#10b981; }
+      .btn.primary{ background:linear-gradient(135deg,var(--p),var(--p2)); color:#fff; border:0; }
+      .btn.warn{ background:#f59e0b; color:#fff; border-color:#f59e0b; }
+      .btn.danger{ background:#ef4444; color:#fff; border-color:#ef4444; }
+      .field, .select{
+        padding:10px; border-radius:10px; border:1px solid var(--border); background:#cfd7e5; outline:none;
+      }
+      .grid-form{ display:grid; grid-template-columns:1fr 1fr 1fr auto auto; gap:10px; }
+      @media (max-width:1024px){ .grid-form{ grid-template-columns:1fr 1fr; } }
+      @media (max-width:640px){ .grid-form{ grid-template-columns:1fr; } }
+
+      .table-scroll{ width:100%; overflow-x:auto; -webkit-overflow-scrolling:touch; border:1px solid var(--border); border-radius:12px; background:#fff; }
+      .table{ width:100%; min-width:1100px; border-collapse:collapse; }
+      .table thead th{
+        position:sticky; top:0; background:linear-gradient(135deg,#f8fafc,#eef2ff);
+        color:#111827; font-weight:800; text-transform:uppercase; font-size:12px; letter-spacing:.5px;
+        border-bottom:1px solid var(--border); padding:12px 10px; text-align:center; z-index:1;
+      }
+      .table tbody td{ padding:12px 10px; border-bottom:1px solid var(--border); text-align:center; color:#0f172a; font-weight:600; background:#fff; }
+      .left{ text-align:left; }
+      .chip{ padding:4px 8px; border-radius:8px; background:#eef2ff; color:var(--p); font-weight:800; display:inline-block; }
+      .money{ color:var(--p); font-weight:800; }
+      .ok{ color:#10b981; font-weight:700; }
+      .due{ color:#ef4444; font-weight:700; }
+      .muted{ color:#6b7280; }
+    `;
+    document.head.appendChild(style);
+  }, []);
+  useEffect(() => { injectStyles(); }, [injectStyles]);
+
   // Base state
   const [waiting, setWaiting] = useState(true);
-  const [relatedTo, setRelatedTo] = useState("achats"); // "achats" | "ventes" (si تحتاج)
+  const [relatedTo, setRelatedTo] = useState("achats"); // "achats" | "ventes"
   const [documents, setDocuments] = useState([]);
   const [paiements, setPaiements] = useState([]);
 
@@ -74,21 +133,36 @@ export default function Paiements() {
     setTimeout(() => setNotification(null), 3000);
   }, []);
 
-  /* ===== Calcul total d’un document (compatible Achats multi-lots) =====
-     - Pour achats: نأخذ a.recu (إن وُجد) وإلا a.commandee
-     - prix = prixAchat || prixUnitaire
-     - total = Σ (prix * quantite - remise) - remiseGlobale
+  /* ===== Calcul total d’un document =====
+     ACHATS  ➜ somme EXCLUSIVE des lignes "reçues" (a.recu)   ✅
+     VENTES  ➜ somme des lignes (prixUnitaire|prixVente) * quantite
+     total = Σ(...) - remiseGlobale
   */
   const getTotalDoc = useCallback(
     (docu) => {
       if (!docu || !Array.isArray(docu.articles) || docu.articles.length === 0) return 0;
-      const lignes = docu.articles.map((a) => a?.recu || a?.commandee || a || {});
+
+      if (relatedTo === "achats") {
+        // ✅ Seules les lignes recues comptent
+        const lignesRecues = docu.articles
+          .map((a) => a?.recu || null)
+          .filter((r) => r && Number(r.quantite || 0) > 0);
+
+        const total = lignesRecues.reduce((sum, r) => {
+          const qte = Number(r.quantite || 0);
+          const prix = Number(r.prixAchat || r.prixUnitaire || 0);
+          const remise = Number(r.remise || 0);
+          return sum + (qte * prix - remise);
+        }, 0);
+
+        return total - (Number(docu.remiseGlobale) || 0);
+      }
+
+      // ventes (ou autres) : comportement standard
+      const lignes = docu.articles.map((a) => a || {});
       const total = lignes.reduce((sum, item) => {
         const qte = Number(item.quantite || 0);
-        const prix =
-          relatedTo === "achats"
-            ? Number(item.prixAchat || item.prixUnitaire || 0)
-            : Number(item.prixUnitaire || item.prixVente || 0);
+        const prix = Number(item.prixUnitaire || item.prixVente || 0);
         const remise = Number(item.remise || 0);
         return sum + (qte * prix - remise);
       }, 0);
@@ -97,14 +171,57 @@ export default function Paiements() {
     [relatedTo]
   );
 
-  /* ===== Groupage paiements par doc ===== */
-  const paiementsByDoc = {};
-  paiements.forEach((p) => {
-    if (!paiementsByDoc[p.docId]) paiementsByDoc[p.docId] = [];
-    paiementsByDoc[p.docId].push(p);
-  });
+  /* ===== Groupage paiements par doc (mémoisé) ===== */
+  const paiementsByDoc = useMemo(() => {
+    const b = {};
+    paiements.forEach((p) => {
+      if (!b[p.docId]) b[p.docId] = [];
+      b[p.docId].push(p);
+    });
+    return b;
+  }, [paiements]);
 
-  /* ===== Listeners: documents (achats/ventes) ===== */
+  /* ===== Index des documents (pour affichage nom + N° + totaux/solde) ===== */
+  const docIndex = useMemo(() => {
+    const m = {};
+    documents.forEach((d) => {
+      const idShort = String(d.id).slice(0, 8).toUpperCase();
+      const numberStr = `#${idShort}`;
+      const dateStr = (d.date && formatDate(d.date)) || (d.timestamp && formatDate(d.timestamp)) || "—";
+      const total = getTotalDoc(d);
+      const paid = (paiementsByDoc[d.id] || []).reduce((s, p) => s + (Number(p.montant) || 0), 0);
+      const solde = total - paid;
+
+      const fournisseur = d.fournisseur || ""; // pour achats
+      const client = d.client || d.patient || ""; // pour ventes
+      const name =
+        relatedTo === "achats"
+          ? (fournisseur || "Fournisseur inconnu")
+          : (client || "Client inconnu");
+
+      const label = relatedTo === "achats"
+        ? `${name} • Achat ${numberStr}`
+        : `${name} • Vente ${numberStr}`;
+
+      m[d.id] = {
+        id: d.id,
+        numberStr,
+        dateStr,
+        name,
+        label,
+        total,
+        paid,
+        solde,
+        raw: d,
+      };
+    });
+    return m;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [documents, paiementsByDoc, getTotalDoc, relatedTo]);
+
+  /* ===== Listeners: documents (achats/ventes) =====
+     ➜ Achats: ne garder que statutReception ∈ {"reçu","partiel"}  ✅
+  */
   const loadDocuments = useCallback(() => {
     if (!societeId) return;
     if (documentsUnsubRef.current) documentsUnsubRef.current();
@@ -116,17 +233,21 @@ export default function Paiements() {
         const arr = [];
         snap.forEach((d) => {
           const data = d.data();
-          // accepter soit a.quantite (ventes), soit a.commandee.quantite/recu.quantite (achats)
-          const okArticles =
-            Array.isArray(data.articles) &&
-            data.articles.some(
-              (a) =>
-                typeof a?.quantite === "number" ||
-                typeof a?.commandee?.quantite === "number" ||
-                typeof a?.recu?.quantite === "number"
-            );
-        if (okArticles) arr.push({ id: d.id, ...data });
+
+          // Articles présents (compat)
+          const okArticles = Array.isArray(data.articles) && data.articles.length > 0;
+
+          if (!okArticles) return;
+
+          if (relatedTo === "achats") {
+            const statut = (data.statutReception || "en_attente").toLowerCase();
+            // ✅ N'afficher que reçus/partiels (exclure en_attente et annulé)
+            if (!["reçu", "recu", "partiel"].includes(statut)) return;
+          }
+
+          arr.push({ id: d.id, ...data });
         });
+
         arr.sort((a, b) => {
           const sa = secondsFromAnyDate(a.date) || secondsFromAnyDate(a.timestamp);
           const sb = secondsFromAnyDate(b.date) || secondsFromAnyDate(b.timestamp);
@@ -235,7 +356,7 @@ export default function Paiements() {
           const nouveauTotal = dejaPaye - ancien + montantNum;
           if (nouveauTotal > totalDoc)
             return showNotification(
-              `Le total payé (${nouveauTotal} DH) dépasse le total du document (${totalDoc} DH)`,
+              `Le total payé (${nouveauTotal.toFixed(2)} DH) dépasse le total du document (${totalDoc.toFixed(2)} DH)`,
               "error"
             );
 
@@ -269,7 +390,7 @@ export default function Paiements() {
           const nouveauTotal = dejaPaye + montantNum;
           if (nouveauTotal > totalDoc)
             return showNotification(
-              `Le total payé (${nouveauTotal} DH) dépasse le total du document (${totalDoc} DH)`,
+              `Le total payé (${nouveauTotal.toFixed(2)} DH) dépasse le total du document (${totalDoc.toFixed(2)} DH)`,
               "error"
             );
 
@@ -376,14 +497,16 @@ export default function Paiements() {
   };
 
   /* ===== Filtrage docs (paid/due) ===== */
-  const docsAffiches = documents.filter((d) => {
-    const total = getTotalDoc(d);
-    const paid = (paiementsByDoc[d.id] || []).reduce((s, p) => s + (Number(p.montant) || 0), 0);
-    const solde = total - paid;
-    if (filterStatus === "paid") return solde <= 0;
-    if (filterStatus === "due") return solde > 0;
-    return true;
-  });
+  const docsAffiches = useMemo(() => {
+    return documents.filter((d) => {
+      const total = getTotalDoc(d);
+      const paid = (paiementsByDoc[d.id] || []).reduce((s, p) => s + (Number(p.montant) || 0), 0);
+      const solde = total - paid;
+      if (filterStatus === "paid") return solde <= 0;
+      if (filterStatus === "due") return solde > 0;
+      return true;
+    });
+  }, [documents, getTotalDoc, paiementsByDoc, filterStatus]);
 
   /* ===== UI ===== */
   if (waiting) return <div style={{ padding: 20 }}>Chargement des paiements…</div>;
@@ -391,217 +514,175 @@ export default function Paiements() {
   if (!societeId) return <div style={{ padding: 20, color: "#e11d48" }}>Aucune société.</div>;
 
   return (
-    <div style={{ padding: 20, maxWidth: 1200, margin: "0 auto" }}>
-      {notification && (
-        <div
-          style={{
-            padding: 12,
-            marginBottom: 12,
-            borderRadius: 10,
-            color: "white",
-            background:
-              notification.type === "error"
-                ? "#ef4444"
-                : notification.type === "info"
-                ? "#3b82f6"
-                : "#22c55e",
-          }}
-        >
-          {notification.message}
+    <div className="pay-page">
+      {/* En-tête */}
+      <div className="header">
+        <h1>Gestion des Paiements</h1>
+        <div className="sub">
+          Règlements & soldes — {relatedTo === "achats" ? "Bons d'achat reçus uniquement" : "Ventes"}
         </div>
-      )}
-
-      <h2 style={{ margin: 0 ,color:"black" }}>💳 Paiements</h2>
-      <div style={{ display: "flex", gap: 10, margin: "12px 0" }}>
-        <button
-          onClick={() => setRelatedTo("achats")}
-          style={{
-            padding: "8px 12px",
-            borderRadius: 8,
-            border: "1px solid #e5e7eb",
-            background: relatedTo === "achats" ? "#10b981" : "white",
-            color: relatedTo === "achats" ? "white" : "#111827",
-            cursor: "pointer",
-          }}
-        >
-          Achats
-        </button>
-        <button
-          onClick={() => setRelatedTo("ventes")}
-          style={{
-            padding: "8px 12px",
-            borderRadius: 8,
-            border: "1px solid #e5e7eb",
-            background: relatedTo === "ventes" ? "#10b981" : "white",
-            color: relatedTo === "ventes" ? "white" : "#111827",
-            cursor: "pointer",
-          }}
-        >
-          Ventes
-        </button>
-
-        <select
-          value={filterStatus}
-          onChange={(e) => setFilterStatus(e.target.value)}
-          style={{ marginLeft: "auto", padding: 8, borderRadius: 8, border: "1px solid #e5e7eb" }}
-        >
-          <option value="all">Tous</option>
-          <option value="paid">Payés</option>
-          <option value="due">Avec solde</option>
-        </select>
       </div>
 
-      {/* Form paiement */}
-      <form
-        onSubmit={handleSavePaiement}
-        style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr auto", gap: 10, margin: "10px 0" }}
-      >
-        <select
-          required
-          value={selectedDoc}
-          onChange={(e) => handleSelectDoc(e.target.value)}
-          style={{ padding: 8, borderRadius: 8, border: "1px solid #e5e7eb" }}
-        >
-          <option value="">-- Choisir un document --</option>
-          {docsAffiches.map((d) => {
-            const total = getTotalDoc(d);
-            const paid = (paiementsByDoc[d.id] || []).reduce((s, p) => s + (Number(p.montant) || 0), 0);
-            const solde = total - paid;
-            const dateStr =
-              (d.date && formatDate(d.date)) || (d.timestamp && formatDate(d.timestamp)) || "";
-            return (
-              <option key={d.id} value={d.id}>
-                {relatedTo === "achats" ? "Achat" : "Vente"} #{d.id.slice(0, 8)} • {dateStr} • Total {total.toFixed(2)} DH • Reste {solde.toFixed(2)} DH
-              </option>
-            );
-          })}
-        </select>
+      {/* Notifications */}
+      {notification && (
+        <div className={`notice ${notification.type || "success"}`}>{notification.message}</div>
+      )}
 
-        <input
-          type="number"
-          step="0.01"
-          placeholder="Montant (DH)"
-          value={montant}
-          onChange={(e) => setMontant(e.target.value)}
-          required
-          style={{ padding: 8, borderRadius: 8, border: "1px solid #e5e7eb" }}
-        />
-
-        <select
-          value={mode}
-          onChange={(e) => setMode(e.target.value)}
-          style={{ padding: 8, borderRadius: 8, border: "1px solid #e5e7eb" }}
-        >
-          <option>Espèces</option>
-          <option>Carte</option>
-          <option>Virement</option>
-          <option>Chèque</option>
-        </select>
-
-        <button
-          type="submit"
-          style={{
-            padding: "8px 12px",
-            borderRadius: 8,
-            border: "1px solid #e5e7eb",
-            background: "#4f46e5",
-            color: "white",
-            cursor: "pointer",
-            fontWeight: 600,
-          }}
-        >
-          {editingPaiement ? "Modifier" : "Enregistrer"}
-        </button>
-
-        {editingPaiement && (
+      {/* Onglets + filtre */}
+      <div className="card">
+        <div className="controls" style={{ marginBottom: 12 }}>
           <button
-            type="button"
-            onClick={() => {
-              setEditingPaiement(null);
-              setSelectedDoc("");
-              setMontant("");
-            }}
-            style={{
-              padding: "8px 12px",
-              borderRadius: 8,
-              border: "1px solid #e5e7eb",
-              background: "#f59e0b",
-              color: "white",
-              cursor: "pointer",
-              fontWeight: 600,
-            }}
+            onClick={() => setRelatedTo("achats")}
+            className={`btn ${relatedTo === "achats" ? "active" : ""}`}
           >
-            Annuler
+            Achats (reçus)
           </button>
-        )}
-      </form>
+          <button
+            onClick={() => setRelatedTo("ventes")}
+            className={`btn ${relatedTo === "ventes" ? "active" : ""}`}
+          >
+            Ventes
+          </button>
 
-      {/* Liste paiements */}
-      <div style={{ marginTop: 20, borderTop: "1px solid #e5e7eb", paddingTop: 10 }}>
-        <h3 style={{ margin: 0, color:"red" }}>Historique des paiements</h3>
-        <div style={{ display: "grid", gap: 8, marginTop: 8 }}>
-          {paiements.map((p) => {
-            const d = documents.find((x) => x.id === p.docId);
-            const total = getTotalDoc(d);
-            const deja = (paiementsByDoc[p.docId] || []).reduce((s, x) => s + (Number(x.montant) || 0), 0);
-            const solde = total - deja;
+          <select
+            value={filterStatus}
+            onChange={(e) => setFilterStatus(e.target.value)}
+            className="select"
+            style={{ marginLeft: "auto" }}
+          >
+            <option value="all">Tous</option>
+            <option value="paid">Payés</option>
+            <option value="due">Avec solde</option>
+          </select>
+        </div>
 
-            return (
-              <div
-                key={p.id}
-                style={{
-                  padding: 10,
-                  border: "1px solid #e5e7eb",
-                  borderRadius: 10,
-                  display: "grid",
-                  gridTemplateColumns: "1fr auto auto auto",
-                  alignItems: "center",
-                  gap: 10,
-                }}
-              >
-                <div>
-                  <div style={{ fontWeight: 700 }}>
-                    {relatedTo === "achats" ? "Achat" : "Vente"} #{p.docId?.slice(0, 8)}
-                  </div>
-                  <div style={{ fontSize: 12, color: "#6b7280" }}>
-                    {formatDate(p.date)} • {p.mode}
-                  </div>
-                </div>
-                <div style={{ fontWeight: 700 }}>{Number(p.montant).toFixed(2)} DH</div>
-                <div style={{ fontSize: 12, color: solde <= 0 ? "#10b981" : "#ef4444" }}>
-                  Solde: {solde.toFixed(2)} DH
-                </div>
-                <div style={{ display: "flex", gap: 6 }}>
-                  <button
-                    onClick={() => handleEditPaiement(p)}
-                    style={{
-                      padding: "6px 10px",
-                      borderRadius: 8,
-                      border: "1px solid #e5e7eb",
-                     
-                      cursor: "pointer",
-                    }}
-                  >
-                    Modifier
-                  </button>
-                  <button
-                    onClick={() => handleDeletePaiement(p)}
-                    style={{
-                      padding: "6px 10px",
-                      borderRadius: 8,
-                      border: "1px solid #e5e7eb",
-                      background: "#ef4444",
-                      color: "white",
-                      cursor: "pointer",
-                    }}
-                  >
-                    Supprimer
-                  </button>
-                </div>
-              </div>
-            );
-          })}
-          {paiements.length === 0 && <div style={{ color: "#6b7280" }}>Aucun paiement.</div>}
+        {/* Form paiement */}
+        <form onSubmit={handleSavePaiement} className="grid-form">
+          <select
+            required
+            value={selectedDoc}
+            onChange={(e) => handleSelectDoc(e.target.value)}
+            className="select"
+          >
+            <option value="">-- Choisir un document --</option>
+            {docsAffiches.map((d) => {
+              const meta = docIndex[d.id];
+              const statutRec = (d.statutReception || "en_attente").toLowerCase();
+              const statutLabel =
+                statutRec === "reçu" || statutRec === "recu" ? "Réception complète" :
+                statutRec === "partiel" ? "Réception partielle" :
+                "—";
+
+              const optLabel = meta
+                ? `${meta.name} • Achat ${meta.numberStr} • ${statutLabel} • ${meta.dateStr} • Total ${meta.total.toFixed(2)} DH • Reste ${(meta.solde).toFixed(2)} DH`
+                : `Achat #${String(d.id).slice(0,8).toUpperCase()}`;
+              return (
+                <option key={d.id} value={d.id}>
+                  {optLabel}
+                </option>
+              );
+            })}
+          </select>
+
+          <input
+            type="number"
+            step="0.01"
+            placeholder="Montant (DH)"
+            value={montant}
+            onChange={(e) => setMontant(e.target.value)}
+            required
+            className="field"
+          />
+
+          <select value={mode} onChange={(e) => setMode(e.target.value)} className="select">
+            <option>Espèces</option>
+            <option>Carte</option>
+            <option>Virement</option>
+            <option>Chèque</option>
+          </select>
+
+          <button type="submit" className="btn primary">
+            {editingPaiement ? "Modifier" : "Enregistrer"}
+          </button>
+
+          {editingPaiement && (
+            <button
+              type="button"
+              onClick={() => {
+                setEditingPaiement(null);
+                setSelectedDoc("");
+                setMontant("");
+              }}
+              className="btn warn"
+            >
+              Annuler
+            </button>
+          )}
+        </form>
+      </div>
+
+      {/* Historique paiements (TABLE + scroll horizontal) */}
+      <div className="card">
+        <h3 style={{ marginTop: 0, marginBottom: 10 }}>Historique des paiements</h3>
+        <div className="table-scroll">
+          <table className="table">
+            <thead>
+              <tr>
+                <th className="left">Document</th>
+                <th>Nom</th>
+                <th>N°</th>
+                <th>Date</th>
+                <th>Mode</th>
+                <th>Montant</th>
+                <th>Total Doc</th>
+                <th>Déjà payé</th>
+                <th>Solde</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {paiements.map((p) => {
+                // NB: Si l'onglet change, on continue d'afficher les paiements de ce type (filter by type déjà appliqué en listener)
+                const meta = docIndex[p.docId];
+                const name = meta?.name || (relatedTo === "achats" ? "Fournisseur inconnu" : "Client inconnu");
+                const numberStr = meta?.numberStr || `#${String(p.docId || "").slice(0,8).toUpperCase()}`;
+                const total = meta?.total ?? 0;
+                const deja = (paiementsByDoc[p.docId] || []).reduce((s, x) => s + (Number(x.montant) || 0), 0);
+                const solde = total - deja;
+
+                return (
+                  <tr key={p.id}>
+                    <td className="left">
+                      <span className="chip">{relatedTo === "achats" ? "Achat reçu" : "Vente"}</span>
+                    </td>
+                    <td className="left">{name}</td>
+                    <td>{numberStr}</td>
+                    <td className="muted">{formatDate(p.date)}</td>
+                    <td>{p.mode}</td>
+                    <td className="money">{Number(p.montant).toFixed(2)} DH</td>
+                    <td>{total.toFixed(2)} DH</td>
+                    <td>{deja.toFixed(2)} DH</td>
+                    <td className={solde <= 0 ? "ok" : "due"}>
+                      {solde.toFixed(2)} DH
+                    </td>
+                    <td>
+                      <div style={{ display: "flex", gap: 6, justifyContent: "center" }}>
+                        <button className="btn" onClick={() => handleEditPaiement(p)}>Modifier</button>
+                        <button className="btn danger" onClick={() => handleDeletePaiement(p)}>Supprimer</button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+              {paiements.length === 0 && (
+                <tr>
+                  <td colSpan={10} className="muted" style={{ textAlign: "center", padding: 16 }}>
+                    Aucun paiement.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
         </div>
       </div>
     </div>

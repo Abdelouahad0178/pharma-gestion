@@ -1,8 +1,14 @@
 // src/contexts/UserRoleContext.js
-import React, { createContext, useContext, useState, useEffect } from "react";
+import React, {
+  createContext,
+  useContext,
+  useState,
+  useEffect,
+  useRef,
+} from "react";
 import { getAuth, onAuthStateChanged } from "firebase/auth";
 import { doc, getDoc, onSnapshot } from "firebase/firestore";
-import { db } from "../firebase/config";
+import { db, disableFirestoreNetwork, enableFirestoreNetwork } from "../firebase/config";
 
 // Création du contexte
 const UserRoleContext = createContext();
@@ -11,74 +17,103 @@ const UserRoleContext = createContext();
 export function useUserRole() {
   const context = useContext(UserRoleContext);
   if (!context) {
-    throw new Error('useUserRole doit être utilisé dans un UserRoleProvider');
+    throw new Error("useUserRole doit être utilisé dans un UserRoleProvider");
   }
   return context;
 }
 
 // Provider du contexte
 export function UserRoleProvider({ children }) {
+  // --- États principaux ---
   const [role, setRole] = useState(null);
   const [user, setUser] = useState(null);
   const [societeId, setSocieteId] = useState(null);
   const [societeName, setSocieteName] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [authReady, setAuthReady] = useState(false);
+
+  // --- États sécurité / statut ---
   const [isLocked, setIsLocked] = useState(false);
   const [isDeleted, setIsDeleted] = useState(false);
   const [isOwner, setIsOwner] = useState(false);
-  const [adminPopup, setAdminPopup] = useState(null);
-  const [paymentWarning, setPaymentWarning] = useState(null);
   const [isActive, setIsActive] = useState(true);
 
-  // État pour éviter les déconnexions intempestives
-  const [authReady, setAuthReady] = useState(false);
+  // --- Notifications ---
+  const [adminPopup, setAdminPopup] = useState(null);
+  const [paymentWarning, setPaymentWarning] = useState(null);
 
+  // --- Refs pour garantir 1 seul listener actif ---
+  const authUnsubRef = useRef(null);
+  const userUnsubRef = useRef(null);
+  const socUnsubRef = useRef(null);
+
+  // Utilitaire : reset réseau si “Target ID already exists”
+  const tryRecoverWatchError = async (err) => {
+    const msg = String(err?.message || "");
+    if (msg.includes("Target ID already exists")) {
+      try {
+        await disableFirestoreNetwork();
+        await enableFirestoreNetwork();
+      } catch (_) {
+        /* ignore */
+      }
+    }
+  };
+
+  // =========================
+  // Écoute de l'auth Firebase
+  // =========================
   useEffect(() => {
     const auth = getAuth();
-    let unsubscribeUser = null;
 
-    const unsubscribeAuth = onAuthStateChanged(auth, async (firebaseUser) => {
-      // Marquer que Firebase Auth est prêt
+    // Évite multi-subscription si HMR/StrictMode
+    if (authUnsubRef.current) {
+      authUnsubRef.current();
+      authUnsubRef.current = null;
+    }
+
+    authUnsubRef.current = onAuthStateChanged(auth, async (firebaseUser) => {
       setAuthReady(true);
-      
-      // Nettoyer l'ancien listener s'il existe
-      if (unsubscribeUser) {
-        unsubscribeUser();
-        unsubscribeUser = null;
+
+      // Toujours nettoyer l'ancienne écoute user avant de (re)créer
+      if (userUnsubRef.current) {
+        userUnsubRef.current();
+        userUnsubRef.current = null;
+      }
+      // Nettoyer écoute société si on change d'utilisateur ou déconnexion
+      if (socUnsubRef.current) {
+        socUnsubRef.current();
+        socUnsubRef.current = null;
       }
 
       if (firebaseUser) {
         try {
-          // Écouter les changements du document utilisateur en temps réel
           const userRef = doc(db, "users", firebaseUser.uid);
 
-          unsubscribeUser = onSnapshot(
+          // Unique onSnapshot utilisateur
+          userUnsubRef.current = onSnapshot(
             userRef,
             async (snap) => {
               if (snap.exists()) {
                 const data = snap.data();
 
-                // ⚠️ CRITIQUE: Ne pas déconnecter automatiquement si deleted
-                // Laisser l'admin gérer la déconnexion manuellement
                 if (data.deleted === true) {
                   console.log("[auth] Utilisateur marqué comme supprimé");
                   setIsDeleted(true);
-                  // ❌ NE PAS FAIRE: await signOut(auth); 
-                  // Laisser l'utilisateur connecté mais avec accès restreint
                 } else {
                   setIsDeleted(false);
                 }
 
-                // Mise à jour des états utilisateur
+                // Mettre à jour états
                 setRole(data.role || "vendeuse");
                 setSocieteId(data.societeId || null);
                 setIsLocked(data.locked === true || data.isLocked === true);
-                setIsOwner(data.isOwner === true); // ✅ État propriétaire
+                setIsOwner(data.isOwner === true);
                 setIsActive(data.active !== false && data.isActive !== false);
                 setAdminPopup(data.adminPopup || null);
                 setPaymentWarning(data.paymentWarning || null);
 
-                // Construire l'objet utilisateur enrichi
+                // Objet utilisateur enrichi
                 setUser({
                   ...firebaseUser,
                   ...data,
@@ -86,20 +121,20 @@ export function UserRoleProvider({ children }) {
                   role: data.role || "vendeuse",
                   locked: data.locked === true || data.isLocked === true,
                   deleted: data.deleted === true,
-                  isOwner: data.isOwner === true, // ✅ Propriétaire
+                  isOwner: data.isOwner === true,
                   active: data.active !== false && data.isActive !== false,
                   adminPopup: data.adminPopup || null,
                   paymentWarning: data.paymentWarning || null,
                 });
               } else {
-                // Document n'existe pas - créer avec des valeurs par défaut
-                console.log("[auth] Document utilisateur n'existe pas, création avec défauts");
+                // Document utilisateur absent → valeurs par défaut
+                console.log("[auth] Document utilisateur absent → défauts");
                 const defaultData = {
                   role: "vendeuse",
                   societeId: null,
                   locked: false,
                   deleted: false,
-                  isOwner: false, // ✅ Pas propriétaire par défaut
+                  isOwner: false,
                   active: true,
                   adminPopup: null,
                   paymentWarning: null,
@@ -119,101 +154,110 @@ export function UserRoleProvider({ children }) {
                   ...defaultData,
                 });
               }
-              
-              // ✅ IMPORTANT: Marquer le chargement comme terminé SEULEMENT ici
+
               setLoading(false);
             },
-            (error) => {
+            async (error) => {
               console.error("Erreur lors de l'écoute du document utilisateur:", error);
-              
-              // En cas d'erreur de permissions, ne pas déconnecter
-              if (error.code === 'permission-denied') {
-                console.warn("[auth] Permission refusée - accès restreint mais pas de déconnexion");
-                // Définir des valeurs par défaut restrictives
+
+              // Permissions refusées → valeurs restrictives mais pas de déconnexion
+              if (error?.code === "permission-denied") {
                 setRole("vendeuse");
                 setSocieteId(null);
-                setIsLocked(true); // Verrouillé par sécurité
+                setIsLocked(true);
                 setIsDeleted(false);
-                setIsOwner(false); // ✅ Pas propriétaire en cas d'erreur
-                setIsActive(false); // Désactivé par sécurité
+                setIsOwner(false);
+                setIsActive(false);
                 setAdminPopup("Erreur de permissions - contactez l'administrateur");
                 setPaymentWarning(null);
-                
+
                 setUser({
                   ...firebaseUser,
                   societeId: null,
                   role: "vendeuse",
                   locked: true,
                   deleted: false,
-                  isOwner: false, // ✅ Pas propriétaire en cas d'erreur
+                  isOwner: false,
                   active: false,
                   adminPopup: "Erreur de permissions - contactez l'administrateur",
                   paymentWarning: null,
                 });
               } else {
-                // Pour d'autres erreurs, définir des valeurs par défaut normales
                 console.warn("[auth] Erreur réseau ou autre, valeurs par défaut");
                 setRole("vendeuse");
                 setSocieteId(null);
                 setIsLocked(false);
                 setIsDeleted(false);
-                setIsOwner(false); // ✅ Pas propriétaire par défaut
+                setIsOwner(false);
                 setIsActive(true);
                 setAdminPopup(null);
                 setPaymentWarning(null);
-                
+
                 setUser({
                   ...firebaseUser,
                   societeId: null,
                   role: "vendeuse",
                   locked: false,
                   deleted: false,
-                  isOwner: false, // ✅ Pas propriétaire par défaut
+                  isOwner: false,
                   active: true,
                   adminPopup: null,
                   paymentWarning: null,
                 });
               }
-              
+
               setLoading(false);
+              await tryRecoverWatchError(error);
             }
           );
         } catch (e) {
-          console.error("Erreur lors de l'initialisation de l'écoute utilisateur:", e);
-          
-          // Valeurs par défaut en cas d'erreur critique
+          console.error("Erreur init écoute utilisateur:", e);
+
+          // Valeurs par défaut en cas d’erreur init
           setRole("vendeuse");
           setSocieteId(null);
           setIsLocked(false);
           setIsDeleted(false);
-          setIsOwner(false); // ✅ Pas propriétaire par défaut
+          setIsOwner(false);
           setIsActive(true);
           setAdminPopup(null);
           setPaymentWarning(null);
-          
+
           setUser({
             ...firebaseUser,
             societeId: null,
             role: "vendeuse",
             locked: false,
             deleted: false,
-            isOwner: false, // ✅ Pas propriétaire par défaut
+            isOwner: false,
             active: true,
             adminPopup: null,
             paymentWarning: null,
           });
-          
+
           setLoading(false);
+          await tryRecoverWatchError(e);
         }
       } else {
-        // ✅ Utilisateur vraiment déconnecté (pas de token Firebase)
+        // Déconnexion réelle
         console.log("[auth] Utilisateur déconnecté de Firebase Auth");
+
+        // Nettoyage listeners associés
+        if (userUnsubRef.current) {
+          userUnsubRef.current();
+          userUnsubRef.current = null;
+        }
+        if (socUnsubRef.current) {
+          socUnsubRef.current();
+          socUnsubRef.current = null;
+        }
+
         setRole(null);
         setSocieteId(null);
         setUser(null);
         setIsLocked(false);
         setIsDeleted(false);
-        setIsOwner(false); // ✅ Pas propriétaire si déconnecté
+        setIsOwner(false);
         setIsActive(true);
         setAdminPopup(null);
         setPaymentWarning(null);
@@ -222,35 +266,55 @@ export function UserRoleProvider({ children }) {
       }
     });
 
+    // Cleanup global de l’écoute auth
     return () => {
-      unsubscribeAuth();
-      if (unsubscribeUser) {
-        unsubscribeUser();
+      if (authUnsubRef.current) {
+        authUnsubRef.current();
+        authUnsubRef.current = null;
+      }
+      if (userUnsubRef.current) {
+        userUnsubRef.current();
+        userUnsubRef.current = null;
+      }
+      if (socUnsubRef.current) {
+        socUnsubRef.current();
+        socUnsubRef.current = null;
       }
     };
   }, []);
 
-  // Résoudre le nom de la société
+  // =========================
+  // Écoute du document société
+  // =========================
   useEffect(() => {
-    let unsubscribeSociete = null;
+    // Toujours nettoyer l'ancien listener société
+    if (socUnsubRef.current) {
+      socUnsubRef.current();
+      socUnsubRef.current = null;
+    }
     setSocieteName(null);
 
     if (!user || !societeId || isDeleted) {
       return () => {
-        if (unsubscribeSociete) unsubscribeSociete();
+        if (socUnsubRef.current) {
+          socUnsubRef.current();
+          socUnsubRef.current = null;
+        }
       };
     }
 
     try {
       const ref = doc(db, "societe", societeId);
-      unsubscribeSociete = onSnapshot(
+
+      // Unique onSnapshot société
+      socUnsubRef.current = onSnapshot(
         ref,
         async (snap) => {
           if (snap.exists()) {
             const data = snap.data();
             setSocieteName(data?.nom || data?.name || "Société");
           } else {
-            // Fallback pour anciens projets
+            // Fallback (ancienne collection "societes")
             try {
               const oldRef = doc(db, "societes", societeId);
               const oldSnap = await getDoc(oldRef);
@@ -265,9 +329,10 @@ export function UserRoleProvider({ children }) {
             }
           }
         },
-        (err) => {
+        async (err) => {
           console.warn("Erreur écoute société:", err);
           setSocieteName("Société (erreur de chargement)");
+          await tryRecoverWatchError(err);
         }
       );
     } catch (e) {
@@ -275,43 +340,41 @@ export function UserRoleProvider({ children }) {
       setSocieteName("Société (erreur)");
     }
 
+    // Cleanup
     return () => {
-      if (unsubscribeSociete) unsubscribeSociete();
+      if (socUnsubRef.current) {
+        socUnsubRef.current();
+        socUnsubRef.current = null;
+      }
     };
   }, [user, societeId, isDeleted]);
 
-  // ✅ Permissions avec vérifications de sécurité et gestion propriétaire
+  // =========================
+  // Permissions & Helpers
+  // =========================
   const can = (permission) => {
-    // Si l'utilisateur est supprimé, aucune permission
     if (isDeleted || !user || !authReady) return false;
-    
-    // Si compte verrouillé et pas propriétaire, aucune permission
     if (isLocked && !isOwner) return false;
-    
-    // Si compte inactif et pas propriétaire, aucune permission  
     if (!isActive && !isOwner) return false;
-    
-    // 🔑 PERMISSIONS SPÉCIALES PROPRIÉTAIRE UNIQUEMENT
+
     const ownerOnlyPermissions = [
       "gerer_utilisateurs",
-      "modifier_roles", 
+      "modifier_roles",
       "voir_gestion_utilisateurs",
       "promouvoir_utilisateur",
-      "retrograder_utilisateur"
+      "retrograder_utilisateur",
     ];
-    
-    // Si c'est une permission propriétaire, vérifier strictement
+
     if (ownerOnlyPermissions.includes(permission)) {
       return isOwner && role === "docteur" && !isDeleted && isActive && authReady;
     }
-    
-    // Le propriétaire peut TOUT faire (même si techniquement verrouillé par erreur)
+
     if (isOwner && user && !isDeleted) return true;
-    
+
     const rolePermissions = {
       docteur: [
         "voir_achats",
-        "voir_ventes", 
+        "voir_ventes",
         "ajouter_stock",
         "parametres",
         "modifier_stock",
@@ -320,63 +383,39 @@ export function UserRoleProvider({ children }) {
         "voir_paiements",
         "voir_dashboard",
         "voir_invitations",
-        // ❌ RETIRÉ: "gerer_utilisateurs" maintenant réservé au propriétaire
       ],
-      vendeuse: [
-        "voir_ventes", 
-        "ajouter_vente", 
-        "voir_stock", 
-        "voir_invitations",
-        "voir_dashboard"
-      ],
+      vendeuse: ["voir_ventes", "ajouter_vente", "voir_stock", "voir_invitations", "voir_dashboard"],
     };
-    
+
     if (!role) return false;
     return (rolePermissions[role] || []).includes(permission);
   };
 
-  // ✅ Vérifier l'accès global à l'application
   const canAccessApp = () => {
     if (!user || !authReady) return false;
-    if (isDeleted) return false; // Compte supprimé = pas d'accès
-    if (!isActive && !isOwner) return false; // Compte inactif (sauf propriétaire)
-    if (isLocked && !isOwner) return false; // Compte verrouillé (sauf propriétaire)
+    if (isDeleted) return false;
+    if (!isActive && !isOwner) return false;
+    if (isLocked && !isOwner) return false;
     return true;
   };
 
-  // 🔑 PERMISSIONS DE GESTION STRICTEMENT PROPRIÉTAIRE
   const canManageUsers = () => {
     return isOwner && user && !isDeleted && isActive && authReady && role === "docteur";
   };
-
   const canChangeRoles = () => {
     return isOwner && user && !isDeleted && isActive && authReady && role === "docteur";
   };
-
   const canDeleteSociete = () => {
     return isOwner && user && !isDeleted && isActive && authReady && role === "docteur";
   };
+  const canPromoteToOwner = () => false;
+  const canDeleteOwner = () => false;
+  const canLockOwner = () => false;
 
-  // ❌ Impossible de promouvoir quelqu'un d'autre propriétaire
-  const canPromoteToOwner = () => {
-    return false;
-  };
-
-  // ❌ Impossible de supprimer le propriétaire
-  const canDeleteOwner = () => {
-    return false;
-  };
-
-  // ❌ Impossible de verrouiller le propriétaire
-  const canLockOwner = () => {
-    return false;
-  };
-
-  // ✅ Contrôle strict des modifications utilisateur
   const canModifyUser = (targetUserId, targetUserIsOwner = false) => {
     if (!canManageUsers()) return false;
-    if (targetUserIsOwner) return false; // Propriétaire intouchable
-    if (targetUserId === user?.uid) return false; // Pas d'auto-modification
+    if (targetUserIsOwner) return false;
+    if (targetUserId === user?.uid) return false;
     return true;
   };
 
@@ -388,24 +427,22 @@ export function UserRoleProvider({ children }) {
     return true;
   };
 
-  // 🔑 FONCTIONS SPÉCIFIQUES GESTION DES RÔLES
   const canPromoteToDoctor = (targetUserId, targetUserIsOwner = false, currentRole) => {
     if (!canChangeRoles()) return false;
     if (targetUserIsOwner) return false;
     if (targetUserId === user?.uid) return false;
-    if (currentRole !== "vendeuse") return false; // Seulement vendeuse → docteur
+    if (currentRole !== "vendeuse") return false;
     return true;
   };
 
   const canDemoteToVendeuse = (targetUserId, targetUserIsOwner = false, currentRole) => {
     if (!canChangeRoles()) return false;
-    if (targetUserIsOwner) return false; // Propriétaire ne peut pas être rétrogradé
+    if (targetUserIsOwner) return false;
     if (targetUserId === user?.uid) return false;
-    if (currentRole !== "docteur") return false; // Seulement docteur → vendeuse
+    if (currentRole !== "docteur") return false;
     return true;
   };
 
-  // ✅ Messages informatifs
   const getBlockMessage = () => {
     if (!user || !authReady) return "Connexion en cours...";
     if (isDeleted) return "Ce compte a été supprimé par l'administrateur";
@@ -414,90 +451,51 @@ export function UserRoleProvider({ children }) {
     return null;
   };
 
-  const isAdmin = () => {
-    return role === "docteur" && canAccessApp();
-  };
+  const isAdmin = () => role === "docteur" && canAccessApp();
+  const isSuperAdmin = () => isOwner && canAccessApp();
 
-  const isSuperAdmin = () => {
-    return isOwner && canAccessApp();
-  };
-
-  const getUserStats = () => {
-    return {
-      isConnected: !!user && authReady,
-      isActive,
-      isLocked,
-      isDeleted,
-      isOwner,
-      role,
-      societeId,
-      hasAccess: canAccessApp(),
-      blockReason: getBlockMessage(),
-      authReady,
-      privileges: {
-        canManageUsers: canManageUsers(),
-        canChangeRoles: canChangeRoles(),
-        canDeleteSociete: canDeleteSociete(),
-        isUntouchable: isOwner,
-        canPromoteUsers: canChangeRoles(),
-        canDemoteUsers: canChangeRoles(),
-      }
-    };
-  };
+  const getUserStats = () => ({
+    isConnected: !!user && authReady,
+    isActive,
+    isLocked,
+    isDeleted,
+    isOwner,
+    role,
+    societeId,
+    hasAccess: canAccessApp(),
+    blockReason: getBlockMessage(),
+    authReady,
+    privileges: {
+      canManageUsers: canManageUsers(),
+      canChangeRoles: canChangeRoles(),
+      canDeleteSociete: canDeleteSociete(),
+      isUntouchable: isOwner,
+      canPromoteUsers: canChangeRoles(),
+      canDemoteUsers: canChangeRoles(),
+    },
+  });
 
   const getPermissionMessages = () => {
     const messages = [];
-    
     if (!authReady) {
-      messages.push({
-        type: "info",
-        text: "Vérification des permissions en cours..."
-      });
+      messages.push({ type: "info", text: "Vérification des permissions en cours..." });
       return messages;
     }
-    
     if (isOwner) {
-      messages.push({
-        type: "success",
-        text: "👑 Vous êtes le propriétaire permanent de cette pharmacie"
-      });
+      messages.push({ type: "success", text: "👑 Vous êtes le propriétaire permanent de cette pharmacie" });
     }
-    
     if (isDeleted) {
-      messages.push({
-        type: "error",
-        text: "⚠️ Ce compte a été supprimé par l'administrateur"
-      });
+      messages.push({ type: "error", text: "⚠️ Ce compte a été supprimé par l'administrateur" });
     } else if (isLocked && !isOwner) {
-      messages.push({
-        type: "warning", 
-        text: "🔒 Votre compte est temporairement verrouillé"
-      });
+      messages.push({ type: "warning", text: "🔒 Votre compte est temporairement verrouillé" });
     } else if (!isActive && !isOwner) {
-      messages.push({
-        type: "warning",
-        text: "⏸️ Votre compte est désactivé"
-      });
+      messages.push({ type: "warning", text: "⏸️ Votre compte est désactivé" });
     }
-    
-    if (adminPopup) {
-      messages.push({
-        type: "info",
-        text: "📢 " + adminPopup
-      });
-    }
-    
-    if (paymentWarning) {
-      messages.push({
-        type: "warning",
-        text: "💳 " + paymentWarning
-      });
-    }
-    
+    if (adminPopup) messages.push({ type: "info", text: "📢 " + adminPopup });
+    if (paymentWarning) messages.push({ type: "warning", text: "💳 " + paymentWarning });
     return messages;
   };
 
-  // 🔑 FONCTIONS D'AIDE POUR UI
   const getUserRoleDisplay = () => {
     if (!role) return "Non défini";
     if (isOwner) return `${role === "docteur" ? "Docteur" : "Vendeuse"} (👑 Propriétaire)`;
@@ -511,7 +509,7 @@ export function UserRoleProvider({ children }) {
     return "Utilisateur standard";
   };
 
-  // ✅ Valeur du contexte
+  // Valeur du contexte
   const contextValue = {
     // États de base
     role,
@@ -519,39 +517,35 @@ export function UserRoleProvider({ children }) {
     societeId,
     societeName,
     loading,
-    authReady, // ✅ Indique si Firebase Auth est initialisé
-    
-    // États de sécurité  
+    authReady,
+
+    // États de sécurité
     isLocked,
     isDeleted,
     isActive,
-    isOwner, // ✅ État propriétaire
-    
+    isOwner,
+
     // Notifications
     adminPopup,
     paymentWarning,
-    
-    // Vérifications de base
+
+    // Permissions / helpers
     can,
     canAccessApp,
     getBlockMessage,
     isAdmin,
     isSuperAdmin,
     getUserStats,
-    
-    // 🔑 GESTIONS STRICTES PROPRIÉTAIRE
     canManageUsers,
     canChangeRoles,
     canDeleteSociete,
-    canPromoteToOwner,
-    canDeleteOwner,
-    canLockOwner,
+    canPromoteToOwner: () => false,
+    canDeleteOwner: () => false,
+    canLockOwner: () => false,
     canModifyUser,
     canChangeUserRole,
     canPromoteToDoctor,
     canDemoteToVendeuse,
-    
-    // Utilitaires UI
     getPermissionMessages,
     getUserRoleDisplay,
     getOwnershipStatus,

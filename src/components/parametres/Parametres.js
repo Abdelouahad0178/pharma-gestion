@@ -1426,7 +1426,7 @@ export default function Parametres() {
                 ["gestion", "Gestion"],
                 ["multilots", "Multi-Lots"],
                 ["activites", "Activités"],
-                ["sauvegarde", "Sauvegarde"]
+               
               ].map(([key, label]) => (
                 <button
                   key={key}
