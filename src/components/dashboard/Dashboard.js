@@ -1,4 +1,4 @@
-// src/components/Dashboard.js
+// src/components/dashboard/Dashboard.js
 import React, { useState, useEffect, useMemo, useCallback } from "react";
 import { db } from "../../firebase/config";
 import { collection, getDocs, doc, getDoc } from "firebase/firestore";
@@ -155,7 +155,6 @@ export default function Dashboard() {
   const [stock, setStock] = useState([]); // stock traditionnel (si utilisé ailleurs)
   const [stockEntries, setStockEntries] = useState([]); // multi-lots
   const [paiements, setPaiements] = useState([]);
-  const [retours, setRetours] = useState([]);
 
   const [dataLoading, setDataLoading] = useState(true);
   const [notification, setNotification] = useState(null);
@@ -219,7 +218,7 @@ export default function Dashboard() {
     }
   }, []);
 
-  // Compute vente amount if no pre-calculated total
+  // Compute vente amount if no pre-calculated total (non utilisé ici mais prêt)
   const computeMontantVente = useCallback((vente) => {
     try {
       if (vente?.montantTotal && !isNaN(vente.montantTotal)) {
@@ -269,7 +268,7 @@ export default function Dashboard() {
   const fetchAllData = useCallback(async () => {
     if (!societeId) {
       setVentes([]); setAchats([]); setStock([]); setStockEntries([]);
-      setPaiements([]); setRetours([]); setDataLoading(false);
+      setPaiements([]); setDataLoading(false);
       return;
     }
     try {
@@ -281,14 +280,12 @@ export default function Dashboard() {
         stockSnap,
         stockEntriesSnap,
         paiementsSnap,
-        retoursSnap,
       ] = await Promise.all([
         getDocs(collection(db, "societe", societeId, "ventes")).catch(() => ({ docs: [] })),
         getDocs(collection(db, "societe", societeId, "achats")).catch(() => ({ docs: [] })),
-        getDocs(collection(db, "societe", societeId, "stock")).catch(() => ({ docs: [] })),             // stock traditionnel (si existant)
+        getDocs(collection(db, "societe", societeId, "stock")).catch(() => ({ docs: [] })),             // stock traditionnel
         getDocs(collection(db, "societe", societeId, "stock_entries")).catch(() => ({ docs: [] })),     // multi-lots
         getDocs(collection(db, "societe", societeId, "paiements")).catch(() => ({ docs: [] })),
-        getDocs(collection(db, "societe", societeId, "retours")).catch(() => ({ docs: [] })),
       ]);
 
       const ventesArr = ventesSnap.docs.map((d) => ({ id: d.id, ...cleanImportedData(d.data()) }));
@@ -296,7 +293,6 @@ export default function Dashboard() {
       const stockArr = stockSnap.docs.map((d) => ({ id: d.id, ...cleanImportedData(d.data()) }));
       const stockEntriesArr = stockEntriesSnap.docs.map((d) => ({ id: d.id, ...cleanImportedData(d.data()) }));
       const paiementsArr = paiementsSnap.docs.map((d) => ({ id: d.id, ...cleanImportedData(d.data()) }));
-      const retoursArr = retoursSnap.docs.map((d) => ({ id: d.id, ...cleanImportedData(d.data()) }));
 
       // Sort achats by date (newest first)
       achatsArr.sort((a, b) => {
@@ -310,7 +306,6 @@ export default function Dashboard() {
       setStock(stockArr);
       setStockEntries(stockEntriesArr);
       setPaiements(paiementsArr);
-      setRetours(retoursArr);
 
       showNotification("Données chargées avec succès !", "success");
     } catch {
@@ -361,11 +356,11 @@ export default function Dashboard() {
     const totalVentes = fVentes.reduce((sum, v) => {
       if (v.montantTotal && !isNaN(v.montantTotal)) return sum + Number(v.montantTotal);
       const arts = Array.isArray(v.articles) ? v.articles : [];
-      const t = arts.reduce((s, a) => {
+      const t = arts.reduce((sum2, a) => {
         const q = Number(a?.quantite) || 0;
         const pu = Number(a?.prixUnitaire) || 0;
         const r = Number(a?.remise) || 0;
-        return s + (q * pu - r);
+        return sum2 + (q * pu - r);
       }, 0);
       const rg = Number(v?.remiseGlobale) || 0;
       return sum + Math.max(0, t - rg);
@@ -374,34 +369,16 @@ export default function Dashboard() {
     const totalAchats = fAchats.reduce((sum, a) => sum + computeMontantAchat(a), 0);
     const totalPaiements = fPaiements.reduce((sum, p) => sum + (Number(p?.montant) || 0), 0);
 
-    /* ======= Caisse du jour = SEULEMENT ventes en espèces ======= */
-    let soldeCaisse = 0;
-    const ventesAuj = ventes.filter((v) => isSameLocalDay(v?.date ?? v?.timestamp));
-
-    for (const v of ventesAuj) {
-      let cashFromRegs = 0;
-
-      if (Array.isArray(v?.reglements) && v.reglements.length > 0) {
-        const regsCashToday = v.reglements.filter((r) => {
-          const isCash = isCashMode(
-            r?.mode ?? r?.type ?? r?.moyen ?? r?.modePaiement ?? r?.typePaiement ?? r?.paymentMode
-          );
-          const isToday = isSameLocalDay(r?.date ?? r?.timestamp);
-          return isCash && isToday;
-        });
-        cashFromRegs = regsCashToday.reduce((s, r) => s + (Number(r?.montant) || 0), 0);
-      }
-
-      if (cashFromRegs > 0) {
-        soldeCaisse += cashFromRegs;
-        continue;
-      }
-
-      const modeGlobal = v?.modePaiement ?? v?.typePaiement ?? v?.paymentMode ?? "";
-      if (isCashMode(modeGlobal)) {
-        soldeCaisse += computeMontantVente(v);
-      }
-    }
+    /* ======= Ventes espèces (aujourd'hui) ======= */
+    const soldeCaisse = paiements.reduce((sum, p) => {
+      const isToday = isSameLocalDay(p?.date ?? p?.timestamp);
+      if (!isToday) return sum;
+      const type = String(p?.type || p?.relatedTo || "").toLowerCase();
+      if (type !== "ventes") return sum;
+      const mode = p?.mode ?? p?.paymentMode ?? p?.moyen ?? p?.typePaiement ?? "";
+      if (!isCashMode(mode)) return sum;
+      return sum + (Number(p?.montant) || 0);
+    }, 0);
 
     // Impayés (ventes + achats)
     let documentsImpayes = 0;
@@ -415,7 +392,7 @@ export default function Dashboard() {
     const alertes = [];
     const todayLocal = new Date();
 
-    // Produits (stock traditionnel) — seuil par défaut = 10
+    // Produits (stock traditionnel)
     stock.forEach((item) => {
       const q = Number(item.quantite) || 0;
       const rawSeuil = Number(item.seuil);
@@ -460,7 +437,7 @@ export default function Dashboard() {
     dataLoading,
     ventes, achats, stock, stockEntries, paiements,
     periode, dateMin, dateMax,
-    computeMontantAchat, computeMontantVente
+    computeMontantAchat
   ]);
 
   /* =========================
@@ -547,7 +524,7 @@ export default function Dashboard() {
       mainCard: { background: "white", borderRadius: isMobile ? "15px" : "25px", boxShadow: isMobile ? "0 15px 30px rgba(0,0,0,0.1)" : "0 30px 60px rgba(0,0,0,0.15)", overflow: "hidden", margin: "0 auto", maxWidth: isMobile ? "100%" : isTablet ? "95%" : "1500px" },
       header: { background: "linear-gradient(135deg, #4a5568 0%, #2d3748 100%)", padding: isMobile ? "16px 12px" : isTablet ? "26px 22px" : "36px", color: "white" },
 
-      // ✅ Rangée dédiée au chip utilisateur (jamais superposé)
+      // ✅ Rangée dédiée au chip utilisateur
       userChipRow: {
         display: "flex",
         justifyContent: "flex-end",
@@ -564,7 +541,7 @@ export default function Dashboard() {
         border: "1px solid rgba(255, 255, 255, 0.18)",
         padding: isMobile ? "8px 10px" : "10px 14px",
         borderRadius: 999,
-        minWidth: 0,                 // important pour l'ellipsis
+        minWidth: 0,
         maxWidth: isMobile ? "100%" : 420,
       },
       avatar: {
@@ -576,7 +553,6 @@ export default function Dashboard() {
       userName: { fontWeight: 800, fontSize: isMobile ? 12 : 14, color: "white", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" },
       userRole: { fontWeight: 700, fontSize: isMobile ? 11 : 12, color: "#e2e8f0", background: "rgba(0,0,0,0.25)", padding: "2px 8px", borderRadius: 999, width: "fit-content" },
 
-      // Bloc titre centré (jamais masqué)
       headerCenter: { textAlign: "center" },
       title: { fontSize: isMobile ? "1.8em" : isTablet ? "2.3em" : "2.8em", fontWeight: 800, margin: 0, textShadow: "3px 3px 6px rgba(0,0,0,0.3)", letterSpacing: isMobile ? "1px" : "2px", lineHeight: 1.2 },
       subtitle: { fontSize: isMobile ? "0.9em" : isTablet ? "1em" : "1.2em", opacity: 0.9, marginTop: "10px", letterSpacing: "1px", wordBreak: "break-word" },
@@ -632,7 +608,7 @@ export default function Dashboard() {
     <div style={styles.container}>
       <div style={styles.mainCard}>
         <div style={styles.header}>
-          {/* ✅ Chip utilisateur dans sa propre rangée (jamais superposé) */}
+          {/* ✅ Chip utilisateur */}
           <div style={styles.userChipRow}>
             <div style={styles.userChip} title={`${displayRole} — ${displayName}`}>
               <div style={styles.avatar}>{userInitials}</div>
@@ -643,13 +619,13 @@ export default function Dashboard() {
             </div>
           </div>
 
-          {/* Titre et sous-titre toujours visibles */}
+          {/* Titre et sous-titre */}
           <div style={styles.headerCenter}>
             <h1 style={styles.title}>Tableau de Bord</h1>
             <div style={styles.subtitle}>{getSocieteDisplayName()}</div>
           </div>
 
-          {/* Boutons carrés (même largeur & hauteur) */}
+          {/* Boutons carrés */}
           <div style={{ marginTop: 16, display: "flex", gap: 12, justifyContent: "center", flexWrap: "wrap" }}>
             <Link
               to="/ventes"
@@ -759,16 +735,22 @@ export default function Dashboard() {
                       : (r.dluoJours !== null && r.dluoJours <= EXPIRY_THRESHOLD_DAYS)
                       ? { ...styles.badge("linear-gradient(135deg,#fb7185,#f43f5e)") }
                       : { ...styles.badge("linear-gradient(135deg,#94a3b8,#64748b)") };
+
+                  // ✅ Affichage "-" pour Seuil & Jours si quantité = 0
+                  const displaySeuil = r.quantite <= 0 ? "-" : (r.seuil ?? "-");
+                  const displayJours =
+                    r.quantite <= 0
+                      ? "-"
+                      : (r.dluoJours === null ? "-" : r.dluoJours <= 0 ? "Périmé" : `${r.dluoJours} j`);
+
                   return (
                     <tr key={idx}>
                       <td style={styles.td}>{r.type}</td>
                       <td style={styles.td}>{r.nom}</td>
                       <td style={styles.td}>{r.lot}</td>
                       <td style={styles.td}><span style={qtyBadge}>{r.quantite}</span></td>
-                      <td style={styles.td}>{r.seuil ?? "—"}</td>
-                      <td style={styles.td}>
-                        {r.dluoJours === null ? "—" : r.dluoJours <= 0 ? "Périmé" : `${r.dluoJours} j`}
-                      </td>
+                      <td style={styles.td}>{displaySeuil}</td>
+                      <td style={styles.td}>{displayJours}</td>
                     </tr>
                   );
                 })}

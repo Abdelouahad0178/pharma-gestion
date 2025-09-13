@@ -1,800 +1,637 @@
-// src/pages/stock.js
-import React, { useEffect, useState } from "react";
+
+import React, { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import { db } from "../../firebase/config";
 import { useUserRole } from "../../contexts/UserRoleContext";
 import {
   collection,
-  getDocs,
   addDoc,
+  getDocs,
   updateDoc,
   deleteDoc,
   doc,
-  getDoc,
-  Timestamp
+  query,
+  orderBy,
+  Timestamp,
 } from "firebase/firestore";
 
-/** ==== Helpers Dates (supporte string | number | Date | Firestore Timestamp) ==== */
-function toDateSafe(v) {
+// -------- Utils --------
+function safeNumber(v, def = 0) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : def;
+}
+function safeParseDate(dateInput) {
+  if (!dateInput) return null;
   try {
-    if (!v) return null;
-    if (v?.toDate && typeof v.toDate === "function") return v.toDate();      // Firestore Timestamp
-    if (typeof v === "object" && v.seconds != null) return new Date(v.seconds * 1000); // {seconds,nanoseconds}
-    if (v instanceof Date) return isNaN(v.getTime()) ? null : v;
-    const d = new Date(v);
-    return isNaN(d.getTime()) ? null : d;
+    if (dateInput?.toDate && typeof dateInput.toDate === "function") {
+      return dateInput.toDate();
+    }
+    if (dateInput?.seconds) {
+      return new Date(dateInput.seconds * 1000);
+    }
+    if (dateInput instanceof Date) return dateInput;
+    if (typeof dateInput === "string" || typeof dateInput === "number") {
+      const d = new Date(dateInput);
+      return isNaN(d.getTime()) ? null : d;
+    }
+    return null;
   } catch {
     return null;
   }
 }
-function formatDate(v, fallback = "N/A") {
-  const d = toDateSafe(v);
-  return d ? d.toLocaleDateString() : fallback;
+function formatDateSafe(dateInput) {
+  const d = safeParseDate(dateInput);
+  return d ? d.toLocaleDateString("fr-FR") : "";
+}
+function getDateInputValue(dateInput) {
+  const d = safeParseDate(dateInput);
+  if (!d) return "";
+  return d.toISOString().split("T")[0];
 }
 
-export default function Stock() {
+// Simple beep feedback (optional)
+function useBeeps() {
+  const ctxRef = useRef(null);
+  const getCtx = () => {
+    if (!ctxRef.current) {
+      const C = window.AudioContext || window.webkitAudioContext;
+      if (C) {
+        try { ctxRef.current = new C(); } catch {}
+      }
+    }
+    return ctxRef.current;
+  };
+  const play = useCallback((freq = 880, dur = 120, type = "sine", vol = 0.12) => {
+    try {
+      const ctx = getCtx();
+      if (!ctx) return;
+      if (ctx.state === "suspended") ctx.resume?.();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = type; osc.frequency.value = freq;
+      gain.gain.value = vol;
+      osc.connect(gain).connect(ctx.destination);
+      osc.start();
+      setTimeout(() => { try { osc.stop(); osc.disconnect(); gain.disconnect(); } catch {} }, dur);
+    } catch {}
+  }, []);
+  const ok = useCallback(() => { play(1175, 90); setTimeout(() => play(1568, 110), 100); }, [play]);
+  const err = useCallback(() => play(220, 220, "square", 0.2), [play]);
+
+  useEffect(() => {
+    const unlock = () => { try { getCtx()?.resume?.(); } catch {} };
+    window.addEventListener("click", unlock, { once: true });
+    window.addEventListener("keydown", unlock, { once: true });
+  }, []);
+
+  return { ok, err };
+}
+
+// -------- Component --------
+export default function Stocks() {
   const { user, societeId, loading } = useUserRole();
-
-  // États principaux (UNIQUEMENT multi-lots + retours)
-  const [stockEntries, setStockEntries] = useState([]);            // Entrées multi-lots
-  const [filteredStockEntries, setFilteredStockEntries] = useState([]); // Entrées filtrées
-  const [retours, setRetours] = useState([]);
-  const [filteredRetours, setFilteredRetours] = useState([]);
-
-  // Filtres Stock multi-lots
-  const [filterEntryNom, setFilterEntryNom] = useState("");
-  const [filterEntryFournisseur, setFilterEntryFournisseur] = useState("");
-  const [filterEntryLot, setFilterEntryLot] = useState("");
-  const [filterEntryDateExp, setFilterEntryDateExp] = useState("");
-  const [filterEntryQuantiteMin, setFilterEntryQuantiteMin] = useState("");
-  const [filterEntryQuantiteMax, setFilterEntryQuantiteMax] = useState("");
-  const [showFiltresEntries, setShowFiltresEntries] = useState(false);
-
-  // Filtres Retours
-  const [filterProduit, setFilterProduit] = useState("");
-  const [filterMotif, setFilterMotif] = useState("");
-  const [filterDateMin, setFilterDateMin] = useState("");
-  const [filterDateMax, setFilterDateMax] = useState("");
-  const [showFiltresRetours, setShowFiltresRetours] = useState(false);
-
-  // États retour
-  const [openRetour, setOpenRetour] = useState(false);
-  const [selectedEntry, setSelectedEntry] = useState(null); // Entrée sélectionnée pour retour
-  const [quantiteRetour, setQuantiteRetour] = useState("");
-  const [motifRetour, setMotifRetour] = useState("");
-  const motifs = ["Expiration", "Destruction", "Cadeau", "Autre"];
-
-  // États d'affichage
   const [waiting, setWaiting] = useState(true);
 
-  // Vérification du chargement
+  // lots in stock_entries
+  const [lots, setLots] = useState([]);
+  const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
+
+  const [showForm, setShowForm] = useState(false);
+  const [isEditing, setIsEditing] = useState(false);
+  const [editId, setEditId] = useState(null);
+
+  // form fields
+  const [nom, setNom] = useState("");
+  const [numeroLot, setNumeroLot] = useState("");
+  const [fournisseur, setFournisseur] = useState("");
+  const [quantite, setQuantite] = useState(0);
+  const [prixAchat, setPrixAchat] = useState(0);
+  const [prixVente, setPrixVente] = useState(0);
+  const [datePeremption, setDatePeremption] = useState("");
+  const [codeBarre, setCodeBarre] = useState("");
+
+  const [search, setSearch] = useState("");
+  const [showScanner, setShowScanner] = useState(false);
+
+  const { ok: beepOk, err: beepErr } = useBeeps();
+
+  // ---- Effects order carefully set to avoid "before initialization" issues ----
   useEffect(() => {
     setWaiting(loading || !societeId || !user);
   }, [loading, societeId, user]);
 
-  // Charger les entrées de stock multi-lots
-  const fetchStockEntries = async () => {
-    if (!societeId) return setStockEntries([]);
-    const snap = await getDocs(collection(db, "societe", societeId, "stock_entries"));
-    const arr = [];
-    snap.forEach((d) => arr.push({ id: d.id, ...d.data() }));
-    // Trier par nom puis par date d'expiration (sûr)
-    arr.sort((a, b) => {
-      const byNom = (a.nom || "").localeCompare(b.nom || "");
-      if (byNom !== 0) return byNom;
-      const da = toDateSafe(a.datePeremption) || new Date(0);
-      const dbb = toDateSafe(b.datePeremption) || new Date(0);
-      return da - dbb;
-    });
-    setStockEntries(arr);
-    setFilteredStockEntries(arr);
-  };
-
-  // Charger Retours
-  const fetchRetours = async () => {
-    if (!societeId) return setRetours([]);
-    const snap = await getDocs(collection(db, "societe", societeId, "retours"));
-    const arr = [];
-    snap.forEach((d) => arr.push({ id: d.id, ...d.data() }));
-    arr.sort((a, b) => {
-      const da = toDateSafe(a.date) || new Date(0);
-      const dbb = toDateSafe(b.date) || new Date(0);
-      return dbb - da;
-    });
-    setRetours(arr);
-    setFilteredRetours(arr);
-  };
-
-  useEffect(() => {
-    fetchStockEntries();
-    fetchRetours();
+  const fetchLots = useCallback(async () => {
+    if (!societeId) {
+      setLots([]);
+      return;
+    }
+    try {
+      const qy = query(collection(db, "societe", societeId, "stock_entries"), orderBy("nom"));
+      const snap = await getDocs(qy);
+      const arr = [];
+      snap.forEach((d) => {
+        const data = d.data();
+        delete data._exportedAt;
+        delete data._collection;
+        arr.push({ id: d.id, ...data });
+      });
+      setLots(arr);
+    } catch (e) {
+      console.error(e);
+      setError("Erreur de chargement du stock");
+    }
   }, [societeId]);
 
-  // Filtrage Stock multi-lots
+  useEffect(() => { fetchLots(); }, [fetchLots]);
+
+  // Keyboard wedge scanning -> fills codeBarre field when form is open
   useEffect(() => {
-    let filtered = stockEntries;
-    if (filterEntryNom)
-      filtered = filtered.filter((s) => (s.nom || "").toLowerCase().includes(filterEntryNom.toLowerCase()));
-    if (filterEntryFournisseur)
-      filtered = filtered.filter((s) =>
-        (s.fournisseur || "").toLowerCase().includes(filterEntryFournisseur.toLowerCase())
-      );
-    if (filterEntryLot)
-      filtered = filtered.filter((s) => (s.numeroLot || "").toLowerCase().includes(filterEntryLot.toLowerCase()));
-    if (filterEntryDateExp) {
-      const max = toDateSafe(filterEntryDateExp);
-      filtered = filtered.filter((s) => {
-        const ds = toDateSafe(s.datePeremption);
-        return ds && max ? ds <= max : true;
-      });
-    }
-    if (filterEntryQuantiteMin)
-      filtered = filtered.filter((s) => Number(s.quantite || 0) >= Number(filterEntryQuantiteMin));
-    if (filterEntryQuantiteMax)
-      filtered = filtered.filter((s) => Number(s.quantite || 0) <= Number(filterEntryQuantiteMax));
-    setFilteredStockEntries(filtered);
-  }, [
-    filterEntryNom,
-    filterEntryFournisseur,
-    filterEntryLot,
-    filterEntryDateExp,
-    filterEntryQuantiteMin,
-    filterEntryQuantiteMax,
-    stockEntries
-  ]);
+    const opts = { minChars: 6, endKey: "Enter", timeoutMs: 250 };
+    const state = { buf: "", timer: null };
 
-  // Filtrage Retours
-  useEffect(() => {
-    let filtered = retours;
-    if (filterProduit)
-      filtered = filtered.filter((r) => (r.produit || "").toLowerCase().includes(filterProduit.toLowerCase()));
-    if (filterMotif) filtered = filtered.filter((r) => r.motif === filterMotif);
-    if (filterDateMin) {
-      const dmin = toDateSafe(filterDateMin);
-      filtered = filtered.filter((r) => {
-        const dr = toDateSafe(r.date);
-        return dmin && dr ? dr >= dmin : true;
-      });
-    }
-    if (filterDateMax) {
-      const dmax = toDateSafe(filterDateMax);
-      filtered = filtered.filter((r) => {
-        const dr = toDateSafe(r.date);
-        return dmax && dr ? dr <= dmax : true;
-      });
-    }
-    setFilteredRetours(filtered);
-  }, [filterProduit, filterMotif, filterDateMin, filterDateMax, retours]);
-
-  // Ouvrir le modal de retour depuis une entrée (multi-lots)
-  const handleOpenRetourEntry = (entry) => {
-    setSelectedEntry(entry);
-    setQuantiteRetour("");
-    setMotifRetour("");
-    setOpenRetour(true);
-  };
-
-  // Valider un retour (UNIQUEMENT multi-lots)
-  const handleRetour = async () => {
-    if (!user || !societeId) return;
-    if (!selectedEntry) return alert("Erreur: aucune entrée sélectionnée !");
-    const maxQuantite = Number(selectedEntry.quantite || 0);
-    const q = Number(quantiteRetour || 0);
-    if (!q || q <= 0 || q > maxQuantite) return alert("Quantité invalide !");
-    if (!motifRetour) return alert("Sélectionnez un motif !");
-
-    const newQuantite = maxQuantite - q;
-
-    // Décrémenter l'entrée
-    await updateDoc(doc(db, "societe", societeId, "stock_entries", selectedEntry.id), {
-      quantite: newQuantite,
-      modifiePar: user.uid,
-      modifieParEmail: user.email,
-      modifieLe: Timestamp.now()
-    });
-
-    // Enregistrer le retour
-    const retourData = {
-      produit: selectedEntry.nom,
-      quantite: q,
-      motif: motifRetour,
-      date: Timestamp.now(),
-      creePar: user.uid,
-      creeParEmail: user.email,
-      creeLe: Timestamp.now(),
-      societeId,
-      sourceType: "entry",
-      sourceId: selectedEntry.id,
-      numeroLot: selectedEntry.numeroLot || null,
-      fournisseur: selectedEntry.fournisseur || null,
-      datePeremption: selectedEntry.datePeremption || null
-    };
-
-    const newRetourRef = await addDoc(collection(db, "societe", societeId, "retours"), retourData);
-
-    await addDoc(collection(db, "societe", societeId, "activities"), {
-      type: "retour",
-      userId: user.uid,
-      userEmail: user.email,
-      timestamp: Timestamp.now(),
-      details: {
-        produit: selectedEntry.nom,
-        quantite: q,
-        motif: motifRetour,
-        action: "création",
-        retourId: newRetourRef.id,
-        numeroLot: selectedEntry.numeroLot || null,
-        fournisseur: selectedEntry.fournisseur || null
+    const onKeyDown = (e) => {
+      if (!showForm) return; // only when form open
+      if (e.ctrlKey || e.altKey || e.metaKey) return;
+      if (e.key === opts.endKey) {
+        const code = state.buf;
+        state.buf = "";
+        clearTimeout(state.timer);
+        if (code && code.length >= opts.minChars) {
+          setCodeBarre(code);
+          beepOk();
+        }
+        return;
       }
-    });
+      if (e.key && e.key.length === 1) {
+        state.buf += e.key;
+        clearTimeout(state.timer);
+        state.timer = setTimeout(() => {
+          const code = state.buf;
+          state.buf = "";
+          if (code && code.length >= opts.minChars) {
+            setCodeBarre(code);
+            beepOk();
+          }
+        }, opts.timeoutMs);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      clearTimeout(state.timer);
+    };
+  }, [showForm, beepOk]);
 
-    setOpenRetour(false);
-    setSelectedEntry(null);
-    fetchStockEntries();
-    fetchRetours();
-  };
+  const resetForm = useCallback(() => {
+    setNom("");
+    setNumeroLot("");
+    setFournisseur("");
+    setQuantite(0);
+    setPrixAchat(0);
+    setPrixVente(0);
+    setDatePeremption("");
+    setCodeBarre("");
+    setIsEditing(false);
+    setEditId(null);
+  }, []);
 
-  // Annulation de retour : réinjection dans le lot d'origine, ou recréation d'une entrée si elle n'existe plus
-  const handleCancelRetour = async (retour) => {
+  const openCreate = useCallback(() => {
+    resetForm();
+    setShowForm(true);
+  }, [resetForm]);
+
+  const openEdit = useCallback((lot) => {
+    setNom(lot.nom || lot.name || "");
+    setNumeroLot(lot.numeroLot || "");
+    setFournisseur(lot.fournisseur || "");
+    setQuantite(safeNumber(lot.quantite));
+    setPrixAchat(safeNumber(lot.prixAchat));
+    setPrixVente(safeNumber(lot.prixVente));
+    setDatePeremption(getDateInputValue(lot.datePeremption));
+    setCodeBarre(lot.codeBarre || "");
+    setIsEditing(true);
+    setEditId(lot.id);
+    setShowForm(true);
+  }, []);
+
+  const handleSubmit = useCallback(async (e) => {
+    e?.preventDefault?.();
     if (!user || !societeId) return;
-    if (!window.confirm("Annuler ce retour et réinjecter dans le stock si possible ?")) return;
-
+    if (!nom || !numeroLot || safeNumber(quantite) < 0) {
+      setError("Veuillez remplir les champs obligatoires (Nom, N° lot, Quantité)");
+      beepErr();
+      return;
+    }
+    setError("");
     try {
-      let reinjected = false;
+      const payload = {
+        nom: nom.trim(),
+        numeroLot: numeroLot.trim(),
+        fournisseur: fournisseur.trim() || null,
+        quantite: safeNumber(quantite),
+        prixAchat: safeNumber(prixAchat),
+        prixVente: safeNumber(prixVente),
+        datePeremption: datePeremption ? Timestamp.fromDate(new Date(datePeremption)) : null,
+        codeBarre: codeBarre ? String(codeBarre).trim() : null,
+        updatedAt: Timestamp.now(),
+        updatedBy: user.email || user.uid,
+      };
 
-      if (retour?.sourceType === "entry" && retour?.sourceId) {
-        // Tenter de réinjecter directement dans le document d'entrée d'origine
-        const entryRef = doc(db, "societe", societeId, "stock_entries", retour.sourceId);
-        const entrySnap = await getDoc(entryRef);
-        if (entrySnap.exists()) {
-          const current = Number(entrySnap.data().quantite || 0);
-          await updateDoc(entryRef, {
-            quantite: current + Number(retour.quantite || 0),
-            modifiePar: user.uid,
-            modifieParEmail: user.email,
-            modifieLe: Timestamp.now()
-          });
-          reinjected = true;
-        }
-      }
-
-      if (!reinjected) {
-        // Si l'entrée d'origine a disparu : recréer une nouvelle entrée multi-lots minimale
+      if (isEditing && editId) {
+        await updateDoc(doc(db, "societe", societeId, "stock_entries", editId), payload);
+        setSuccess("Lot mis à jour");
+      } else {
         await addDoc(collection(db, "societe", societeId, "stock_entries"), {
-          nom: retour.produit || "Produit",
-          quantite: Number(retour.quantite || 0),
-          quantiteInitiale: Number(retour.quantite || 0),
-          prixAchat: Number(retour.prixAchat || 0),
-          prixVente: Number(retour.prixVente || 0),
-          numeroLot: retour.numeroLot || `LOT${Date.now().toString().slice(-6)}`,
-          fournisseur: retour.fournisseur || "",
-          datePeremption: retour.datePeremption || "",
-          statut: "actif",
-          creePar: user.uid,
-          creeParEmail: user.email,
-          creeLe: Timestamp.now(),
-          societeId
+          ...payload,
+          createdAt: Timestamp.now(),
+          createdBy: user.email || user.uid,
         });
+        setSuccess("Lot ajouté");
       }
-
-      // Supprimer le retour
-      await deleteDoc(doc(db, "societe", societeId, "retours", retour.id));
-
-      // Log activité
-      await addDoc(collection(db, "societe", societeId, "activities"), {
-        type: "retour",
-        userId: user.uid,
-        userEmail: user.email,
-        timestamp: Timestamp.now(),
-        details: {
-          produit: retour.produit,
-          quantite: retour.quantite,
-          motif: retour.motif,
-          action: "annulation_retour",
-          retourId: retour.id,
-          numeroLot: retour.numeroLot || null
-        }
-      });
-
-      fetchStockEntries();
-      fetchRetours();
-    } catch (e) {
-      console.error("handleCancelRetour:", e);
-      alert("Erreur lors de l'annulation du retour.");
+      beepOk();
+      setShowForm(false);
+      resetForm();
+      await fetchLots();
+      setTimeout(() => setSuccess(""), 1800);
+    } catch (err) {
+      console.error(err);
+      setError("Erreur lors de l'enregistrement");
+      beepErr();
     }
-  };
+  }, [user, societeId, nom, numeroLot, fournisseur, quantite, prixAchat, prixVente, datePeremption, codeBarre, isEditing, editId, fetchLots, beepOk, beepErr, resetForm]);
 
-  // Impression stock multi-lots
-  const handlePrintStockEntries = () => {
-    const printWindow = window.open("", "_blank");
-    printWindow.document.write(`
-      <html><head><title>Stock Multi-Lots</title></head><body>
-      <h2>Inventaire Stock Multi-Lots</h2>
-      <table border="1" cellspacing="0" cellpadding="5">
-        <tr><th>Médicament</th><th>Lot</th><th>Fournisseur</th><th>Qté</th><th>Prix Achat</th><th>Prix Vente</th><th>Date Exp.</th></tr>
-        ${filteredStockEntries
-          .map(
-            (p) => `<tr>
-              <td>${p.nom || ""}</td>
-              <td>${p.numeroLot || "N/A"}</td>
-              <td>${p.fournisseur || "N/A"}</td>
-              <td>${p.quantite ?? 0}</td>
-              <td>${p.prixAchat ?? 0} DH</td>
-              <td>${p.prixVente ?? 0} DH</td>
-              <td>${formatDate(p.datePeremption)}</td>
-            </tr>`
-          )
-          .join("")}
-      </table></body></html>
-    `);
-    printWindow.document.close();
-    printWindow.print();
-  };
+  const handleDelete = useCallback(async (lot) => {
+    if (!user || !societeId) return;
+    if (!window.confirm(`Supprimer le lot ${lot.numeroLot} de ${lot.nom} ?`)) return;
+    try {
+      await deleteDoc(doc(db, "societe", societeId, "stock_entries", lot.id));
+      setSuccess("Lot supprimé");
+      beepOk();
+      await fetchLots();
+      setTimeout(() => setSuccess(""), 1600);
+    } catch (err) {
+      console.error(err);
+      setError("Erreur lors de la suppression");
+      beepErr();
+    }
+  }, [user, societeId, fetchLots, beepOk, beepErr]);
 
-  // Impression retours
-  const handlePrintRetours = () => {
-    const printWindow = window.open("", "_blank");
-    printWindow.document.write(`
-      <html><head><title>Retours</title></head><body>
-      <h2>Historique des Retours</h2>
-      <table border="1" cellspacing="0" cellpadding="5">
-        <tr><th>Produit</th><th>Quantité</th><th>Motif</th><th>Lot</th><th>Fournisseur</th><th>Date</th></tr>
-        ${filteredRetours
-          .map(
-            (r) => `<tr>
-              <td>${r.produit || "Non spécifié"}</td>
-              <td>${r.quantite ?? 0}</td>
-              <td>${r.motif || ""}</td>
-              <td>${r.numeroLot || "N/A"}</td>
-              <td>${r.fournisseur || "N/A"}</td>
-              <td>${formatDate(r.date, "")}</td>
-            </tr>`
-          )
-          .join("")}
-      </table></body></html>
-    `);
-    printWindow.document.close();
-    printWindow.print();
-  };
+  const lotsFiltres = useMemo(() => {
+    if (!search) return lots;
+    const s = search.toLowerCase().trim();
+    return lots.filter((l) => {
+      const nom = (l.nom || "").toLowerCase();
+      const nlot = (l.numeroLot || "").toLowerCase();
+      const fr = (l.fournisseur || "").toLowerCase();
+      const cb = (l.codeBarre || "").toString().toLowerCase();
+      return nom.includes(s) || nlot.includes(s) || fr.includes(s) || cb.includes(s);
+    });
+  }, [lots, search]);
 
-  // Statistiques (UNIQUEMENT multi-lots)
-  const getStats = () => {
-    const totalMedicaments = new Set(stockEntries.map((e) => e.nom)).size;
-    const totalQuantiteEntries = stockEntries.reduce((sum, e) => sum + Number(e.quantite || 0), 0);
-    const totalFournisseurs = new Set(stockEntries.map((e) => e.fournisseur).filter(Boolean)).size;
+  // onDetected used by camera modal
+  const onBarcodeDetected = useCallback((code) => {
+    if (!code) return;
+    setCodeBarre(String(code));
+    setShowScanner(false);
+    setShowForm(true);
+    beepOk();
+  }, [beepOk]);
 
-    const now = new Date();
-    const soon = new Date();
-    soon.setDate(soon.getDate() + 30);
-
-    const medicamentsExpires = stockEntries.filter((e) => {
-      const d = toDateSafe(e.datePeremption);
-      return d && d < now;
-    }).length;
-
-    const medicamentsExpireSoon = stockEntries.filter((e) => {
-      const d = toDateSafe(e.datePeremption);
-      return d && d >= now && d <= soon;
-    }).length;
-
-    return {
-      totalMedicaments,
-      totalQuantiteEntries,
-      totalFournisseurs,
-      medicamentsExpires,
-      medicamentsExpireSoon
-    };
-  };
-
-  const stats = getStats();
-
-  // AFFICHAGE conditionnel
+  // -------- Rendering --------
   if (waiting) {
     return (
-      <div style={{ padding: 30, textAlign: "center", color: "#1c355e" }}>
-        Chargement...
+      <div style={{ minHeight: "100vh", display: "grid", placeItems: "center" }}>
+        <div>Chargement…</div>
       </div>
     );
   }
-
-  if (!user) {
+  if (!user || !societeId) {
     return (
-      <div style={{ padding: 30, textAlign: "center", color: "#a32" }}>
-        Non connecté.
+      <div style={{ minHeight: "100vh", display: "grid", placeItems: "center" }}>
+        <div>Accès non autorisé.</div>
       </div>
     );
   }
 
-  if (!societeId) {
-    return (
-      <div style={{ padding: 30, textAlign: "center", color: "#a32" }}>
-        Aucune société sélectionnée.
-      </div>
-    );
-  }
-
-  // --- RENDER --- (ONLY Multi-Lots + Retours)
   return (
-    <div className="fullscreen-table-wrap">
-      <div className="fullscreen-table-title">Gestion du Stock Multi-Lots</div>
+    <div style={{ minHeight: "100vh", background: "linear-gradient(135deg,#eef2ff,#fdf2f8)", padding: 20, fontFamily: '"Inter",-apple-system,BlinkMacSystemFont,sans-serif' }}>
+      {/* Header */}
+      <div style={{ background: "rgba(255,255,255,.95)", borderRadius: 20, padding: 20, marginBottom: 16, boxShadow: "0 10px 30px rgba(0,0,0,.05)" }}>
+        <div style={{ display: "flex", gap: 12, alignItems: "center", justifyContent: "space-between", flexWrap: "wrap" }}>
+          <div>
+            <h1 style={{ margin: 0, fontSize: 28, fontWeight: 800, background: "linear-gradient(135deg,#6366f1,#a855f7)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>Stock (Lots)</h1>
+            <p style={{ margin: "6px 0 0", color: "#6b7280" }}>Gérer vos lots avec code-barres et dates d'expiration.</p>
+          </div>
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Rechercher par nom, lot, fournisseur, code-barres…"
+              style={{ padding: "10px 14px", borderRadius: 12, border: "2px solid #e5e7eb", minWidth: 280, outline: "none" }}
+            />
+            <button
+              onClick={openCreate}
+              style={{ background: "linear-gradient(135deg,#10b981,#059669)", color: "#fff", border: "none", borderRadius: 12, padding: "10px 16px", fontWeight: 700, cursor: "pointer" }}
+            >
+              + Ajouter un article (lot)
+            </button>
+          </div>
+        </div>
+      </div>
 
-      {/* Statistiques du stock multi-lots */}
+      {/* Feedback */}
+      {error && (
+        <div style={{ background: "rgba(254,226,226,.9)", color: "#b91c1c", padding: 12, borderRadius: 12, marginBottom: 12, border: "1px solid rgba(185,28,28,.2)" }}>
+          {error} <button onClick={() => setError("")} style={{ marginLeft: 8, border: "none", background: "transparent", cursor: "pointer" }}>×</button>
+        </div>
+      )}
+      {success && (
+        <div style={{ background: "rgba(220,252,231,.9)", color: "#166534", padding: 12, borderRadius: 12, marginBottom: 12, border: "1px solid rgba(22,101,52,.2)" }}>
+          {success} <button onClick={() => setSuccess("")} style={{ marginLeft: 8, border: "none", background: "transparent", cursor: "pointer" }}>×</button>
+        </div>
+      )}
+
+      {/* Form */}
+      {showForm && (
+        <div style={{ background: "rgba(255,255,255,.95)", borderRadius: 20, padding: 20, marginBottom: 16, boxShadow: "0 10px 30px rgba(0,0,0,.05)", border: "1px solid rgba(0,0,0,.03)" }}>
+          <h2 style={{ marginTop: 0, fontSize: 20 }}>{isEditing ? "Modifier le lot" : "Ajouter un lot"}</h2>
+          <form onSubmit={handleSubmit}>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))", gap: 14 }}>
+              <div>
+                <label style={{ fontSize: 13, fontWeight: 600 }}>Nom *</label>
+                <input value={nom} onChange={(e) => setNom(e.target.value)} required style={{ width: "100%", padding: "10px 12px", borderRadius: 10, border: "2px solid #e5e7eb" }} />
+              </div>
+              <div>
+                <label style={{ fontSize: 13, fontWeight: 600 }}>N° lot *</label>
+                <input value={numeroLot} onChange={(e) => setNumeroLot(e.target.value)} required style={{ width: "100%", padding: "10px 12px", borderRadius: 10, border: "2px solid #e5e7eb" }} />
+              </div>
+              <div>
+                <label style={{ fontSize: 13, fontWeight: 600 }}>Fournisseur</label>
+                <input value={fournisseur} onChange={(e) => setFournisseur(e.target.value)} style={{ width: "100%", padding: "10px 12px", borderRadius: 10, border: "2px solid #e5e7eb" }} />
+              </div>
+              <div>
+                <label style={{ fontSize: 13, fontWeight: 600 }}>Quantité *</label>
+                <input type="number" value={quantite} onChange={(e) => setQuantite(e.target.value)} min={0} required style={{ width: "100%", padding: "10px 12px", borderRadius: 10, border: "2px solid #e5e7eb" }} />
+              </div>
+              <div>
+                <label style={{ fontSize: 13, fontWeight: 600 }}>Prix achat (DH)</label>
+                <input type="number" step="0.01" value={prixAchat} onChange={(e) => setPrixAchat(e.target.value)} style={{ width: "100%", padding: "10px 12px", borderRadius: 10, border: "2px solid #e5e7eb" }} />
+              </div>
+              <div>
+                <label style={{ fontSize: 13, fontWeight: 600 }}>Prix vente (DH)</label>
+                <input type="number" step="0.01" value={prixVente} onChange={(e) => setPrixVente(e.target.value)} style={{ width: "100%", padding: "10px 12px", borderRadius: 10, border: "2px solid #e5e7eb" }} />
+              </div>
+              <div>
+                <label style={{ fontSize: 13, fontWeight: 600 }}>Date d'expiration</label>
+                <input type="date" value={datePeremption} onChange={(e) => setDatePeremption(e.target.value)} style={{ width: "100%", padding: "10px 12px", borderRadius: 10, border: "2px solid #e5e7eb" }} />
+              </div>
+              <div>
+                <label style={{ fontSize: 13, fontWeight: 600 }}>Code-barres</label>
+                <div style={{ display: "flex", gap: 8 }}>
+                  <input
+                    value={codeBarre}
+                    onChange={(e) => setCodeBarre(e.target.value)}
+                    placeholder="Scannez ou saisissez"
+                    style={{ flex: 1, padding: "10px 12px", borderRadius: 10, border: "2px solid #e5e7eb" }}
+                  />
+                  <button type="button" onClick={() => setShowScanner(true)} style={{ whiteSpace: "nowrap", borderRadius: 10, border: "2px solid #e5e7eb", background: "#111827", color: "#fff", padding: "10px 12px", cursor: "pointer" }}>
+                    📷 Scanner
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div style={{ display: "flex", gap: 10, marginTop: 16, flexWrap: "wrap" }}>
+              <button type="submit" style={{ background: "linear-gradient(135deg,#3b82f6,#2563eb)", color: "#fff", border: "none", borderRadius: 12, padding: "10px 18px", fontWeight: 700, cursor: "pointer" }}>
+                {isEditing ? "Mettre à jour" : "Enregistrer"}
+              </button>
+              <button type="button" onClick={() => { setShowForm(false); resetForm(); }} style={{ background: "transparent", border: "2px solid #e5e7eb", borderRadius: 12, padding: "10px 18px", fontWeight: 700, cursor: "pointer" }}>
+                Annuler
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* Table */}
+      <div style={{ background: "rgba(255,255,255,.95)", borderRadius: 20, overflow: "hidden", boxShadow: "0 10px 30px rgba(0,0,0,.05)" }}>
+        <div style={{ overflowX: "auto", maxHeight: "72vh", overflowY: "auto" }}>
+          <table style={{ width: "100%", minWidth: 900, borderCollapse: "collapse" }}>
+            <thead style={{ position: "sticky", top: 0, background: "linear-gradient(135deg,#1f2937,#111827)", color: "#fff", zIndex: 1 }}>
+              <tr>
+                <th style={{ padding: 14, textAlign: "left" }}>Nom</th>
+                <th style={{ padding: 14, textAlign: "left" }}>N° lot</th>
+                <th style={{ padding: 14, textAlign: "left" }}>Fournisseur</th>
+                <th style={{ padding: 14, textAlign: "center" }}>Qté</th>
+                <th style={{ padding: 14, textAlign: "right" }}>Prix vente</th>
+                <th style={{ padding: 14, textAlign: "center" }}>Expiration</th>
+                <th style={{ padding: 14, textAlign: "left" }}>Code-barres</th>
+                <th style={{ padding: 14, textAlign: "center", width: 160 }}>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {lotsFiltres.length === 0 ? (
+                <tr>
+                  <td colSpan={8} style={{ padding: 24, textAlign: "center", color: "#6b7280" }}>Aucun lot</td>
+                </tr>
+              ) : (
+                lotsFiltres.map((l, idx) => {
+                  const d = safeParseDate(l.datePeremption);
+                  const expired = d && d < new Date();
+                  const expSoon = d && !expired && d <= new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+                  return (
+                    <tr key={l.id} style={{ background: idx % 2 ? "rgba(249,250,251,.6)" : "white", borderBottom: "1px solid #f3f4f6" }}>
+                      <td style={{ padding: 12, fontWeight: 600 }}>{l.nom}</td>
+                      <td style={{ padding: 12 }}>{l.numeroLot}</td>
+                      <td style={{ padding: 12 }}>{l.fournisseur || "-"}</td>
+                      <td style={{ padding: 12, textAlign: "center", fontWeight: 700 }}>{safeNumber(l.quantite)}</td>
+                      <td style={{ padding: 12, textAlign: "right" }}>{Number(l.prixVente || 0).toFixed(2)} DH</td>
+                      <td style={{ padding: 12, textAlign: "center", fontWeight: 600, color: expired ? "#dc2626" : expSoon ? "#d97706" : "#065f46" }}>
+                        {formatDateSafe(l.datePeremption) || "-"}
+                        {expired ? " ⚠️" : expSoon ? " ⏰" : ""}
+                      </td>
+                      <td style={{ padding: 12, fontFamily: "monospace" }}>{l.codeBarre || "-"}</td>
+                      <td style={{ padding: 12, textAlign: "center" }}>
+                        <button onClick={() => openEdit(l)} style={{ marginRight: 8, background: "linear-gradient(135deg,#f59e0b,#d97706)", color: "#fff", border: "none", borderRadius: 10, padding: "8px 12px", cursor: "pointer" }}>
+                          ✏️ Éditer
+                        </button>
+                        <button onClick={() => handleDelete(l)} style={{ background: "linear-gradient(135deg,#ef4444,#dc2626)", color: "#fff", border: "none", borderRadius: 10, padding: "8px 12px", cursor: "pointer" }}>
+                          🗑️ Supprimer
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* Camera Scanner Modal */}
+      <CameraBarcodeInlineModal
+        open={showScanner}
+        onClose={() => setShowScanner(false)}
+        onDetected={onBarcodeDetected}
+      />
+    </div>
+  );
+}
+
+// ---- Camera Barcode Modal (function declaration to allow hoisting in JSX use) ----
+function CameraBarcodeInlineModal({ open, onClose, onDetected }) {
+  const videoRef = React.useRef(null);
+  const [error, setError] = React.useState("");
+
+  React.useEffect(() => {
+    let stream;
+    let stopRequested = false;
+    let rafId = null;
+    let reader = null;
+    let controls = null;
+
+    async function start() {
+      setError("");
+      try {
+        if (!open) return;
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { ideal: "environment" } },
+          audio: false,
+        });
+        if (!videoRef.current) return;
+        videoRef.current.srcObject = stream;
+        await videoRef.current.play();
+
+        if ("BarcodeDetector" in window) {
+          const supported = await window.BarcodeDetector.getSupportedFormats?.();
+          const detector = new window.BarcodeDetector({
+            formats: supported && supported.length ? supported : ["ean_13", "ean_8", "code_128", "upc_a", "upc_e"],
+          });
+          const scan = async () => {
+            if (!open || stopRequested) return;
+            try {
+              const track = stream.getVideoTracks?.()[0];
+              if (!track) return;
+              const imageCapture = new ImageCapture(track);
+              const bitmap = await imageCapture.grabFrame();
+              const codes = await detector.detect(bitmap);
+              if (codes && codes[0]?.rawValue) {
+                onDetected?.(codes[0].rawValue);
+              } else {
+                rafId = requestAnimationFrame(scan);
+              }
+            } catch {
+              rafId = requestAnimationFrame(scan);
+            }
+          };
+          rafId = requestAnimationFrame(scan);
+        } else {
+          try {
+            const lib = await import(/* webpackChunkName: "zxing" */ "@zxing/browser");
+            const { BrowserMultiFormatReader } = lib;
+            reader = new BrowserMultiFormatReader();
+            controls = await reader.decodeFromVideoDevice(null, videoRef.current, (result) => {
+              const txt = result?.getText?.();
+              if (txt) onDetected?.(txt);
+            });
+          } catch (e) {
+            setError("ZXing non installé. Lance: npm i @zxing/browser");
+          }
+        }
+      } catch (e) {
+        console.error(e);
+        setError(e.message || "Caméra indisponible");
+      }
+    }
+
+    if (open) start();
+
+    return () => {
+      stopRequested = true;
+      if (rafId) cancelAnimationFrame(rafId);
+      try { controls?.stop(); } catch {}
+      try { reader?.reset(); } catch {}
+      try {
+        const tracks = stream?.getTracks?.() || [];
+        tracks.forEach((t) => t.stop());
+      } catch {}
+    };
+  }, [open, onDetected]);
+
+  if (!open) return null;
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      onClick={(e) => e.target === e.currentTarget && onClose?.()}
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(0,0,0,.6)",
+        display: "grid",
+        placeItems: "center",
+        zIndex: 9999,
+        padding: 16,
+      }}
+    >
       <div
-        className="paper-card"
         style={{
-          marginBottom: 20,
-          padding: 20,
-          background: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
-          color: "white"
+          background: "#fff",
+          borderRadius: 16,
+          width: "min(100%, 720px)",
+          padding: 16,
+          boxShadow: "0 10px 30px rgba(0,0,0,.2)",
+          position: "relative",
         }}
       >
-        <h3 style={{ marginBottom: 15, textAlign: "center", fontSize: "1.2rem" }}>
-          📊 Tableau de Bord Stock (Multi-lots)
-        </h3>
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))",
-            gap: 15
-          }}
-        >
-          <div style={{ textAlign: "center", background: "rgba(255,255,255,0.1)", padding: 10, borderRadius: 8 }}>
-            <div style={{ fontSize: "1.5rem", fontWeight: "bold" }}>{stats.totalMedicaments}</div>
-            <div style={{ fontSize: "0.9rem", opacity: 0.9 }}>Médicaments uniques</div>
-          </div>
-          <div style={{ textAlign: "center", background: "rgba(255,255,255,0.1)", padding: 10, borderRadius: 8 }}>
-            <div style={{ fontSize: "1.5rem", fontWeight: "bold" }}>{stats.totalQuantiteEntries}</div>
-            <div style={{ fontSize: "0.9rem", opacity: 0.9 }}>Unités (Multi-lots)</div>
-          </div>
-          <div style={{ textAlign: "center", background: "rgba(255,255,255,0.1)", padding: 10, borderRadius: 8 }}>
-            <div style={{ fontSize: "1.5rem", fontWeight: "bold" }}>{stats.totalFournisseurs}</div>
-            <div style={{ fontSize: "0.9rem", opacity: 0.9 }}>Fournisseurs actifs</div>
-          </div>
-          <div style={{ textAlign: "center", background: "rgba(255,255,255,0.1)", padding: 10, borderRadius: 8 }}>
-            <div style={{ fontSize: "1.5rem", fontWeight: "bold", color: stats.medicamentsExpires > 0 ? "#ff6b6b" : "white" }}>
-              {stats.medicamentsExpires}
-            </div>
-            <div style={{ fontSize: "0.9rem", opacity: 0.9 }}>Lots expirés</div>
-          </div>
-          <div style={{ textAlign: "center", background: "rgba(255,255,255,0.1)", padding: 10, borderRadius: 8 }}>
-            <div style={{ fontSize: "1.5rem", fontWeight: "bold", color: stats.medicamentsExpireSoon > 0 ? "#feca57" : "white" }}>
-              {stats.medicamentsExpireSoon}
-            </div>
-            <div style={{ fontSize: "0.9rem", opacity: 0.9 }}>Expirent sous 30j</div>
-          </div>
-        </div>
-      </div>
-
-      {/* Note explicative */}
-      <div
-        className="paper-card"
-        style={{ marginBottom: 15, padding: 15, background: "#e6fffa", border: "2px solid #81e6d9" }}
-      >
-        <p style={{ margin: 0, color: "#2d3748", fontSize: "0.9rem", textAlign: "center" }}>
-          <strong>🏷️ Vue Multi-Lots :</strong> Chaque ligne représente un lot spécifique avec son fournisseur, numéro de lot et date d'expiration.
-          Les nouveaux lots sont créés automatiquement lors des achats (réceptions).
-        </p>
-      </div>
-
-      {/* Filtres Entries */}
-      <div style={{ display: "flex", alignItems: "center", gap: 11, marginTop: 16, marginBottom: 0 }}>
-        <button
-          className="btn"
-          type="button"
-          style={{
-            fontSize: "1.32em",
-            padding: "2px 13px",
-            minWidth: 35,
-            background: showFiltresEntries
-              ? "linear-gradient(90deg,#ee4e61 60%,#fddada 100%)"
-              : "linear-gradient(90deg,#3272e0 50%,#61c7ef 100%)"
-          }}
-          onClick={() => setShowFiltresEntries((v) => !v)}
-          aria-label="Afficher/Masquer les filtres Multi-Lots"
-          title="Afficher/Masquer les filtres Multi-Lots"
-        >
-          {showFiltresEntries ? "➖" : "➕"}
-        </button>
-        <span style={{ fontWeight: 700, fontSize: 17, letterSpacing: 0.02 }}>Filtres Stock Multi-Lots</span>
-      </div>
-      {showFiltresEntries && (
-        <div
-          className="paper-card"
-          style={{ display: "flex", flexWrap: "wrap", gap: 11, alignItems: "center", marginBottom: 8, marginTop: 7 }}
-        >
-          <div>
-            <label>Nom</label>
-            <input value={filterEntryNom} onChange={(e) => setFilterEntryNom(e.target.value)} />
-          </div>
-          <div>
-            <label>Fournisseur</label>
-            <input value={filterEntryFournisseur} onChange={(e) => setFilterEntryFournisseur(e.target.value)} />
-          </div>
-          <div>
-            <label>N° Lot</label>
-            <input value={filterEntryLot} onChange={(e) => setFilterEntryLot(e.target.value)} />
-          </div>
-          <div>
-            <label>Date Exp. max</label>
-            <input type="date" value={filterEntryDateExp} onChange={(e) => setFilterEntryDateExp(e.target.value)} />
-          </div>
-          <div>
-            <label>Qté min</label>
-            <input
-              type="number"
-              value={filterEntryQuantiteMin}
-              onChange={(e) => setFilterEntryQuantiteMin(e.target.value)}
-            />
-          </div>
-          <div>
-            <label>Qté max</label>
-            <input
-              type="number"
-              value={filterEntryQuantiteMax}
-              onChange={(e) => setFilterEntryQuantiteMax(e.target.value)}
-            />
-          </div>
-          <button className="btn info" type="button" onClick={handlePrintStockEntries}>
-            🖨 Imprimer Multi-Lots
+        <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8 }}>
+          <h3 style={{ margin: 0, fontWeight: 800, fontSize: 18 }}>Scanner un code-barres</h3>
+          <button
+            onClick={onClose}
+            style={{
+              marginLeft: "auto",
+              border: "none",
+              borderRadius: 8,
+              padding: "6px 10px",
+              background: "#111827",
+              color: "#fff",
+              cursor: "pointer",
+            }}
+          >
+            Fermer
           </button>
         </div>
-      )}
 
-      {/* Tableau Stock Multi-Lots */}
-      <div className="table-pro-full" style={{ marginTop: 2, marginBottom: 24 }}>
-        <table>
-          <thead>
-            <tr>
-              <th>Médicament</th>
-              <th>N° Lot</th>
-              <th style={{ color: "white", fontWeight: "bold" }}>Fournisseur</th>
-              <th>Quantité</th>
-              <th>Prix Achat</th>
-              <th>Prix Vente</th>
-              <th style={{ color: "white", fontWeight: "bold" }}>Date Exp.</th>
-              <th>Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {filteredStockEntries
-              .filter((e) => Number(e.quantite || 0) > 0)
-              .map((entry) => {
-                const dExp = toDateSafe(entry.datePeremption);
-                const now = new Date();
-                const isExpired = dExp && dExp < now;
-                const isExpiringSoon = dExp && !isExpired && dExp <= new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
-
-                return (
-                  <tr
-                    key={entry.id}
-                    style={{
-                      backgroundColor: isExpired ? "#fed7d7" : isExpiringSoon ? "#fefcbf" : "white"
-                    }}
-                  >
-                    <td style={{ fontWeight: "bold" }}>{entry.nom}</td>
-                    <td
-                      style={{ fontFamily: "monospace", fontSize: "0.9rem", color: "#667eea", fontWeight: "bold" }}
-                    >
-                      {entry.numeroLot || "N/A"}
-                    </td>
-                    <td style={{ color: "white", fontWeight: "bold" }}>{entry.fournisseur || "N/A"}</td>
-                    <td
-                      style={{
-                        fontWeight: "bold",
-                        color: Number(entry.quantite || 0) <= 5 ? "#e53e3e" : "#48bb78"
-                      }}
-                    >
-                      {entry.quantite}
-                    </td>
-                    <td>{entry.prixAchat} DH</td>
-                    <td style={{ fontWeight: "bold", color: "#667eea" }}>{entry.prixVente} DH</td>
-                    <td
-                      style={{
-                        color: isExpired ? "#e53e3e" : isExpiringSoon ? "#d69e2e" : "white",
-                        fontWeight: "bold"
-                      }}
-                    >
-                      {formatDate(entry.datePeremption)}
-                      {isExpired && " ⚠️"}
-                      {isExpiringSoon && " ⏰"}
-                    </td>
-                    <td>
-                      <button className="btn print" type="button" onClick={() => handleOpenRetourEntry(entry)}>
-                        Retour Lot
-                      </button>
-                    </td>
-                  </tr>
-                );
-              })}
-            {filteredStockEntries.filter((e) => Number(e.quantite || 0) > 0).length === 0 && (
-              <tr>
-                <td
-                  colSpan="8"
-                  style={{ textAlign: "center", padding: "50px", color: "#6b7280", fontStyle: "italic" }}
-                >
-                  Aucune entrée de stock multi-lots disponible. Les entrées sont créées automatiquement lors des achats.
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
-
-      {/* Filtres Retours */}
-      <div
-        className="fullscreen-table-title"
-        style={{ marginTop: 24, fontSize: "1.35rem", display: "flex", alignItems: "center", gap: 9 }}
-      >
-        <button
-          className="btn"
-          type="button"
-          style={{
-            fontSize: "1.32em",
-            padding: "2px 13px",
-            minWidth: 35,
-            background: showFiltresRetours
-              ? "linear-gradient(90deg,#ee4e61 60%,#fddada 100%)"
-              : "linear-gradient(90deg,#3272e0 50%,#61c7ef 100%)"
-          }}
-          onClick={() => setShowFiltresRetours((v) => !v)}
-          aria-label="Afficher/Masquer les filtres Retours"
-          title="Afficher/Masquer les filtres Retours"
-        >
-          {showFiltresRetours ? "➖" : "➕"}
-        </button>
-        Historique des retours ({retours.length})
-      </div>
-      {showFiltresRetours && (
         <div
-          className="paper-card"
-          style={{ display: "flex", flexWrap: "wrap", gap: 12, alignItems: "center", marginBottom: 8, marginTop: 7 }}
+          style={{
+            position: "relative",
+            borderRadius: 12,
+            overflow: "hidden",
+            background: "#000",
+            aspectRatio: "16/9",
+          }}
         >
-          <div>
-            <label>Produit</label>
-            <input value={filterProduit} onChange={(e) => setFilterProduit(e.target.value)} />
-          </div>
-          <div>
-            <label>Motif</label>
-            <select value={filterMotif} onChange={(e) => setFilterMotif(e.target.value)}>
-              <option value="">Tous</option>
-              {motifs.map((m) => (
-                <option key={m} value={m}>
-                  {m}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <label>Date min</label>
-            <input type="date" value={filterDateMin} onChange={(e) => setFilterDateMin(e.target.value)} />
-          </div>
-          <div>
-            <label>Date max</label>
-            <input type="date" value={filterDateMax} onChange={(e) => setFilterDateMax(e.target.value)} />
-          </div>
-          <button className="btn print" type="button" onClick={handlePrintRetours}>
-            🖨 Imprimer Retours filtrés
-          </button>
+          <video ref={videoRef} muted playsInline style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+          <div
+            style={{
+              position: "absolute",
+              inset: "15% 10%",
+              border: "3px solid rgba(255,255,255,.8)",
+              borderRadius: 12,
+              boxShadow: "0 0 20px rgba(0,0,0,.5) inset",
+            }}
+          />
         </div>
-      )}
 
-      {/* Tableau Retours */}
-      <div className="table-pro-full" style={{ marginTop: 2 }}>
-        <table>
-          <thead>
-            <tr>
-              <th>Produit</th>
-              <th>Quantité</th>
-              <th>Motif</th>
-              <th>N° Lot</th>
-              <th style={{ color: "#2d3748", fontWeight: "bold" }}>Fournisseur</th>
-              <th>Date</th>
-              <th>Action</th>
-            </tr>
-          </thead>
-          <tbody>
-            {filteredRetours.map((r) => (
-              <tr key={r.id}>
-                <td style={{ fontWeight: "bold" }}>{r.produit || "Non spécifié"}</td>
-                <td style={{ fontWeight: "bold", color: "#e53e3e" }}>{r.quantite}</td>
-                <td>
-                  <span
-                    style={{
-                      padding: "4px 8px",
-                      borderRadius: "12px",
-                      fontSize: "0.8rem",
-                      fontWeight: "bold",
-                      color: "white",
-                      backgroundColor:
-                        r.motif === "Expiration"
-                          ? "#e53e3e"
-                          : r.motif === "Destruction"
-                          ? "#dd6b20"
-                          : r.motif === "Cadeau"
-                          ? "#38a169"
-                          : "#667eea"
-                    }}
-                  >
-                    {r.motif}
-                  </span>
-                </td>
-                <td style={{ fontFamily: "monospace", fontSize: "0.9rem", color: "#667eea" }}>
-                  {r.numeroLot || "N/A"}
-                </td>
-                <td style={{ color: "#2d3748", fontWeight: "bold" }}>{r.fournisseur || "N/A"}</td>
-                <td>{formatDate(r.date, "")}</td>
-                <td>
-                  <button className="btn success" type="button" onClick={() => handleCancelRetour(r)}>
-                    Annuler Retour
-                  </button>
-                </td>
-              </tr>
-            ))}
-            {filteredRetours.length === 0 && (
-              <tr>
-                <td colSpan="7" style={{ textAlign: "center", padding: "50px", color: "#6b7280", fontStyle: "italic" }}>
-                  Aucun retour enregistré.
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
+        {error ? (
+          <p style={{ marginTop: 10, color: "#b91c1c", fontSize: 13 }}>{error}</p>
+        ) : (
+          <p style={{ marginTop: 10, color: "#6b7280", fontSize: 13 }}>
+            Astuce : place le code bien à plat et évite les reflets.
+          </p>
+        )}
       </div>
-
-      {/* Dialog retour */}
-      {openRetour && (
-        <div className="modal-overlay">
-          <div className="paper-card" style={{ maxWidth: 450, margin: "0 auto", background: "#213054" }}>
-            <h3 style={{ color: "#fff" }}>
-              Retour - {selectedEntry?.nom}
-              {selectedEntry && (
-                <div style={{ fontSize: "0.8rem", opacity: 0.8, marginTop: 5 }}>
-                  Lot: {selectedEntry.numeroLot} • Fournisseur: {selectedEntry.fournisseur}
-                </div>
-              )}
-            </h3>
-            <form
-              onSubmit={(e) => {
-                e.preventDefault();
-                handleRetour();
-              }}
-              style={{ display: "flex", flexDirection: "column", gap: 10 }}
-            >
-              <label>Quantité à retourner</label>
-              <input
-                type="number"
-                value={quantiteRetour}
-                onChange={(e) => setQuantiteRetour(e.target.value)}
-                min={1}
-                max={Number(selectedEntry?.quantite || 0)}
-                required
-              />
-              <div style={{ fontSize: "0.8rem", color: "#cbd5e0" }}>
-                Max disponible: {Number(selectedEntry?.quantite || 0)}
-                {selectedEntry?.datePeremption && (
-                  <div>Date d'expiration: {formatDate(selectedEntry.datePeremption)}</div>
-                )}
-              </div>
-              <label>Motif</label>
-              <select value={motifRetour} onChange={(e) => setMotifRetour(e.target.value)} required>
-                <option value="">Choisir un motif</option>
-                {motifs.map((m) => (
-                  <option key={m} value={m}>
-                    {m}
-                  </option>
-                ))}
-              </select>
-              <div style={{ marginTop: 10, display: "flex", gap: 7 }}>
-                <button className="btn info" type="button" onClick={() => setOpenRetour(false)}>
-                  Annuler
-                </button>
-                <button className="btn print" type="submit">
-                  Valider Retour
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

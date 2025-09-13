@@ -11,6 +11,7 @@
     "@testing-library/jest-dom": "^6.6.4",
     "@testing-library/react": "^16.3.0",
     "@testing-library/user-event": "^13.5.0",
+    "@zxing/browser": "^0.1.5",
     "firebase": "^12.0.0",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
@@ -19,30 +20,40 @@
     "web-vitals": "^2.1.4"
   },
   "scripts": {
-    "start": "react-scripts start",
-    "build": "react-scripts build",
-    "test": "react-scripts test",
+    "start": "craco start",
+    "build": "craco build",
+    "test": "craco test",
     "eject": "react-scripts eject"
   },
   "eslintConfig": {
-    "extends": [
-      "react-app",
-      "react-app/jest"
+    "extends": ["react-app", "react-app/jest"],
+    "overrides": [
+      {
+        "files": [
+          "src/components/achats/Achats.js",
+          "src/components/hooks/useKeyboardWedge.js",
+          "src/components/parametres/Parametres.js",
+          "src/components/BackupExport.js",
+          "src/components/ImportBackup.js",
+          "src/components/auth/Login.js",
+          "src/components/admin/GestionUtilisateurs.js",
+          "src/components/stock/Stock.js",
+          "src/components/users/UsersManagement.js"
+        ],
+        "rules": {
+          "react-hooks/exhaustive-deps": "off",
+          "no-loop-func": "off",
+          "no-unused-vars": ["warn", { "varsIgnorePattern": "^_", "argsIgnorePattern": "^_", "ignoreRestSiblings": true }]
+        }
+      }
     ]
   },
   "browserslist": {
-    "production": [
-      ">0.2%",
-      "not dead",
-      "not op_mini all"
-    ],
-    "development": [
-      "last 1 chrome version",
-      "last 1 firefox version",
-      "last 1 safari version"
-    ]
+    "production": [">0.2%", "not dead", "not op_mini all"],
+    "development": ["last 1 chrome version", "last 1 firefox version", "last 1 safari version"]
   },
   "devDependencies": {
+    "@craco/craco": "^7.1.0",
     "autoprefixer": "^10.4.21",
     "postcss": "^8.5.6",
     "tailwindcss": "^4.1.11"

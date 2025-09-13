@@ -1,4 +1,5 @@
 /* eslint-disable no-console */
+// src/firebase/config.js
 import { initializeApp, getApps, getApp } from "firebase/app";
 
 import {
@@ -14,7 +15,6 @@ import {
 import {
   // Firestore
   initializeFirestore,
-  getFirestore,
   persistentLocalCache,
   persistentMultipleTabManager,
   memoryLocalCache,
@@ -26,15 +26,29 @@ import {
    🔐 Config Firebase (clés côté client OK)
 ========================================= */
 function resolveAuthDomain() {
+  // 1) Override runtime éventuel
   try {
     if (typeof window !== "undefined" && window.__AUTH_DOMAIN__) {
       return String(window.__AUTH_DOMAIN__);
     }
   } catch {}
+
+  // 2) CRA / Webpack (.env => REACT_APP_FIREBASE_AUTH_DOMAIN)
   try {
-    const v = import.meta?.env?.VITE_FIREBASE_AUTH_DOMAIN;
-    if (v) return String(v);
+    if (typeof process !== "undefined" && process.env?.REACT_APP_FIREBASE_AUTH_DOMAIN) {
+      return String(process.env.REACT_APP_FIREBASE_AUTH_DOMAIN);
+    }
   } catch {}
+
+  // 3) Vite (.env => VITE_FIREBASE_AUTH_DOMAIN), via destructuring autorisée
+  try {
+    const { env } = import.meta; // ⚠️ protégé par try/catch pour Webpack
+    if (env?.VITE_FIREBASE_AUTH_DOMAIN) {
+      return String(env.VITE_FIREBASE_AUTH_DOMAIN);
+    }
+  } catch {}
+
+  // 4) Valeur par défaut
   return "anapharmo.firebaseapp.com";
 }
 
@@ -64,14 +78,14 @@ let auth;
 let authReady;
 
 try {
-  // initializeAuth doit être appelé au plus 1 fois
+  // initializeAuth ne doit être appelé qu’une seule fois
   auth = initializeAuth(app, {
     persistence: [indexedDBLocalPersistence, browserLocalPersistence],
     popupRedirectResolver: browserPopupRedirectResolver,
   });
   authReady = Promise.resolve();
 } catch {
-  // Déjà initialisé → réutiliser
+  // Déjà initialisé → réutiliser l’existant
   auth = getAuth(app);
   // S’assurer d’une persistance minimale
   authReady = setPersistence(auth, browserLocalPersistence).catch((err) => {
@@ -96,9 +110,10 @@ let persistenceEnabled = false;
 function initFirestoreWith(options) {
   return initializeFirestore(app, {
     ...options,
+    // Réseaux capricieux / environnements d’entreprise :
     experimentalAutoDetectLongPolling: true,
     useFetchStreams: false,
-    // experimentalForceLongPolling: true, // à activer si réseau très capricieux
+    // experimentalForceLongPolling: true, // Décommente en dernier recours
   });
 }
 
@@ -107,7 +122,7 @@ try {
     // ✅ Déjà initialisé (HMR/SSR)
     db = app[DB_SINGLETON_KEY];
   } else {
-    // Première init
+    // Première init : cache persistant + multi-onglets
     db = initFirestoreWith({
       localCache: persistentLocalCache({
         tabManager: persistentMultipleTabManager(),
@@ -162,29 +177,36 @@ export function isOffline() {
   return !isOnlineState;
 }
 
-/** Firestore: activer/désactiver le réseau explicitement */
+/** Firestore: activer/désactiver le réseau explicitement (avec mémo robuste) */
 let enableNetOnce = null;
+
 export async function enableFirestoreNetwork() {
   try {
-    if (!enableNetOnce) enableNetOnce = fsEnableNetwork(db).catch(() => {});
-    await enableNetOnce;
+    if (!enableNetOnce) {
+      // Ne PAS avaler l’erreur ici: on laisse l’await remonter le problème.
+      enableNetOnce = fsEnableNetwork(db);
+    }
+    await enableNetOnce; // attend la même promesse mémoïsée
     console.log("[firestore] Réseau activé");
     return true;
   } catch (error) {
-    console.warn("[firestore] enableNetwork a échoué:", error);
+    // Si l’activation a échoué, on reset pour permettre une future tentative
+    enableNetOnce = null;
+    console.warn("[firestore] enableNetwork a échoué:", error?.message || error);
     return false;
   }
 }
+
 export async function disableFirestoreNetwork() {
   try {
-    // On ne met PAS de memo ici ; on veut forcer réellement le disable
+    // Désactive réellement le réseau (pas mémoïsé)
     await fsDisableNetwork(db);
-    // Reset le memo pour pouvoir réactiver plus tard
+    // Reset le mémo pour pouvoir réactiver proprement plus tard
     enableNetOnce = null;
     console.log("[firestore] Réseau désactivé");
     return true;
   } catch (error) {
-    console.warn("[firestore] disableNetwork a échoué:", error);
+    console.warn("[firestore] disableNetwork a échoué:", error?.message || error);
     return false;
   }
 }
@@ -200,7 +222,7 @@ if (typeof window !== "undefined" && !window.__NET_LISTENERS_ATTACHED__) {
   window.addEventListener("offline", () => {
     console.log("[network] Connexion perdue (offline)");
     notifyNetworkStateChange(false);
-    // Firestore reste accessible via cache
+    // Firestore reste accessible via cache (si persistance active)
   });
 
   window.__NET_LISTENERS_ATTACHED__ = true;
@@ -280,7 +302,7 @@ export async function clearCache(options = {}) {
       // reset pour une future réactivation propre
       enableNetOnce = null;
     } catch (err) {
-      console.warn("[cache] disableNetwork:", err);
+      console.warn("[cache] disableNetwork:", err?.message || err);
     }
 
     // 2) Vider caches PWA (si présents)
@@ -293,13 +315,13 @@ export async function clearCache(options = {}) {
             try {
               return await caches.delete(name);
             } catch (err) {
-              console.warn(`[cache] Suppression ${name} impossible:`, err);
+              console.warn(`[cache] Suppression ${name} impossible:`, err?.message || err);
               return false;
             }
           })
         );
       } catch (err) {
-        console.warn("[cache] Erreur suppression caches:", err);
+        console.warn("[cache] Erreur suppression caches:", err?.message || err);
       }
     }
 
@@ -317,11 +339,11 @@ export async function clearCache(options = {}) {
         try {
           localStorage.removeItem(k);
         } catch (err) {
-          console.warn(`[cache] Impossible de supprimer ${k}:`, err);
+          console.warn(`[cache] Impossible de supprimer ${k}:`, err?.message || err);
         }
       });
     } catch (err) {
-      console.warn("[cache] Erreur localStorage:", err);
+      console.warn("[cache] Erreur localStorage:", err?.message || err);
     }
 
     // 4) Réactiver réseau Firestore
@@ -329,7 +351,7 @@ export async function clearCache(options = {}) {
     try {
       await enableFirestoreNetwork();
     } catch (err) {
-      console.warn("[cache] enableNetwork:", err);
+      console.warn("[cache] enableNetwork:", err?.message || err);
     }
 
     if (onProgress) onProgress(100, "Nettoyage terminé");
@@ -391,12 +413,12 @@ monitorConnectionErrors();
     await authReady;
   } catch (_) {}
 
-  // Active le réseau une seule fois (memoisé)
+  // Active le réseau une seule fois (mémoïsée)
   if (isOnlineState) {
     try {
       await enableFirestoreNetwork();
     } catch (e) {
-      console.warn("[init] enableNetwork au démarrage a échoué:", e);
+      console.warn("[init] enableNetwork au démarrage a échoué:", e?.message || e);
     }
   } else {
     console.log("[init] Démarrage en mode offline");

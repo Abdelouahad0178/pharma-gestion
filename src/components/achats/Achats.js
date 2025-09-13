@@ -1,5 +1,6 @@
 // src/components/achats/Achats.js
 import React, { useEffect, useState, useCallback, useRef } from "react";
+import useKeyboardWedge from "../hooks/useKeyboardWedge";
 import { db } from "../../firebase/config";
 import {
   collection,
@@ -23,6 +24,63 @@ import { useUserRole } from "../../contexts/UserRoleContext";
  */
 
 export default function Achats() {
+  // ===== BIP SONORE (Web Audio API) =====
+  const __audioCtxRef = useRef(null);
+  const __getAudioCtx = () => {
+    if (!__audioCtxRef.current) {
+      const Ctx = window.AudioContext || window.webkitAudioContext;
+      if (Ctx) {
+        try {
+          __audioCtxRef.current = new Ctx();
+        } catch {}
+      }
+    }
+    return __audioCtxRef.current;
+  };
+  const __playBeep = useCallback(
+    (freq = 880, dur = 120, type = "sine", volume = 0.15) => {
+      try {
+        const ctx = __getAudioCtx();
+        if (!ctx) return;
+        if (ctx.state === "suspended") {
+          ctx.resume?.();
+        }
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = type;
+        osc.frequency.value = freq;
+        gain.gain.value = volume;
+        osc.connect(gain).connect(ctx.destination);
+        osc.start();
+        setTimeout(() => {
+          try {
+            osc.stop();
+            osc.disconnect();
+            gain.disconnect();
+          } catch {}
+        }, dur);
+      } catch {}
+    },
+    []
+  );
+  const beepSuccess = useCallback(() => {
+    __playBeep(1175, 90, "sine", 0.15);
+    setTimeout(() => __playBeep(1568, 110, "sine", 0.15), 100);
+  }, [__playBeep]);
+  const beepError = useCallback(() => {
+    __playBeep(220, 220, "square", 0.2);
+  }, [__playBeep]);
+  useEffect(() => {
+    const unlock = () => {
+      try {
+        __getAudioCtx()?.resume?.();
+      } catch {}
+    };
+    window.addEventListener("click", unlock, { once: true });
+    window.addEventListener("keydown", unlock, { once: true });
+    return () => {};
+  }, []);
+
   /* ================= Styles injectés une seule fois ================= */
   const injectStyles = useCallback(() => {
     if (document.getElementById("achats-styles")) return;
@@ -75,8 +133,6 @@ export default function Achats() {
 
       .page-header{
         background:var(--header-grad);
-        color:#fff; border-radius:16px; padding:16px; margin-bottom:16px;
-        box-shadow:0 18px 46px rgba(2,6,23,.25);
       }
       .page-header h1{ margin:0; font-weight:900; letter-spacing:.3px; }
       .page-sub{ opacity:.95; margin-top:6px; }
@@ -85,7 +141,7 @@ export default function Achats() {
       @media (max-width:1024px){ .form-grid{ grid-template-columns:repeat(2,1fr);} }
       @media (max-width:640px){ .form-grid{ grid-template-columns:1fr;} }
 
-      .article-grid{ display:grid; gap:10px; grid-template-columns:1.2fr .8fr .8fr .8fr .8fr 1fr 1fr 1fr 1fr; }
+      .article-grid{ display:grid; gap:10px; grid-template-columns:1.2fr .8fr .8fr .8fr .8fr 1fr 1fr 1fr 1fr 1fr 1fr; }
       @media (max-width:1280px){ .article-grid{ grid-template-columns:1fr 1fr 1fr; } }
       @media (max-width:640px){ .article-grid{ grid-template-columns:1fr; } }
 
@@ -212,7 +268,9 @@ export default function Achats() {
     document.head.appendChild(style);
   }, []);
 
-  useEffect(() => { injectStyles(); }, [injectStyles]);
+  useEffect(() => {
+    injectStyles();
+  }, [injectStyles]);
 
   /* ================= Contexte ================= */
   const { loading, societeId, user } = useUserRole();
@@ -230,6 +288,7 @@ export default function Achats() {
   const [remiseGlobale, setRemiseGlobale] = useState(0);
 
   /* ================= Ligne article ================= */
+  const [numeroArticle, setNumeroArticle] = useState("");
   const [produit, setProduit] = useState("");
   const [produitNouveau, setProduitNouveau] = useState("");
   const [quantite, setQuantite] = useState(1);
@@ -245,6 +304,7 @@ export default function Achats() {
   const [achats, setAchats] = useState([]);
   const [medicaments, setMedicaments] = useState([]);
   const [stockEntries, setStockEntries] = useState([]);
+  const [showScanner, setShowScanner] = useState(false);
 
   /* ================= Paramètres impression / cachet ================= */
   const [parametres, setParametres] = useState({
@@ -309,7 +369,7 @@ export default function Achats() {
     try {
       if (!v) return null;
       if (typeof v?.toDate === "function") return v.toDate();
-      if (v?.seconds) return new Date(v.seconds * 1000);
+      if (v?.seconds != null) return new Date(v.seconds * 1000);
       const d = new Date(v);
       return isNaN(d.getTime()) ? null : d;
     } catch {
@@ -397,21 +457,21 @@ export default function Achats() {
   const fetchStockEntries = useCallback(async () => {
     if (!societeId) return setStockEntries([]);
     try {
-      const snap = await getDocs(
-        collection(db, "societe", societeId, "stock_entries")
-      );
+      const snap = await getDocs(collection(db, "societe", societeId, "stock_entries"));
       const arr = [];
       snap.forEach((d) => arr.push({ id: d.id, ...d.data() }));
       arr.sort((a, b) => {
         if ((a.nom || "") !== (b.nom || "")) return (a.nom || "").localeCompare(b.nom || "");
-        return new Date(a.datePeremption || 0) - new Date(b.datePeremption || 0);
+        const da = toDateSafe(a.datePeremption) || new Date(0);
+        const dbb = toDateSafe(b.datePeremption) || new Date(0);
+        return da - dbb;
       });
       setStockEntries(arr);
     } catch (e) {
       console.error("fetchStockEntries:", e);
       setStockEntries([]);
     }
-  }, [societeId]);
+  }, [societeId, toDateSafe]);
 
   /* ================= Noms de médicaments : UNIQUEMENT stock_entries ================= */
   const fetchMedicaments = useCallback(async () => {
@@ -450,7 +510,7 @@ export default function Achats() {
         const existing = stockEntries.filter((e) => e.nom === value);
         if (existing.length > 0) {
           const last = existing[existing.length - 1];
-          setPrixUnitaire(last.prixAchat || "");
+          setPrixUnitaire(last.prixAchat || last.prixUnitaire || "");
           setPrixVente(last.prixVente || "");
           setFournisseurArticle(last.fournisseur || "");
         } else {
@@ -459,12 +519,13 @@ export default function Achats() {
             const ex = med.exemples[0];
             setPrixUnitaire(ex.prixAchat || ex.prixUnitaire || "");
             setPrixVente(ex.prixVente || "");
+            setFournisseurArticle(ex.fournisseur || "");
+          } else {
+            setPrixUnitaire("");
+            setPrixVente("");
+            setFournisseurArticle("");
           }
         }
-      } else {
-        setPrixUnitaire("");
-        setPrixVente("");
-        setFournisseurArticle("");
       }
     },
     [stockEntries, medicaments]
@@ -473,7 +534,7 @@ export default function Achats() {
   /* ================= Ajouter un article (commande) ================= */
   const handleAddArticle = useCallback(
     (e) => {
-      e.preventDefault();
+      e.preventDefault?.();
       const nomFinal = produit === "_new_" ? produitNouveau.trim() : produit;
       if (!nomFinal || !quantite || !prixUnitaire || !datePeremption) {
         showNotification("Veuillez remplir tous les champs obligatoires", "error");
@@ -499,6 +560,8 @@ export default function Achats() {
           remise: Number(remiseArticle) || 0,
           datePeremption,
           numeroLot: lot,
+          numeroArticle: (numeroArticle || "").trim(),
+          codeBarre: (numeroArticle || "").trim(), // << alias pour stocks.js
           fournisseurArticle: four,
         },
         recu: null,
@@ -513,6 +576,7 @@ export default function Achats() {
       setRemiseArticle(0);
       setDatePeremption("");
       setNumeroLot("");
+      setNumeroArticle("");
       setFournisseurArticle("");
       showNotification("Article ajouté (commande) !", "success");
     },
@@ -525,6 +589,7 @@ export default function Achats() {
       remiseArticle,
       datePeremption,
       numeroLot,
+      numeroArticle,
       fournisseurArticle,
       fournisseur,
       showNotification,
@@ -549,6 +614,7 @@ export default function Achats() {
         const qte = Number(a.quantite || 0);
         const pA = Number(a.prixUnitaire || a.prixAchat || 0);
         const pV = Number(a.prixVente || a.prixUnitaire || a.prixAchat || 0);
+        const dateP = a.datePeremption ? Timestamp.fromDate(new Date(a.datePeremption)) : null;
         try {
           await addDoc(collection(db, "societe", societeId, "stock_entries"), {
             nom,
@@ -556,7 +622,9 @@ export default function Achats() {
             quantiteInitiale: qte,
             prixAchat: pA,
             prixVente: pV,
-            datePeremption: a.datePeremption || "",
+            datePeremption: dateP,
+            numeroArticle: a.numeroArticle || a.codeBarre || null, // << garantit présence
+            codeBarre: a.codeBarre || a.numeroArticle || null,   // << alias pour stocks.js
             numeroLot: a.numeroLot || `LOT${Date.now().toString().slice(-6)}`,
             fournisseur: a.fournisseurArticle || payload.fournisseur || "",
             fournisseurPrincipal: payload.fournisseur || "",
@@ -577,37 +645,123 @@ export default function Achats() {
     [societeId, user]
   );
 
-  /* ================= Annule stock_entries si suppression d'un bon reçu ================= */
+  // Supprime les entrées de stock liées à un bon d'achat (par ID du bon)
   const updateStockOnDelete = useCallback(
     async (payload) => {
-      // Supprime uniquement les entrées stock_entries liées à ce bon
-      if (!societeId || !user || !payload?.articles?.length) return;
-      const ops = payload.articles.map(async (a) => {
-        const nom = a.produit || "";
-        try {
-          const entriesRef = collection(db, "societe", societeId, "stock_entries");
-          const q1 = query(entriesRef, where("nom", "==", nom));
-          const s1 = await getDocs(q1);
-          const delList = [];
-          s1.forEach((d) => {
-            const data = d.data();
-            if (!payload.id || data.achatId === payload.id) delList.push(d.id);
-          });
-          await Promise.all(
-            delList.map((entryId) =>
-              deleteDoc(doc(db, "societe", societeId, "stock_entries", entryId))
-            )
-          );
-        } catch (e) {
-          console.error("updateStockOnDelete ->", nom, e);
-        }
-      });
-      await Promise.allSettled(ops);
+      try {
+        if (!societeId || !payload?.id) return;
+        // On cible les entrées créées par ce bon
+        const q = query(
+          collection(db, "societe", societeId, "stock_entries"),
+          where("achatId", "==", payload.id)
+        );
+        const snap = await getDocs(q);
+        const ops = [];
+        snap.forEach((d) => {
+          ops.push(deleteDoc(d.ref));
+        });
+        await Promise.all(ops);
+        // MàJ locale
+        setStockEntries?.((prev) => prev.filter((e) => e.achatId !== payload.id));
+      } catch (e) {
+        console.error("updateStockOnDelete error:", e);
+      }
     },
-    [societeId, user]
+    [societeId, setStockEntries]
   );
 
+  const onBarcodeDetected = useCallback(
+    (barcode) => {
+      try {
+        const fields = ["codeBarre", "barcode", "ean", "ean13", "upc", "gtin", "numeroArticle"];
+        const isMatch = (obj) => fields.some((f) => String(obj?.[f] || "") === String(barcode));
+
+        const fromEntry = stockEntries.find((p) => isMatch(p)) || null;
+        const fromMed = !fromEntry ? medicaments.find((m) => isMatch(m)) : null;
+        const found = fromEntry || fromMed;
+
+        if (!found) {
+          beepError?.();
+          if (typeof showNotification === "function")
+            showNotification(`Aucun produit trouvé pour le code : ${barcode}`, "error");
+          return;
+        }
+
+        const nom = found.nom || found.name || "";
+        if (typeof setProduit === "function") setProduit(nom || "");
+        if (typeof setQuantite === "function") setQuantite(1);
+
+        // Prix pour Achats: priorité prixAchat > prixUnitaire > prixVente
+        const pA = Number(found.prixAchat ?? found.prixUnitaire ?? found.prixVente ?? 0);
+        if (pA > 0 && typeof setPrixUnitaire === "function") setPrixUnitaire(pA);
+
+        // Champs Achats
+        if (found.numeroLot && typeof setNumeroLot === "function") setNumeroLot(found.numeroLot);
+        if (found.fournisseurArticle && typeof setFournisseurArticle === "function")
+          setFournisseurArticle(found.fournisseurArticle);
+        if (typeof setNumeroArticle === "function")
+          setNumeroArticle(found.numeroArticle || found.codeBarre || found.barcode || found.ean || found.ean13 || "");
+
+        // Date de péremption
+        const d = typeof toDateSafe === "function" ? toDateSafe(found.datePeremption) : found.datePeremption ? new Date(found.datePeremption) : null;
+        let iso = null;
+        if (d && d instanceof Date && !isNaN(d)) {
+          iso = new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+          if (typeof setDatePeremption === "function") setDatePeremption(iso);
+        }
+
+        // Ajout auto si OK
+        const canAutoAdd = Boolean(nom && pA > 0 && (typeof datePeremption === "string" ? datePeremption : iso));
+        if (canAutoAdd && typeof handleAddArticle === "function") {
+          beepSuccess?.();
+          setTimeout(() => {
+            try {
+              handleAddArticle({ preventDefault: () => {} });
+            } catch {}
+          }, 60);
+        } else {
+          beepError?.();
+          if (typeof showNotification === "function")
+            showNotification(
+              "Produit détecté, complétez les champs manquants (ex: date d’expiration) avant l’ajout.",
+              "warning"
+            );
+        }
+      } catch (e) {
+        console.error(e);
+        beepError?.();
+        if (typeof showNotification === "function")
+          showNotification("Erreur détecteur code-barres", "error");
+      }
+    },
+    [stockEntries, medicaments, handleAddArticle, showNotification, datePeremption, beepError, beepSuccess, toDateSafe]
+  );
+
+  useKeyboardWedge((code) => onBarcodeDetected(code), { minChars: 6, endKey: "Enter", timeoutMs: 100 });
+
   /* ================= Enregistrer bon (création / edition) ================= */
+
+  // HOISTED helper to avoid TDZ errors
+  function resetForm() {
+    setFournisseur("");
+    setDateAchat("");
+    setStatutPaiement("payé");
+    setRemiseGlobale(0);
+    setArticles([]);
+    setEditId(null);
+    setIsEditing(false);
+    setProduit("");
+    setProduitNouveau("");
+    setQuantite(1);
+    setPrixUnitaire("");
+    setPrixVente("");
+    setRemiseArticle(0);
+    setDatePeremption("");
+    setNumeroLot("");
+    setNumeroArticle("");
+    setFournisseurArticle("");
+  }
+
   const handleAddBon = useCallback(
     async (e) => {
       e.preventDefault();
@@ -632,17 +786,14 @@ export default function Achats() {
         produit: a.produit,
         commandee: { ...a.commandee },
         recu: isEditing
-          ? achats
-              .find((b) => b.id === editId)
-              ?.articles.find((x) => x.produit === a.produit)?.recu || null
+          ? achats.find((b) => b.id === editId)?.articles.find((x) => x.produit === a.produit)?.recu || null
           : null,
       }));
       const montantTotal =
         articlesToSave.reduce(
           (sum, a) =>
             sum +
-            ((a.commandee.prixUnitaire || a.commandee.prixAchat || 0) *
-              (a.commandee.quantite || 0) -
+            ((a.commandee.prixUnitaire || a.commandee.prixAchat || 0) * (a.commandee.quantite || 0) -
               (a.commandee.remise || 0)),
           0
         ) - (Number(remiseGlobale) || 0);
@@ -785,16 +936,21 @@ export default function Achats() {
   const handleUpdateReceptionArticle = useCallback((index, field, value) => {
     setReceptionArticles((prev) => {
       const arr = [...prev];
-      const item = { ...(arr[index]?.recu || {}) };
-      if (["quantite", "prixUnitaire", "prixVente", "remise"].includes(field)) {
-        item[field] = Number(value);
-        if (field === "prixUnitaire") item.prixAchat = Number(value);
+      const recu = { ...(arr[index]?.recu || {}) };
+      if (
+        ["quantite", "prixUnitaire", "prixVente", "remise"].includes(field)
+      ) {
+        recu[field] = Number(value);
+        if (field === "prixUnitaire") recu.prixAchat = Number(value);
       } else {
-        item[field] = value;
+        recu[field] = value;
+        // garder l'alias synchro
+        if (field === "numeroArticle") recu.codeBarre = value;
+        if (field === "codeBarre") recu.numeroArticle = value;
       }
       const qCmd = Number(arr[index]?.commandee?.quantite || 0);
-      item.quantite = Math.max(0, Math.min(qCmd, Number(item.quantite || 0)));
-      arr[index] = { ...arr[index], recu: item };
+      recu.quantite = Math.max(0, Math.min(qCmd, Number(recu.quantite || 0)));
+      arr[index] = { ...arr[index], recu };
       return arr;
     });
   }, []);
@@ -916,9 +1072,7 @@ export default function Achats() {
           (receivedArticles.length
             ? receivedArticles.reduce(
                 (sum, a) =>
-                  sum +
-                  ((a.prixUnitaire || a.prixAchat || 0) * (a.quantite || 0) -
-                    (a.remise || 0)),
+                  sum + ((a.prixUnitaire || a.prixAchat || 0) * (a.quantite || 0) - (a.remise || 0)),
                 0
               )
             : 0) - (Number(bon.remiseGlobale) || 0);
@@ -977,9 +1131,7 @@ export default function Achats() {
     const arr = bon?.articles || [];
     return arr.reduce((sum, a) => {
       const item = a?.recu || a?.commandee || {};
-      const total =
-        (item.prixUnitaire || item.prixAchat || 0) * (item.quantite || 0) -
-        (item.remise || 0);
+      const total = (item.prixUnitaire || item.prixAchat || 0) * (item.quantite || 0) - (item.remise || 0);
       return sum + total;
     }, 0) - (Number(bon?.remiseGlobale) || 0);
   }, []);
@@ -1068,16 +1220,14 @@ export default function Achats() {
   const fullPrintHTML = useCallback(
     (bon, articlesPrint, total, cachetHtml, isMobileDevice = false) => {
       /* Palette impression alignée */
-      const primaryColor = "#4F46E5";   // indigo
+      const primaryColor = "#4F46E5"; // indigo
       const secondaryColor = "#06B6D4"; // cyan
-      const accentColor = "#F472B6";    // pink
+      const accentColor = "#F472B6"; // pink
 
       const dateStr =
         (toDateSafe(bon.timestamp) || toDateSafe(bon.date) || new Date()).toLocaleDateString("fr-FR");
       const titleDocument =
-        bon.statutReception === "en_attente"
-          ? "Bon de Commande Multi-Lots"
-          : "Bon de Réception Multi-Lots";
+        bon.statutReception === "en_attente" ? "Bon de Commande Multi-Lots" : "Bon de Réception Multi-Lots";
 
       return `<!DOCTYPE html>
 <html lang="fr">
@@ -1103,7 +1253,7 @@ export default function Achats() {
     .status-paye{background:linear-gradient(135deg,#22C55E 0%,#10B981 100%);color:#fff}
     .status-partiel{background:linear-gradient(135deg,#F59E0B 0%,#D97706 100%);color:#fff}
     .status-impaye{background:linear-gradient(135deg,#EF4444 0%,#DC2626 100%);color:#fff}
-    .articles-section{margin:${isMobileDevice ? "10px 0" : "15px 0"};flex-shrink:0;max-height:${isMobileDevice ? "300px" : "400px"};overflow:auto}
+    .articles-section{margin:${isMobileDevice ? "10px" : "15px"};flex-shrink:0;max-height:${isMobileDevice ? "300px" : "400px"};overflow:auto}
     .section-title{color:${secondaryColor};font-size:${isMobileDevice ? "1em" : "1.2em"};font-weight:800;margin-bottom:${isMobileDevice ? "8px" : "10px"};text-align:center;text-transform:uppercase;letter-spacing:${isMobileDevice ? ".5px" : "1px"};position:relative}
     .section-title::after{content:'';position:absolute;bottom:-2px;left:50%;transform:translateX(-50%);width:${isMobileDevice ? "40px" : "60px"};height:2px;background:linear-gradient(90deg,${primaryColor} 0%,${accentColor} 100%)}
     .articles-table{width:100%;border-collapse:collapse;border-radius:${isMobileDevice ? "4px" : "6px"};overflow:hidden;margin:${isMobileDevice ? "8px" : "10px"} 0;font-size:${isMobileDevice ? ".75em" : ".85em"}}
@@ -1166,6 +1316,7 @@ export default function Achats() {
             <tr>
               <th>Produit</th>
               <th>Lot</th>
+              <th>Code</th>
               <th>Fournisseur</th>
               <th>Qté</th>
               <th>Prix Achat</th>
@@ -1175,15 +1326,18 @@ export default function Achats() {
             </tr>
           </thead>
           <tbody>
-            ${articlesPrint.map((a) => {
-              const item = a || {};
-              const prixAchatFinal = Number(item.prixUnitaire || item.prixAchat || 0);
-              const totalArticle = prixAchatFinal * Number(item.quantite || 0) - Number(item.remise || 0);
-              const isExpSoon = item.datePeremption && new Date(item.datePeremption) < new Date(Date.now() + 180 * 24 * 60 * 60 * 1000);
-              return `
+            ${articlesPrint
+              .map((a) => {
+                const item = a || {};
+                const prixAchatFinal = Number(item.prixUnitaire || item.prixAchat || 0);
+                const totalArticle = prixAchatFinal * Number(item.quantite || 0) - Number(item.remise || 0);
+                const isExpSoon =
+                  item.datePeremption && new Date(item.datePeremption) < new Date(Date.now() + 180 * 24 * 60 * 60 * 1000);
+                return `
                 <tr>
                   <td class="product-name">${a.produit || ""}</td>
                   <td><span class="lot-number">${item.numeroLot || "N/A"}</span></td>
+                  <td>${item.numeroArticle || item.codeBarre || ""}</td>
                   <td>${item.fournisseurArticle || bon.fournisseur || ""}</td>
                   <td><span class="quantity-cell">${item.quantite || 0}</span></td>
                   <td class="price-cell">${prixAchatFinal.toFixed(2)} DH</td>
@@ -1191,7 +1345,8 @@ export default function Achats() {
                   <td style="color:${isExpSoon ? "#EF4444" : "#475569"}">${item.datePeremption || ""}</td>
                   <td class="price-cell">${totalArticle.toFixed(2)} DH</td>
                 </tr>`;
-            }).join("")}
+              })
+              .join("")}
           </tbody>
         </table>
       </div>
@@ -1228,83 +1383,24 @@ export default function Achats() {
       fullPrintHTML(bon, arts, total, cachetHtml, isMobileDevice);
   }, [fullPrintHTML]);
 
-  /* ================= Impression orchestrée ================= */
-  const handlePrintBon = useCallback(
-    (bon) => {
-      try {
-        const articlesToPrint = (bon.articles || []).map((a) => ({
-          produit: a.produit,
-          ...(a.recu || a.commandee || {}),
-        }));
-        const totalArticles = articlesToPrint.reduce(
-          (sum, a) =>
-            sum +
-            ((a.prixUnitaire || a.prixAchat || 0) * (a.quantite || 0) -
-              (a.remise || 0)),
-          0
-        );
-        const total = totalArticles - (Number(bon.remiseGlobale) || 0);
-        const cachetHtml = generateCachetHtml();
-        const isMobileDevice =
-          /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(
-            navigator.userAgent
-          ) || window.innerWidth < 768;
-
-        const htmlContent = generatePrintHTML(
-          bon,
-          articlesToPrint,
-          total,
-          cachetHtml,
-          isMobileDevice
-        );
-
-        if (isMobileDevice) {
-          handleMobilePrint(
-            htmlContent,
-            bon.statutReception === "en_attente" ? "Bon de Commande" : "Bon de Réception",
-            bon.id
-          );
-        } else {
-          handleDesktopPrint(
-            htmlContent,
-            bon.statutReception === "en_attente" ? "Bon de Commande" : "Bon de Réception",
-            bon.id
-          );
-        }
-
-        showNotification(
-          `Document prêt ${isMobileDevice ? "(mobile)" : "(desktop)"}`,
-          "success"
-        );
-      } catch (e) {
-        console.error("handlePrintBon:", e);
-        showNotification("Erreur lors de la préparation d'impression", "error");
-      }
-    },
-    [generateCachetHtml, generatePrintHTML, showNotification]
-  );
-
   /* ================= Impression Mobile / Desktop / Téléchargement ================= */
-  const handleMobilePrint = useCallback((htmlContent, titleDocument, numero) => {
+  // HOISTED HELPERS to avoid TDZ issues
+  function downloadPrintFile(htmlContent, titleDocument, numero) {
     try {
-      const agent = navigator.userAgent.toLowerCase();
-      const isIOS = /iphone|ipad|ipod/.test(agent);
-      const isAndroid = /android/.test(agent);
-      const mobileOptimized = htmlContent
-        .replace(/height: calc\(100vh[^)]*\)/g, "height: auto")
-        .replace(/min-height: calc\(100vh[^)]*\)/g, "min-height: auto");
-      if (isIOS || isAndroid) {
-        showMobileDownloadOption(mobileOptimized, titleDocument, numero);
-      } else {
-        handleMobileNewWindow(mobileOptimized, titleDocument, numero);
-      }
+      const a = document.createElement("a");
+      const blob = new Blob([htmlContent], { type: "text/html;charset=utf-8" });
+      a.href = URL.createObjectURL(blob);
+      a.download = `${titleDocument.replace(/\s+/g, "_")}_${String(numero).slice(0, 8)}.html`;
+      document.body.appendChild(a);
+      a.click();
+      URL.revokeObjectURL(a.href);
+      document.body.removeChild(a);
     } catch (e) {
-      console.error("handleMobilePrint:", e);
-      downloadPrintFile(htmlContent, titleDocument, numero);
+      console.error("downloadPrintFile:", e);
     }
-  }, []);
+  }
 
-  const handleMobileNewWindow = useCallback((htmlContent, _title, _numero) => {
+  function handleMobileNewWindow(htmlContent, _title, _numero) {
     try {
       const optimized = htmlContent.replace(
         "<body>",
@@ -1327,16 +1423,15 @@ export default function Achats() {
           <div style="position:fixed;bottom:80px;right:20px;background:#06B6D4;color:#fff;padding:10px 20px;border-radius:20px;cursor:pointer;box-shadow:0 4px 12px rgba(0,0,0,.3);z-index:9999;font-weight:bold;text-align:center;font-size:14px" onclick="window.close()">✖️ Fermer</div>
         `;
         w.document.body.appendChild(btn);
-      } else {
         downloadPrintFile(htmlContent, _title, _numero);
       }
     } catch (e) {
       console.error("handleMobileNewWindow:", e);
       downloadPrintFile(htmlContent, _title, _numero);
     }
-  }, []);
+  }
 
-  const showMobileDownloadOption = useCallback((htmlContent, titleDocument, numero) => {
+  function showMobileDownloadOption(htmlContent, titleDocument, numero) {
     const modal = document.createElement("div");
     modal.style.cssText =
       "position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,.8);display:flex;align-items:center;justify-content:center;z-index:10000;padding:20px;";
@@ -1349,7 +1444,11 @@ export default function Achats() {
         <button id="mp_close" style="background:#E2E8F0;color:#0F172A;border:none;padding:10px 20px;border-radius:10px;font-weight:bold;margin-top:15px;cursor:pointer;">❌ Annuler</button>
       </div>`;
     document.body.appendChild(modal);
-    const cleanup = () => { try { document.body.removeChild(modal); } catch {} };
+    const cleanup = () => {
+      try {
+        document.body.removeChild(modal);
+      } catch {}
+    };
     modal.querySelector("#mp_download")?.addEventListener("click", () => {
       downloadPrintFile(htmlContent, titleDocument, numero);
       cleanup();
@@ -1359,9 +1458,9 @@ export default function Achats() {
       cleanup();
     });
     modal.querySelector("#mp_close")?.addEventListener("click", cleanup);
-  }, [handleMobileNewWindow]);
+  }
 
-  const handleDesktopPrint = useCallback((htmlContent, _title, _numero) => {
+  function handleDesktopPrint(htmlContent, _title, _numero) {
     try {
       const w = window.open("", "_blank", "width=900,height=700,scrollbars=yes,resizable=yes");
       if (w && w.document) {
@@ -1369,7 +1468,9 @@ export default function Achats() {
         const safeClose = () => {
           if (!closed && w && !w.closed) {
             closed = true;
-            try { w.close(); } catch {}
+            try {
+              w.close();
+            } catch {}
           }
         };
         w.document.open();
@@ -1387,7 +1488,6 @@ export default function Achats() {
           }
         }, 400);
         setTimeout(safeClose, 5000);
-      } else {
         showNotification("Popups bloquées - Téléchargement du document…", "info");
         downloadPrintFile(htmlContent, _title, _numero);
       }
@@ -1395,46 +1495,73 @@ export default function Achats() {
       console.error("handleDesktopPrint:", e);
       downloadPrintFile(htmlContent, _title, _numero);
     }
-  }, [showNotification]);
+  }
 
-  const downloadPrintFile = useCallback((htmlContent, titleDocument, numero) => {
+  function handleMobilePrint(htmlContent, titleDocument, numero) {
     try {
-      const a = document.createElement("a");
-      const blob = new Blob([htmlContent], { type: "text/html;charset=utf-8" });
-      a.href = URL.createObjectURL(blob);
-      a.download = `${titleDocument.replace(/\s+/g, "_")}_${String(numero).slice(0, 8)}.html`;
-      document.body.appendChild(a);
-      a.click();
-      URL.revokeObjectURL(a.href);
-      document.body.removeChild(a);
+      const agent = navigator.userAgent.toLowerCase();
+      const isIOS = /iphone|ipad|ipod/.test(agent);
+      const isAndroid = /android/.test(agent);
+      const mobileOptimized = htmlContent
+        .replace(/height: calc\(100vh[^)]*\)/g, "height: auto")
+        .replace(/min-height: calc\(100vh[^)]*\)/g, "min-height: auto");
+      if (isIOS || isAndroid) {
+        showMobileDownloadOption(mobileOptimized, titleDocument, numero);
+        handleMobileNewWindow(mobileOptimized, titleDocument, numero);
+      }
     } catch (e) {
-      console.error("downloadPrintFile:", e);
+      console.error("handleMobilePrint:", e);
+      downloadPrintFile(htmlContent, titleDocument, numero);
     }
-  }, []);
+  }
 
-  /* ================= Reset formulaire ================= */
-  const resetForm = useCallback(() => {
-    setFournisseur("");
-    setDateAchat("");
-    setStatutPaiement("payé");
-    setRemiseGlobale(0);
-    setArticles([]);
-    setEditId(null);
-    setIsEditing(false);
-    setProduit("");
-    setProduitNouveau("");
-    setQuantite(1);
-    setPrixUnitaire("");
-    setPrixVente("");
-    setRemiseArticle(0);
-    setDatePeremption("");
-    setNumeroLot("");
-    setFournisseurArticle("");
-  }, []);
+  /* ================= Impression orchestrée ================= */
+  const handlePrintBon = useCallback(
+    (bon) => {
+      try {
+        const articlesToPrint = (bon.articles || []).map((a) => ({
+          produit: a.produit,
+          ...(a.recu || a.commandee || {}),
+        }));
+        const totalArticles = articlesToPrint.reduce(
+          (sum, a) => sum + ((a.prixUnitaire || a.prixAchat || 0) * (a.quantite || 0) - (a.remise || 0)),
+          0
+        );
+        const total = totalArticles - (Number(bon.remiseGlobale) || 0);
+        const cachetHtml = generateCachetHtml();
+        const isMobileDevice =
+          /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) ||
+          window.innerWidth < 768;
+
+        const htmlContent = generatePrintHTML(bon, articlesToPrint, total, cachetHtml, isMobileDevice);
+
+        if (isMobileDevice) {
+          handleMobilePrint(
+            htmlContent,
+            bon.statutReception === "en_attente" ? "Bon de Commande" : "Bon de Réception",
+            bon.id
+          );
+        } else {
+          handleDesktopPrint(
+            htmlContent,
+            bon.statutReception === "en_attente" ? "Bon de Commande" : "Bon de Réception",
+            bon.id
+          );
+        }
+
+        showNotification(`Document prêt ${isMobileDevice ? "(mobile)" : "(desktop)"}`, "success");
+      } catch (e) {
+        console.error("handlePrintBon:", e);
+        showNotification("Erreur lors de la préparation d'impression", "error");
+      }
+    },
+    [generateCachetHtml, generatePrintHTML, showNotification]
+  );
 
   /* ================= Filtrage des achats ================= */
   const filteredAchats = achats.filter((b) => {
-    if (filterFournisseur && !String(b.fournisseur || "").toLowerCase().includes(filterFournisseur.toLowerCase())) return false;
+    if (filterFournisseur && !String(b.fournisseur || "").toLowerCase().includes(filterFournisseur.toLowerCase()))
+      return false;
     const bonDate = toDateSafe(b.date || b.timestamp);
     if (filterDateStart && bonDate < new Date(filterDateStart)) return false;
     if (filterDateEnd && bonDate > new Date(filterDateEnd + "T23:59:59")) return false;
@@ -1463,11 +1590,7 @@ export default function Achats() {
       </div>
 
       {/* Notifications */}
-      {notification && (
-        <div className={`notice ${notification.type || "success"}`}>
-          {notification.message}
-        </div>
-      )}
+      {notification && <div className={`notice ${notification.type || "success"}`}>{notification.message}</div>}
 
       {/* Formulaire nouveau / modifier bon — REPLIABLE */}
       <div className="card">
@@ -1504,17 +1627,8 @@ export default function Achats() {
                 value={fournisseur}
                 onChange={(e) => setFournisseur(e.target.value)}
               />
-              <input
-                className="field"
-                type="date"
-                value={dateAchat}
-                onChange={(e) => setDateAchat(e.target.value)}
-              />
-              <select
-                className="select"
-                value={statutPaiement}
-                onChange={(e) => setStatutPaiement(e.target.value)}
-              >
+              <input className="field" type="date" value={dateAchat} onChange={(e) => setDateAchat(e.target.value)} />
+              <select className="select" value={statutPaiement} onChange={(e) => setStatutPaiement(e.target.value)}>
                 <option value="payé">payé</option>
                 <option value="partiel">partiel</option>
                 <option value="impayé">impayé</option>
@@ -1591,6 +1705,12 @@ export default function Achats() {
               />
               <input
                 className="field"
+                placeholder="N° article (code-barres)"
+                value={numeroArticle}
+                onChange={(e) => setNumeroArticle(e.target.value)}
+              />
+              <input
+                className="field"
                 placeholder="Fournisseur article"
                 value={fournisseurArticle}
                 onChange={(e) => setFournisseurArticle(e.target.value)}
@@ -1603,6 +1723,20 @@ export default function Achats() {
                 value={remiseArticle}
                 onChange={(e) => setRemiseArticle(e.target.value)}
               />
+
+              <div style={{ display: "flex", gap: 8, alignItems: "center", margin: "6px 0" }}>
+                <button type="button" className="btn btn-secondary" onClick={() => setShowScanner(true)}>
+                  📷 Scanner avec caméra
+                </button>
+                <CameraBarcodeInlineModal
+                  open={showScanner}
+                  onClose={() => setShowScanner(false)}
+                  onDetected={(code) => {
+                    onBarcodeDetected(code);
+                    setShowScanner(false);
+                  }}
+                />
+              </div>
 
               <button className="btn btn-primary" onClick={handleAddArticle}>
                 ➕ Ajouter
@@ -1617,6 +1751,7 @@ export default function Achats() {
                     <tr>
                       <th className="left">Produit</th>
                       <th>Lot</th>
+                      <th>Code</th>
                       <th>Qté</th>
                       <th>PA</th>
                       <th>PV</th>
@@ -1630,26 +1765,18 @@ export default function Achats() {
                       <tr key={i}>
                         <td className="left">{a.produit}</td>
                         <td>
-                          <span className="chip">
-                            {a.commandee?.numeroLot || ""}
-                          </span>
+                          <span className="chip">{a.commandee?.numeroLot || ""}</span>
                         </td>
+                        <td>{a.commandee?.numeroArticle || a.commandee?.codeBarre || ""}</td>
                         <td>
                           <span className="qty">{a.commandee?.quantite || 0}</span>
                         </td>
-                        <td>
-                          {Number(
-                            a.commandee?.prixUnitaire || a.commandee?.prixAchat || 0
-                          ).toFixed(2)}
-                        </td>
+                        <td>{Number(a.commandee?.prixUnitaire || a.commandee?.prixAchat || 0).toFixed(2)}</td>
                         <td>{Number(a.commandee?.prixVente || 0).toFixed(2)}</td>
                         <td>{a.commandee?.datePeremption || ""}</td>
                         <td>{Number(a.commandee?.remise || 0).toFixed(2)}</td>
                         <td>
-                          <button
-                            className="btn btn-outline"
-                            onClick={() => handleRemoveArticle(i)}
-                          >
+                          <button className="btn btn-outline" onClick={() => handleRemoveArticle(i)}>
                             Supprimer
                           </button>
                         </td>
@@ -1660,28 +1787,11 @@ export default function Achats() {
               </div>
             )}
 
-            <div
-              style={{
-                marginTop: 12,
-                display: "flex",
-                gap: 8,
-                flexWrap: "wrap",
-              }}
-            >
-              <button
-                className="btn btn-primary"
-                onClick={handleAddBon}
-                disabled={isLoading}
-              >
-                {isEditing
-                  ? "💾 Enregistrer les modifications"
-                  : "💾 Enregistrer le bon"}
+            <div style={{ marginTop: 12, display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <button className="btn btn-primary" onClick={handleAddBon} disabled={isLoading}>
+                {isEditing ? "💾 Enregistrer les modifications" : "💾 Enregistrer le bon"}
               </button>
-              <button
-                className="btn btn-primary"
-                onClick={resetForm}
-                disabled={isLoading}
-              >
+              <button className="btn btn-primary" onClick={resetForm} disabled={isLoading}>
                 ♻️ Réinitialiser
               </button>
             </div>
@@ -1695,9 +1805,8 @@ export default function Achats() {
           <h3 className="section-title">
             Réception du bon #{String(receptionId).slice(0, 8).toUpperCase()}
           </h3>
-          <div style={{ color: "#0F172A", opacity:.8, marginBottom: 12 }}>
-            Ajustez les quantités reçues (≤ commandées), prix, dates, lots puis
-            confirmez.
+          <div style={{ color: "#0F172A", opacity: 0.8, marginBottom: 12 }}>
+            Ajustez les quantités reçues (≤ commandées), prix, dates, lots, code-barres puis confirmez.
           </div>
 
           <div className="table-scroll">
@@ -1712,6 +1821,7 @@ export default function Achats() {
                   <th>Remise</th>
                   <th>Exp.</th>
                   <th>Lot</th>
+                  <th>Code</th>
                   <th>Fournisseur</th>
                 </tr>
               </thead>
@@ -1727,13 +1837,7 @@ export default function Achats() {
                         min="0"
                         max={a.commandee?.quantite || 0}
                         value={a.recu?.quantite ?? 0}
-                        onChange={(e) =>
-                          handleUpdateReceptionArticle(
-                            idx,
-                            "quantite",
-                            e.target.value
-                          )
-                        }
+                        onChange={(e) => handleUpdateReceptionArticle(idx, "quantite", e.target.value)}
                         style={{ width: 120 }}
                       />
                     </td>
@@ -1743,13 +1847,7 @@ export default function Achats() {
                         type="number"
                         step="0.01"
                         value={a.recu?.prixUnitaire ?? a.recu?.prixAchat ?? 0}
-                        onChange={(e) =>
-                          handleUpdateReceptionArticle(
-                            idx,
-                            "prixUnitaire",
-                            e.target.value
-                          )
-                        }
+                        onChange={(e) => handleUpdateReceptionArticle(idx, "prixUnitaire", e.target.value)}
                         style={{ width: 140 }}
                       />
                     </td>
@@ -1759,13 +1857,7 @@ export default function Achats() {
                         type="number"
                         step="0.01"
                         value={a.recu?.prixVente ?? 0}
-                        onChange={(e) =>
-                          handleUpdateReceptionArticle(
-                            idx,
-                            "prixVente",
-                            e.target.value
-                          )
-                        }
+                        onChange={(e) => handleUpdateReceptionArticle(idx, "prixVente", e.target.value)}
                         style={{ width: 140 }}
                       />
                     </td>
@@ -1775,13 +1867,7 @@ export default function Achats() {
                         type="number"
                         step="0.01"
                         value={a.recu?.remise ?? 0}
-                        onChange={(e) =>
-                          handleUpdateReceptionArticle(
-                            idx,
-                            "remise",
-                            e.target.value
-                          )
-                        }
+                        onChange={(e) => handleUpdateReceptionArticle(idx, "remise", e.target.value)}
                         style={{ width: 140 }}
                       />
                     </td>
@@ -1790,13 +1876,7 @@ export default function Achats() {
                         className="field"
                         type="date"
                         value={a.recu?.datePeremption || ""}
-                        onChange={(e) =>
-                          handleUpdateReceptionArticle(
-                            idx,
-                            "datePeremption",
-                            e.target.value
-                          )
-                        }
+                        onChange={(e) => handleUpdateReceptionArticle(idx, "datePeremption", e.target.value)}
                         style={{ width: 160 }}
                       />
                     </td>
@@ -1804,31 +1884,23 @@ export default function Achats() {
                       <input
                         className="field"
                         value={a.recu?.numeroLot || ""}
-                        onChange={(e) =>
-                          handleUpdateReceptionArticle(
-                            idx,
-                            "numeroLot",
-                            e.target.value
-                          )
-                        }
+                        onChange={(e) => handleUpdateReceptionArticle(idx, "numeroLot", e.target.value)}
                         style={{ width: 160 }}
                       />
                     </td>
                     <td>
                       <input
                         className="field"
-                        value={
-                          a.recu?.fournisseurArticle ||
-                          a.commandee?.fournisseurArticle ||
-                          ""
-                        }
-                        onChange={(e) =>
-                          handleUpdateReceptionArticle(
-                            idx,
-                            "fournisseurArticle",
-                            e.target.value
-                          )
-                        }
+                        value={a.recu?.numeroArticle || a.commandee?.numeroArticle || ""}
+                        onChange={(e) => handleUpdateReceptionArticle(idx, "numeroArticle", e.target.value)}
+                        style={{ width: 160 }}
+                      />
+                    </td>
+                    <td>
+                      <input
+                        className="field"
+                        value={a.recu?.fournisseurArticle || a.commandee?.fournisseurArticle || ""}
+                        onChange={(e) => handleUpdateReceptionArticle(idx, "fournisseurArticle", e.target.value)}
                         style={{ width: 200 }}
                       />
                     </td>
@@ -1838,21 +1910,11 @@ export default function Achats() {
             </table>
           </div>
 
-          <div
-            style={{ marginTop: 12, display: "flex", gap: 8, flexWrap: "wrap" }}
-          >
-            <button
-              className="btn btn-success"
-              onClick={handleSubmitReception}
-              disabled={isLoading}
-            >
+          <div style={{ marginTop: 12, display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <button className="btn btn-success" onClick={handleSubmitReception} disabled={isLoading}>
               ✅ Confirmer la réception
             </button>
-            <button
-              className="btn btn-outline"
-              onClick={handleCancelReception}
-              disabled={isLoading}
-            >
+            <button className="btn btn-outline" onClick={handleCancelReception} disabled={isLoading}>
               ❌ Annuler
             </button>
           </div>
@@ -1978,32 +2040,20 @@ export default function Achats() {
                         justifyContent: "center",
                       }}
                     >
-                      <button
-                        className="btn btn-primary"
-                        onClick={() => handlePrintBon(b)}
-                      >
+                      <button className="btn btn-primary" onClick={() => handlePrintBon(b)}>
                         🖨️ Imprimer
                       </button>
                       {b.statutReception === "en_attente" && (
                         <>
-                          <button
-                            className="btn btn-outline"
-                            onClick={() => handleStartReception(b)}
-                          >
+                          <button className="btn btn-outline" onClick={() => handleStartReception(b)}>
                             📥 Réception
                           </button>
-                          <button
-                            className="btn btn-outline"
-                            onClick={() => handleEditBon(b)}
-                          >
+                          <button className="btn btn-outline" onClick={() => handleEditBon(b)}>
                             ✏️ Modifier
                           </button>
                         </>
                       )}
-                      <button
-                        className="btn-danger btn"
-                        onClick={() => handleDeleteBon(b)}
-                      >
+                      <button className="btn-danger btn" onClick={() => handleDeleteBon(b)}>
                         🗑️ Supprimer
                       </button>
                     </td>
@@ -2012,6 +2062,203 @@ export default function Achats() {
               </tbody>
             </table>
           </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function CameraBarcodeInlineModal({ open, onClose, onDetected }) {
+  const videoRef = React.useRef(null);
+  const [active, setActive] = React.useState(false);
+  const [error, setError] = React.useState("");
+
+  React.useEffect(() => {
+    let stream;
+    let stopRequested = false;
+    let rafId = null;
+    let reader = null;
+    let controls = null;
+
+    const requestFrame = (cb) => (window.requestAnimationFrame ? window.requestAnimationFrame(cb) : setTimeout(cb, 80));
+    const cancelFrame = (id) => (window.cancelAnimationFrame ? window.cancelAnimationFrame(id) : clearTimeout(id));
+
+    async function start() {
+      setError("");
+      try {
+        if (!open) return;
+        if (!navigator.mediaDevices?.getUserMedia) {
+          throw new Error("Caméra non supportée dans ce navigateur");
+        }
+        // Demander la caméra arrière si possible
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { ideal: "environment" } },
+          audio: false,
+        });
+        if (!videoRef.current) return;
+        videoRef.current.srcObject = stream;
+        await videoRef.current.play();
+        setActive(true);
+
+        // Priorité au BarcodeDetector natif
+        if ("BarcodeDetector" in window) {
+          const supported =
+            typeof window.BarcodeDetector.getSupportedFormats === "function"
+              ? await window.BarcodeDetector.getSupportedFormats()
+              : ["ean_13", "ean_8", "code_128", "upc_a", "upc_e"];
+          const detector = new window.BarcodeDetector({
+            formats: supported && supported.length ? supported : ["ean_13", "ean_8", "code_128", "upc_a", "upc_e"],
+          });
+
+          const scan = async () => {
+            if (!open || stopRequested) return;
+            try {
+              const track = stream?.getVideoTracks?.()[0];
+              if (!track) {
+                rafId = requestFrame(scan);
+                return;
+              }
+              let bitmap;
+              if (window.ImageCapture) {
+                const imageCapture = new ImageCapture(track);
+                bitmap = await imageCapture.grabFrame();
+              } else {
+                // Fallback canvas
+                const canvas = document.createElement("canvas");
+                const settings = track.getSettings?.() || {};
+                const w = settings.width || videoRef.current?.videoWidth || 640;
+                const h = settings.height || videoRef.current?.videoHeight || 480;
+                canvas.width = w;
+                canvas.height = h;
+                const ctx = canvas.getContext("2d");
+                ctx.drawImage(videoRef.current, 0, 0, w, h);
+                bitmap = await createImageBitmap(canvas);
+              }
+              const codes = await detector.detect(bitmap);
+              if (codes && codes[0]?.rawValue) {
+                onDetected?.(codes[0].rawValue);
+              } else {
+                rafId = requestFrame(scan);
+              }
+            } catch (err) {
+              rafId = requestFrame(scan);
+            }
+          };
+          rafId = requestFrame(scan);
+        } else {
+          // Fallback ZXing si installé
+          try {
+            const lib = await import(/* webpackChunkName: "zxing" */ "@zxing/browser");
+            const { BrowserMultiFormatReader } = lib;
+            reader = new BrowserMultiFormatReader();
+            controls = await reader.decodeFromVideoDevice(null, videoRef.current, (result, err) => {
+              if (result?.getText) {
+                onDetected?.(result.getText());
+              }
+            });
+          } catch (e) {
+            setError("ZXing non installé. Lance: npm i @zxing/browser");
+          }
+        }
+      } catch (e) {
+        console.error(e);
+        setError(e.message || "Caméra indisponible");
+      }
+    }
+
+    if (open) start();
+
+    return () => {
+      stopRequested = true;
+      try {
+        if (rafId) cancelFrame(rafId);
+      } catch {}
+      try {
+        controls?.stop?.();
+      } catch {}
+      try {
+        reader?.reset?.();
+      } catch {}
+      try {
+        const tracks = stream?.getTracks?.() || [];
+        tracks.forEach((t) => t.stop());
+      } catch {}
+      setActive(false);
+    };
+  }, [open, onDetected]);
+
+  if (!open) return null;
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      onClick={(e) => e.target === e.currentTarget && onClose?.()}
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(0,0,0,.6)",
+        display: "grid",
+        placeItems: "center",
+        zIndex: 9999,
+        padding: 16,
+      }}
+    >
+      <div
+        style={{
+          background: "#fff",
+          borderRadius: 16,
+          width: "min(100%, 720px)",
+          padding: 16,
+          boxShadow: "0 10px 30px rgba(0,0,0,.2)",
+          position: "relative",
+        }}
+      >
+        <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8 }}>
+          <h3 style={{ margin: 0, fontWeight: 800, fontSize: 18 }}>Scanner un code-barres</h3>
+          <button
+            onClick={onClose}
+            style={{
+              marginLeft: "auto",
+              border: "none",
+              borderRadius: 8,
+              padding: "6px 10px",
+              background: "#111827",
+              color: "#fff",
+              cursor: "pointer",
+            }}
+          >
+            Fermer
+          </button>
+        </div>
+
+        <div
+          style={{
+            position: "relative",
+            borderRadius: 12,
+            overflow: "hidden",
+            background: "#000",
+            aspectRatio: "16/9",
+          }}
+        >
+          <video ref={videoRef} muted playsInline style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+          <div
+            style={{
+              position: "absolute",
+              inset: "15% 10%",
+              border: "3px solid rgba(255,255,255,.8)",
+              borderRadius: 12,
+              boxShadow: "0 0 20px rgba(0,0,0,.5) inset",
+            }}
+          />
+        </div>
+
+        {error ? (
+          <p style={{ marginTop: 10, color: "#b91c1c", fontSize: 13 }}>{error}</p>
+        ) : (
+          <p style={{ marginTop: 10, color: "#6b7280", fontSize: 13 }}>
+            Astuce : place le code bien à plat et évite les reflets.
+          </p>
         )}
       </div>
     </div>
