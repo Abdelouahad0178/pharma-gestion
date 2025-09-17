@@ -1,4 +1,3 @@
-
 import React, { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import { createPortal } from "react-dom";
 import { db } from "../../firebase/config";
@@ -17,11 +16,12 @@ import {
   orderBy,
   limit,
   getDoc,
+  onSnapshot,
 } from "firebase/firestore";
 
 /* =====================
-   UTILITAIRES DATES
-   ===================== */
+UTILITAIRES DATES
+===================== */
 function safeParseDate(dateInput) {
   if (!dateInput) return null;
   try {
@@ -57,8 +57,8 @@ function getDateInputValue(dateInput) {
 }
 
 /* =====================
-   UTILITAIRES NOMBRES
-   ===================== */
+UTILITAIRES NOMBRES
+===================== */
 function safeNumber(v, def = 0) {
   const n = Number(v);
   return isNaN(n) ? def : n;
@@ -69,7 +69,7 @@ function safeToFixed(v, dec = 2) {
 
 /**
  * Composant de gestion des ventes (multi-lots + scan clavier/caméra)
- * + Champ "N° article (code-barres)" auto-rempli
+ * - Champ "N° article (code-barres)" auto-rempli
  */
 export default function Ventes() {
   /* ===== BIP SONORE (Web Audio API) ===== */
@@ -140,7 +140,7 @@ export default function Ventes() {
   const [selectedLot, setSelectedLot] = useState("");
   const [availableLots, setAvailableLots] = useState([]);
 
-  // N° article (code-barres)
+// N° article (code-barres)
   const [numeroArticle, setNumeroArticle] = useState("");
 
   const [articles, setArticles] = useState([]);
@@ -177,25 +177,23 @@ export default function Ventes() {
     setWaiting(loading || !societeId || !user);
   }, [loading, societeId, user]);
 
-  const fetchParametres = useCallback(async () => {
-    try {
-      if (!societeId) return;
-      const docRef = doc(db, "societe", societeId, "parametres", "documents");
-      const snap = await getDoc(docRef);
+  useEffect(() => {
+    if (!societeId) return;
+
+    // Écoute en temps réel pour les paramètres
+    const paramRef = doc(db, "societe", societeId, "parametres", "documents");
+    const unsubParam = onSnapshot(paramRef, (snap) => {
       if (snap.exists()) {
         const data = snap.data() || {};
         setParametres(data);
       }
-    } catch (e) {
+    }, (e) => {
       console.error("fetchParametres error:", e);
-    }
-  }, [societeId]);
+    });
 
-  const fetchVentes = useCallback(async () => {
-    if (!societeId) return setVentes([]);
-    try {
-      const qy = query(collection(db, "societe", societeId, "ventes"), orderBy("date", "desc"), limit(200));
-      const snap = await getDocs(qy);
+    // Écoute en temps réel pour les ventes
+    const qVentes = query(collection(db, "societe", societeId, "ventes"), orderBy("date", "desc"), limit(200));
+    const unsubVentes = onSnapshot(qVentes, (snap) => {
       const arr = [];
       snap.forEach((d) => {
         const data = d.data();
@@ -206,19 +204,14 @@ export default function Ventes() {
       setVentes(arr);
       const uniqueClients = [...new Set(arr.map((v) => v.client).filter(Boolean))];
       setClients(uniqueClients);
-    } catch (e) {
+    }, (e) => {
       console.error("Erreur chargement ventes:", e);
       setError("Erreur lors du chargement des ventes");
-    }
-  }, [societeId]);
+    });
 
-  const fetchStockEntries = useCallback(async () => {
-    if (!societeId) {
-      setStockEntries([]);
-      return;
-    }
-    try {
-      const snap = await getDocs(collection(db, "societe", societeId, "stock_entries"));
+    // Écoute en temps réel pour les entrées de stock
+    const qStockEntries = collection(db, "societe", societeId, "stock_entries");
+    const unsubStockEntries = onSnapshot(qStockEntries, (snap) => {
       const arr = [];
       snap.forEach((d) => {
         const data = d.data();
@@ -232,23 +225,21 @@ export default function Ventes() {
         const nameB = String(b.nom || b.name || "");
         if (nameA !== nameB) return nameA.localeCompare(nameB);
         const da = safeParseDate(a.datePeremption);
-        const dbb = safeParseDate(b.datePeremption);
-        if (da && dbb) return da - dbb;
-        if (da && !dbb) return -1;
-        if (!da && dbb) return 1;
+        const db = safeParseDate(b.datePeremption);
+        if (da && db) return da - db;
+        if (da && !db) return -1;
+        if (!da && db) return 1;
         return 0;
       });
       setStockEntries(arr);
-    } catch (e) {
+    }, (e) => {
       console.error("fetchStockEntries error:", e);
       setStockEntries([]);
-    }
-  }, [societeId]);
+    });
 
-  const fetchMedicaments = useCallback(async () => {
-    if (!societeId) return setMedicaments([]);
-    try {
-      const snap = await getDocs(collection(db, "societe", societeId, "stock"));
+    // Écoute en temps réel pour les médicaments
+    const qMedicaments = collection(db, "societe", societeId, "stock");
+    const unsubMedicaments = onSnapshot(qMedicaments, (snap) => {
       const arr = [];
       snap.forEach((d) => {
         const data = d.data();
@@ -257,9 +248,16 @@ export default function Ventes() {
         arr.push({ id: d.id, ...data });
       });
       setMedicaments(arr);
-    } catch (e) {
+    }, (e) => {
       console.error("Erreur chargement médicaments:", e);
-    }
+    });
+
+    return () => {
+      unsubParam();
+      unsubVentes();
+      unsubStockEntries();
+      unsubMedicaments();
+    };
   }, [societeId]);
 
   // Fusionne le stock traditionnel et les lots
@@ -313,8 +311,8 @@ export default function Ventes() {
   }, [medicaments, stockEntries]);
 
   /* =====================
-     GESTION FORMULAIRE
-     ===================== */
+  GESTION FORMULAIRE
+  ===================== */
   const barcodeFields = ["codeBarre", "barcode", "ean", "ean13", "upc", "gtin"];
 
   const findAnyBarcode = (obj) => {
@@ -473,8 +471,8 @@ export default function Ventes() {
   };
 
   /* =====================
-     GESTION VENTES
-     ===================== */
+  GESTION VENTES
+  ===================== */
   const updateStockOnSell = async (vente) => {
     if (!user || !societeId) return;
     for (const art of vente.articles || []) {
@@ -610,9 +608,6 @@ export default function Ventes() {
         });
       }
       resetForm();
-      await fetchVentes();
-      await fetchMedicaments();
-      await fetchStockEntries();
       setTimeout(() => {
         setShowForm(false);
         setSuccess("");
@@ -658,8 +653,6 @@ export default function Ventes() {
       await updateStockOnCancel(vente);
       await deleteDoc(doc(db, "societe", societeId, "ventes", vente.id));
       setSuccess("Vente supprimée avec succès");
-      await fetchVentes();
-      await fetchStockEntries();
       setTimeout(() => setSuccess(""), 2000);
     } catch (err) {
       console.error("Erreur suppression:", err);
@@ -673,27 +666,20 @@ export default function Ventes() {
   };
 
   /* =====================
-     IMPRESSION
-     ===================== */
+  IMPRESSION
+  ===================== */
   const generateCachetHtml = () => {
     if (!parametres.afficherCachet) return "";
     const taille = parametres.tailleCachet || 120;
     if (parametres.typeCachet === "image" && parametres.cachetImage) {
-      return `
-        <div style="text-align: center; flex: 1;">
-          <img src="${parametres.cachetImage}" alt="Cachet"
-               style="max-width: ${taille}px; max-height: ${taille}px; border-radius: 8px;" />
-        </div>`;
+      return `         <div style="text-align: center; flex: 1;">           <img src="${parametres.cachetImage}" alt="Cachet"
+               style="max-width: ${taille}px; max-height: ${taille}px; border-radius: 8px;" />         </div>`;
     }
-    return `
-      <div style="text-align: center; flex: 1;">
-        <div style="display: inline-block; border: 3px solid #1976d2; color: #1976d2;
+    return `       <div style="text-align: center; flex: 1;">         <div style="display: inline-block; border: 3px solid #1976d2; color: #1976d2;
                     border-radius: 50%; padding: 25px 40px; font-size: 16px; font-weight: bold;
                     text-transform: uppercase; letter-spacing: 1px; background: rgba(25,118,210,.05);
                     box-shadow: 0 4px 8px rgba(25,118,210,.2); transform: rotate(-5deg); max-width: ${taille}px;">
-          ${parametres.cachetTexte || "Cachet Société"}
-        </div>
-      </div>`;
+          ${parametres.cachetTexte || "Cachet Société"}         </div>       </div>`;
   };
 
   const handlePrintVente = (vente) => {
@@ -705,129 +691,129 @@ export default function Ventes() {
 
     const w = window.open("", "_blank");
     w.document.write(`
-    <html>
-      <head>
-        <title>Bon de Vente N°${(vente.id || "").slice(-6).toUpperCase()}</title>
-        <style>
-          * { margin: 0; padding: 0; box-sizing: border-box; }
-          body { font-family: Arial, sans-serif; padding: 20px; }
-          .header { text-align: center; margin-bottom: 30px; padding: 20px; border-bottom: 3px solid #2563eb; }
-          .header h1 { color: #2563eb; margin-bottom: 10px; font-size: 24px; }
-          .info-section { display: flex; justify-content: space-between; margin-bottom: 30px; }
-          table { width: 100%; border-collapse: collapse; margin: 20px 0; }
-          th { background: #2563eb; color: white; padding: 12px; text-align: left; }
-          td { padding: 10px; border-bottom: 1px solid #e5e7eb; }
-          .lot-info { font-size: 11px; color: #6b7280; margin-top: 4px; padding: 4px; background: #f3f4f6; }
-          .totals { margin-top: 20px; padding: 20px; background: #2563eb; color: white; text-align: right; }
-          .signature-section { margin-top: 50px; display: flex; justify-content: space-between; }
-          .signature-box { text-align: center; width: 200px; }
-          .signature-line { border-bottom: 2px solid #333; margin-bottom: 8px; height: 50px; }
-          .footer { text-align: center; margin-top: 30px; padding: 20px; border-top: 2px solid #2563eb; }
-          ${hasLotInfo ? ".multi-lot-indicator { background: #dcfce7; color: #16a34a; padding: 8px 16px; border-radius: 20px; font-size: 14px; margin-top: 10px; display: inline-block; }" : ""}
-        </style>
-      </head>
-      <body>
-        <div class="header">
-          <h1>${parametres.entete}</h1>
-          <h2>BON DE VENTE N°${(vente.id || "").slice(-6).toUpperCase()}</h2>
-          ${hasLotInfo ? '<div class="multi-lot-indicator">Vente avec traçabilité</div>' : ''}
-        </div>
+<html>
+  <head>
+    <title>Bon de Vente N°${(vente.id || "").slice(-6).toUpperCase()}</title>
+    <style>
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      body { font-family: Arial, sans-serif; padding: 20px; }
+      .header { text-align: center; margin-bottom: 30px; padding: 20px; border-bottom: 3px solid #2563eb; }
+      .header h1 { color: #2563eb; margin-bottom: 10px; font-size: 24px; }
+      .info-section { display: flex; justify-content: space-between; margin-bottom: 30px; }
+      table { width: 100%; border-collapse: collapse; margin: 20px 0; }
+      th { background: #2563eb; color: white; padding: 12px; text-align: left; }
+      td { padding: 10px; border-bottom: 1px solid #e5e7eb; }
+      .lot-info { font-size: 11px; color: #6b7280; margin-top: 4px; padding: 4px; background: #f3f4f6; }
+      .totals { margin-top: 20px; padding: 20px; background: #2563eb; color: white; text-align: right; }
+      .signature-section { margin-top: 50px; display: flex; justify-content: space-between; }
+      .signature-box { text-align: center; width: 200px; }
+      .signature-line { border-bottom: 2px solid #333; margin-bottom: 8px; height: 50px; }
+      .footer { text-align: center; margin-top: 30px; padding: 20px; border-top: 2px solid #2563eb; }
+      ${hasLotInfo ? ".multi-lot-indicator { background: #dcfce7; color: #16a34a; padding: 8px 16px; border-radius: 20px; font-size: 14px; margin-top: 10px; display: inline-block; }" : ""}
+    </style>
+  </head>
+  <body>
+    <div class="header">
+      <h1>${parametres.entete}</h1>
+      <h2>BON DE VENTE N°${(vente.id || "").slice(-6).toUpperCase()}</h2>
+      ${hasLotInfo ? '<div class="multi-lot-indicator">Vente avec traçabilité</div>' : ''}
+    </div>
 
-        <div class="info-section">
-          <div>
-            <p><strong>Client:</strong> ${vente.client || ""}</p>
-            <p><strong>Date:</strong> ${formatDateSafe(vente.date)}</p>
-          </div>
-          <div>
-            <p><strong>Statut:</strong> ${vente.statutPaiement || ""}</p>
-            <p><strong>Mode:</strong> ${vente.modePaiement || "Espèces"}</p>
-          </div>
-        </div>
+    <div class="info-section">
+      <div>
+        <p><strong>Client:</strong> ${vente.client || ""}</p>
+        <p><strong>Date:</strong> ${formatDateSafe(vente.date)}</p>
+      </div>
+      <div>
+        <p><strong>Statut:</strong> ${vente.statutPaiement || ""}</p>
+        <p><strong>Mode:</strong> ${vente.modePaiement || "Espèces"}</p>
+      </div>
+    </div>
 
-        <table>
-          <thead>
+    <table>
+      <thead>
+        <tr>
+          <th>Produit / Traçabilité</th>
+          <th>Quantité</th>
+          <th>Prix Unit.</th>
+          <th>Remise</th>
+          <th>Total</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${articlesV
+          .map((a) => {
+            const isExpired = a.datePeremption && safeParseDate(a.datePeremption) < new Date();
+            const isExpSoon =
+              a.datePeremption &&
+              !isExpired &&
+              safeParseDate(a.datePeremption) <= new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+            return `
             <tr>
-              <th>Produit / Traçabilité</th>
-              <th>Quantité</th>
-              <th>Prix Unit.</th>
-              <th>Remise</th>
-              <th>Total</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${articlesV
-              .map((a) => {
-                const isExpired = a.datePeremption && safeParseDate(a.datePeremption) < new Date();
-                const isExpSoon =
-                  a.datePeremption &&
-                  !isExpired &&
-                  safeParseDate(a.datePeremption) <= new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
-                return `
-                <tr>
-                  <td>
-                    <strong>${a.produit || ""}</strong>
-                    ${a.numeroArticle || a.numeroLot || a.fournisseur || a.datePeremption ? `
-                      <div class="lot-info">
-                        ${a.numeroArticle ? `<span style="background:#e0e7ff;color:#4f46e5;padding:2px 6px;border-radius:8px;font-size:10px;margin-right:4px;">N° article: ${a.numeroArticle}</span>` : ""}
-                        ${a.numeroLot ? `<span style="background:#dcfce7;color:#16a34a;padding:2px 6px;border-radius:8px;font-size:10px;margin-right:4px;">Lot: ${a.numeroLot}</span>` : ""}
-                        ${a.fournisseur ? `<span style="background:#dbeafe;color:#2563eb;padding:2px 6px;border-radius:8px;font-size:10px;margin-right:4px;">Fournisseur: ${a.fournisseur}</span>` : ""}
-                        ${a.datePeremption ? `
-                          <div style="margin-top:4px;">
-                            Expiration:
-                            <span style="color:${isExpired ? "#dc2626" : isExpSoon ? "#d97706" : "#6b7280"};font-weight:600;">
-                              ${formatDateSafe(a.datePeremption)}
-                              ${isExpired ? " ⚠️ EXPIRÉ" : isExpSoon ? " ⏰ Expire bientôt" : ""}
-                            </span>
-                          </div>` : ""}
+              <td>
+                <strong>${a.produit || ""}</strong>
+                ${a.numeroArticle || a.numeroLot || a.fournisseur || a.datePeremption ? `
+                  <div class="lot-info">
+                    ${a.numeroArticle ? `<span style="background:#e0e7ff;color:#4f46e5;padding:2px 6px;border-radius:8px;font-size:10px;margin-right:4px;">N° article: ${a.numeroArticle}</span>` : ""}
+                    ${a.numeroLot ? `<span style="background:#dcfce7;color:#16a34a;padding:2px 6px;border-radius:8px;font-size:10px;margin-right:4px;">Lot: ${a.numeroLot}</span>` : ""}
+                    ${a.fournisseur ? `<span style="background:#dbeafe;color:#2563eb;padding:2px 6px;border-radius:8px;font-size:10px;margin-right:4px;">Fournisseur: ${a.fournisseur}</span>` : ""}
+                    ${a.datePeremption ? `
+                      <div style="margin-top:4px;">
+                        Expiration:
+                        <span style="color:${isExpired ? "#dc2626" : isExpSoon ? "#d97706" : "#6b7280"};font-weight:600;">
+                          ${formatDateSafe(a.datePeremption)}
+                          ${isExpired ? " ⚠️ EXPIRÉ" : isExpSoon ? " ⏰ Expire bientôt" : ""}
+                        </span>
                       </div>` : ""}
-                  </td>
-                  <td>${safeNumber(a.quantite)}</td>
-                  <td>${safeToFixed(a.prixUnitaire)} DH</td>
-                  <td>${safeToFixed(a.remise)} DH</td>
-                  <td style="font-weight:600;">${safeToFixed(safeNumber(a.prixUnitaire) * safeNumber(a.quantite) - safeNumber(a.remise))} DH</td>
-                </tr>`;
-              })
-              .join("")}
-          </tbody>
-        </table>
+                  </div>` : ""}
+              </td>
+              <td>${safeNumber(a.quantite)}</td>
+              <td>${safeToFixed(a.prixUnitaire)} DH</td>
+              <td>${safeToFixed(a.remise)} DH</td>
+              <td style="font-weight:600;">${safeToFixed(safeNumber(a.prixUnitaire) * safeNumber(a.quantite) - safeNumber(a.remise))} DH</td>
+            </tr>`;
+          })
+          .join("")}
+      </tbody>
+    </table>
 
-        <div class="totals">
-          ${vente.remiseTotal ? `
-            <div style="margin-bottom:10px;">Sous-total: ${safeToFixed(total + safeNumber(vente.remiseTotal))} DH</div>
-            <div style="margin-bottom:10px;">Remise totale: -${safeToFixed(vente.remiseTotal)} DH</div>` : ""}
-          <div style="font-size:20px;font-weight:bold;">TOTAL: ${safeToFixed(total)} DH</div>
-        </div>
+    <div class="totals">
+      ${vente.remiseTotal ? `
+        <div style="margin-bottom:10px;">Sous-total: ${safeToFixed(total + safeNumber(vente.remiseTotal))} DH</div>
+        <div style="margin-bottom:10px;">Remise totale: -${safeToFixed(vente.remiseTotal)} DH</div>` : ""}
+      <div style="font-size:20px;font-weight:bold;">TOTAL: ${safeToFixed(total)} DH</div>
+    </div>
 
-        ${vente.notes ? `<div style="margin-top:20px;padding:15px;background:#fef3c7;border-left:5px solid #f59e0b;"><strong>Notes:</strong> ${vente.notes}</div>` : ""}
+    ${vente.notes ? `<div style="margin-top:20px;padding:15px;background:#fef3c7;border-left:5px solid #f59e0b;"><strong>Notes:</strong> ${vente.notes}</div>` : ""}
 
-        <div class="signature-section">
-          <div class="signature-box">
-            <div class="signature-line"></div>
-            <p>Signature Client</p>
-          </div>
-          ${cachetHtml}
-          <div class="signature-box">
-            <div class="signature-line"></div>
-            <p>Signature Vendeur</p>
-          </div>
-        </div>
+    <div class="signature-section">
+      <div class="signature-box">
+        <div class="signature-line"></div>
+        <p>Signature Client</p>
+      </div>
+      ${cachetHtml}
+      <div class="signature-box">
+        <div class="signature-line"></div>
+        <p>Signature Vendeur</p>
+      </div>
+    </div>
 
-        <div class="footer">
-          <p>${parametres.pied}</p>
-          ${hasLotInfo ? '<p style="margin-top:10px;color:#16a34a;">Vente avec traçabilité multi-lots • Qualité et sécurité garanties</p>' : ''}
-          <p style="font-size:12px;color:#6b7280;margin-top:10px;">
-            Document imprimé le ${new Date().toLocaleString("fr-FR")} par ${user?.email || "Utilisateur"}
-          </p>
-        </div>
-      </body>
-    </html>`);
+    <div class="footer">
+      <p>${parametres.pied}</p>
+      ${hasLotInfo ? '<p style="margin-top:10px;color:#16a34a;">Vente avec traçabilité multi-lots • Qualité et sécurité garanties</p>' : ''}
+      <p style="font-size:12px;color:#6b7280;margin-top:10px;">
+        Document imprimé le ${new Date().toLocaleString("fr-FR")} par ${user?.email || "Utilisateur"}
+      </p>
+    </div>
+  </body>
+</html>`);
     w.document.close();
     w.print();
   };
 
   /* =====================
-     UTILITAIRES
-     ===================== */
+  UTILITAIRES
+  ===================== */
   const resetForm = () => {
     setClient("(passant)");
     setDateVente(new Date().toISOString().split("T")[0]);
@@ -875,27 +861,14 @@ export default function Ventes() {
     });
   }, [ventes, filterStatut, searchTerm]);
 
-  /* =====================
-     Chargement initial
-     ===================== */
-  useEffect(() => {
-    fetchVentes();
-  }, [fetchVentes]);
-
-  useEffect(() => {
-    fetchMedicaments();
-    fetchStockEntries();
-    fetchParametres();
-  }, [fetchMedicaments, fetchStockEntries, fetchParametres]);
-
   useEffect(() => {
     if (!isEditing) resetForm();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   /* =====================
-     DÉTECTION CODE-BARRES (wedge + caméra)
-     ===================== */
+  DÉTECTION CODE-BARRES (wedge + caméra)
+  ===================== */
   const onBarcodeDetected = useCallback(
     (barcode) => {
       try {
@@ -993,8 +966,8 @@ export default function Ventes() {
   }, [onBarcodeDetected]);
 
   /* =====================
-     RENDU
-     ===================== */
+  RENDU
+  ===================== */
   if (waiting) {
     return (
       <div
@@ -1028,12 +1001,8 @@ export default function Ventes() {
               margin: "0 auto 20px",
             }}
           ></div>
-          <h3 style={{ margin: 0, fontSize: 18 }}>Chargement en cours...</h3>
-          <style>
-            {`@keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }`}
-          </style>
-        </div>
-      </div>
+          <h3 style={{ margin: 0, fontSize: 18 }}>Chargement en cours...</h3> <style>
+{`@keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }`} </style> </div> </div>
     );
   }
 
@@ -1060,9 +1029,7 @@ export default function Ventes() {
           }}
         >
           <h3 style={{ margin: "0 0 10px", fontSize: 18 }}>Accès non autorisé</h3>
-          <p style={{ margin: 0, opacity: 0.9 }}>Utilisateur non connecté ou société non sélectionnée.</p>
-        </div>
-      </div>
+          <p style={{ margin: 0, opacity: 0.9 }}>Utilisateur non connecté ou société non sélectionnée.</p> </div> </div>
     );
   }
 
@@ -1095,875 +1062,254 @@ export default function Ventes() {
             flexWrap: "wrap",
             gap: 20,
           }}
-        >
-          <div>
-            <h1
-              style={{
-                margin: 0,
-                fontSize: 32,
-                fontWeight: 800,
-                background: "linear-gradient(135deg, #667eea, #764ba2)",
-                WebkitBackgroundClip: "text",
-                WebkitTextFillColor: "transparent",
-                backgroundClip: "text",
-              }}
-            >
-              Gestion des Ventes
-            </h1>
-            <p style={{ margin: "8px 0 0", color: "#6b7280", fontSize: 16 }}>
-              Système de vente multi-lots avec traçabilité complète
-            </p>
-          </div>
-
-          <button
-            onClick={() => {
-              setShowForm((v) => !v);
-              if (!showForm) resetForm();
-            }}
+        > <div>
+          <h1
             style={{
-              background: showForm
-                ? "linear-gradient(135deg, #ef4444, #dc2626)"
-                : "linear-gradient(135deg, #3b82f6, #2563eb)",
-              color: "white",
-              border: "none",
-              padding: "16px 32px",
-              borderRadius: 16,
-              fontSize: 16,
-              fontWeight: 600,
-              cursor: "pointer",
-              transition: "all 0.3s ease",
-              boxShadow: "0 8px 25px rgba(59, 130, 246, 0.3)",
-              transform: "translateY(0)",
-            }}
-            onMouseEnter={(e) => {
-              e.target.style.transform = "translateY(-2px)";
-              e.target.style.boxShadow = "0 12px 35px rgba(59, 130, 246, 0.4)";
-            }}
-            onMouseLeave={(e) => {
-              e.target.style.transform = "translateY(0)";
-              e.target.style.boxShadow = "0 8px 25px rgba(59, 130, 246, 0.3)";
+              margin: 0,
+              fontSize: 32,
+              fontWeight: 800,
+              background: "linear-gradient(135deg, #667eea, #764ba2)",
+              WebkitBackgroundClip: "text",
+              WebkitTextFillColor: "transparent",
+              backgroundClip: "text",
             }}
           >
-            {showForm ? "✕ Fermer" : "+ Nouvelle Vente"}
-          </button>
-        </div>
+            Gestion des Ventes </h1>
+          <p style={{ margin: "8px 0 0", color: "#6b7280", fontSize: 16 }}>
+            Système de vente multi-lots avec traçabilité complète </p> </div>
+
+        <button
+          onClick={() => {
+            setShowForm((v) => !v);
+            if (!showForm) resetForm();
+          }}
+          style={{
+            background: showForm
+              ? "linear-gradient(135deg, #ef4444, #dc2626)"
+              : "linear-gradient(135deg, #3b82f6, #2563eb)",
+            color: "white",
+            border: "none",
+            padding: "16px 32px",
+            borderRadius: 16,
+            fontSize: 16,
+            fontWeight: 600,
+            cursor: "pointer",
+            transition: "all 0.3s ease",
+            boxShadow: "0 8px 25px rgba(59, 130, 246, 0.3)",
+            transform: "translateY(0)",
+          }}
+          onMouseEnter={(e) => {
+            e.target.style.transform = "translateY(-2px)";
+            e.target.style.boxShadow = "0 12px 35px rgba(59, 130, 246, 0.4)";
+          }}
+          onMouseLeave={(e) => {
+            e.target.style.transform = "translateY(0)";
+            e.target.style.boxShadow = "0 8px 25px rgba(59, 130, 246, 0.3)";
+          }}
+        >
+          {showForm ? "✕ Fermer" : "+ Nouvelle Vente"}
+        </button>
       </div>
+    </div>
 
-      {/* Notifications */}
-      {error && (
-        <div
-          style={{
-            background: "rgba(254, 226, 226, 0.95)",
-            backdropFilter: "blur(10px)",
-            color: "#dc2626",
-            padding: 20,
-            borderRadius: 16,
-            marginBottom: 24,
-            border: "1px solid rgba(220, 38, 38, 0.2)",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            boxShadow: "0 8px 25px rgba(220, 38, 38, 0.1)",
-          }}
-        >
-          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-            <div
-              style={{
-                width: 24,
-                height: 24,
-                borderRadius: "50%",
-                background: "#dc2626",
-                color: "white",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                fontSize: 14,
-                fontWeight: 600,
-              }}
-            >
-              !
-            </div>
-            <span style={{ fontSize: 16, fontWeight: 500 }}>{error}</span>
-          </div>
-          <button
-            onClick={() => setError("")}
-            style={{
-              background: "none",
-              border: "none",
-              color: "#dc2626",
-              cursor: "pointer",
-              fontSize: 24,
-              padding: 4,
-              borderRadius: 8,
-              transition: "background 0.2s ease",
-            }}
-            onMouseEnter={(e) => (e.target.style.background = "rgba(220, 38, 38, 0.1)")}
-            onMouseLeave={(e) => (e.target.style.background = "none")}
-          >
-            ×
-          </button>
-        </div>
-      )}
-
-      {success && (
-        <div
-          style={{
-            background: "rgba(220, 252, 231, 0.95)",
-            backdropFilter: "blur(10px)",
-            color: "#16a34a",
-            padding: 20,
-            borderRadius: 16,
-            marginBottom: 24,
-            border: "1px solid rgba(22, 163, 74, 0.2)",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            boxShadow: "0 8px 25px rgba(22, 163, 74, 0.1)",
-          }}
-        >
-          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-            <div
-              style={{
-                width: 24,
-                height: 24,
-                borderRadius: "50%",
-                background: "#16a34a",
-                color: "white",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                fontSize: 14,
-                fontWeight: 600,
-              }}
-            >
-              ✓
-            </div>
-            <span style={{ fontSize: 16, fontWeight: 500 }}>{success}</span>
-          </div>
-          <button
-            onClick={() => setSuccess("")}
-            style={{
-              background: "none",
-              border: "none",
-              color: "#16a34a",
-              cursor: "pointer",
-              fontSize: 24,
-              padding: 4,
-              borderRadius: 8,
-              transition: "background 0.2s ease",
-            }}
-            onMouseEnter={(e) => (e.target.style.background = "rgba(22, 163, 74, 0.1)")}
-            onMouseLeave={(e) => (e.target.style.background = "none")}
-          >
-            ×
-          </button>
-        </div>
-      )}
-
-      {/* Formulaire */}
-      {showForm && (
-        <div
-          style={{
-            background: "rgba(255, 255, 255, 0.95)",
-            backdropFilter: "blur(20px)",
-            borderRadius: 24,
-            padding: 32,
-            marginBottom: 30,
-            border: "1px solid rgba(255, 255, 255, 0.2)",
-            boxShadow: "0 20px 40px rgba(0, 0, 0, 0.1)",
-          }}
-        >
-          <h2
-            style={{
-              margin: "0 0 32px",
-              fontSize: 28,
-              fontWeight: 700,
-              color: "#1f2937",
-              textAlign: "center",
-            }}
-          >
-            {isEditing ? "Modifier la vente" : "Nouvelle vente multi-lots"}
-          </h2>
-
-          {/* Zone scan */}
-          <div style={{ display: "flex", gap: 8, alignItems: "center", margin: "6px 0 18px" }}>
-            <button
-              type="button"
-              className="btn btn-secondary"
-              onClick={() => setShowScanner(true)}
-              style={{ borderRadius: 10, padding: "8px 12px", cursor: "pointer" }}
-            >
-              📷 Scanner avec caméra
-            </button>
-            <CameraBarcodeInlineModal
-              open={showScanner}
-              onClose={() => setShowScanner(false)}
-              onDetected={(code) => {
-                onBarcodeDetected(code);
-                setShowScanner(false);
-              }}
-            />
-            <span style={{ color: "#6b7280", fontSize: 13 }}>
-              (Ou scannez avec votre douchette : validation via <b>Entrée</b>)
-            </span>
-          </div>
-
-          {/* Section ajout d'articles */}
+    {/* Notifications */}
+    {error && (
+      <div
+        style={{
+          background: "rgba(254, 226, 226, 0.95)",
+          backdropFilter: "blur(10px)",
+          color: "#dc2626",
+          padding: 20,
+          borderRadius: 16,
+          marginBottom: 24,
+          border: "1px solid rgba(220, 38, 38, 0.2)",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          boxShadow: "0 8px 25px rgba(220, 38, 38, 0.1)",
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
           <div
             style={{
-              background: "linear-gradient(135deg, #f0f9ff, #e0f2fe)",
-              borderRadius: 20,
-              padding: 24,
-              marginBottom: 24,
-              border: "2px solid #0ea5e9",
+              width: 24,
+              height: 24,
+              borderRadius: "50%",
+              background: "#dc2626",
+              color: "white",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              fontSize: 14,
+              fontWeight: 600,
             }}
           >
-            <h3 style={{ margin: "0 0 24px", color: "#0c4a6e", fontSize: 20, fontWeight: 600 }}>
-              Ajouter des articles
-            </h3>
+            !
+          </div>
+          <span style={{ fontSize: 16, fontWeight: 500 }}>{error}</span>
+        </div>
+        <button
+          onClick={() => setError("")}
+          style={{
+            background: "none",
+            border: "none",
+            color: "#dc2626",
+            cursor: "pointer",
+            fontSize: 24,
+            padding: 4,
+            borderRadius: 8,
+            transition: "background 0.2s ease",
+          }}
+          onMouseEnter={(e) => (e.target.style.background = "rgba(220, 38, 38, 0.1)")}
+          onMouseLeave={(e) => (e.target.style.background = "none")}
+        >
+          ×
+        </button>
+      </div>
+    )}
 
-            <form onSubmit={handleAddArticle}>
-              <div
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: "repeat(auto-fit, minmax(250px, 1fr))",
-                  gap: 20,
-                  marginBottom: 24,
-                }}
-              >
-                <div>
-                  <label
-                    style={{
-                      display: "block",
-                      fontSize: 14,
-                      fontWeight: 600,
-                      color: "#374151",
-                      marginBottom: 8,
-                    }}
-                  >
-                    Médicament *
-                  </label>
-                  <select
-                    value={produit}
-                    onChange={(e) => handleProduitChange(e.target.value)}
-                    required
-                    style={{
-                      width: "100%",
-                      padding: "12px 16px",
-                      borderRadius: 12,
-                      border: "2px solid #e5e7eb",
-                      fontSize: 16,
-                      background: "white",
-                      transition: "all 0.2s ease",
-                      outline: "none",
-                    }}
-                    onFocus={(e) => (e.target.style.borderColor = "#3b82f6")}
-                    onBlur={(e) => (e.target.style.borderColor = "#e5e7eb")}
-                  >
-                    <option value="">-- Sélectionner un médicament --</option>
-                    {getAllAvailableMedicaments.map((m) => (
-                      <option key={m.nom} value={m.nom}>
-                        {m.nom} ({m.hasLots ? "Lots" : "Stock"}: {m.quantiteTotal})
-                      </option>
-                    ))}
-                  </select>
-                </div>
+    {success && (
+      <div
+        style={{
+          background: "rgba(220, 252, 231, 0.95)",
+          backdropFilter: "blur(10px)",
+          color: "#16a34a",
+          padding: 20,
+          borderRadius: 16,
+          marginBottom: 24,
+          border: "1px solid rgba(22, 163, 74, 0.2)",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          boxShadow: "0 8px 25px rgba(22, 163, 74, 0.1)",
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <div
+            style={{
+              width: 24,
+              height: 24,
+              borderRadius: "50%",
+              background: "#16a34a",
+              color: "white",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              fontSize: 14,
+              fontWeight: 600,
+            }}
+          >
+            ✓
+          </div>
+          <span style={{ fontSize: 16, fontWeight: 500 }}>{success}</span>
+        </div>
+        <button
+          onClick={() => setSuccess("")}
+          style={{
+            background: "none",
+            border: "none",
+            color: "#16a34a",
+            cursor: "pointer",
+            fontSize: 24,
+            padding: 4,
+            borderRadius: 8,
+            transition: "background 0.2s ease",
+          }}
+          onMouseEnter={(e) => (e.target.style.background = "rgba(22, 163, 74, 0.1)")}
+          onMouseLeave={(e) => (e.target.style.background = "none")}
+        >
+          ×
+        </button>
+      </div>
+    )}
 
-                <div>
-                  <label
-                    style={{
-                      display: "block",
-                      fontSize: 14,
-                      fontWeight: 600,
-                      color: "#374151",
-                      marginBottom: 8,
-                    }}
-                  >
-                    Quantité *
-                  </label>
-                  <input
-                    type="number"
-                    value={quantite}
-                    onChange={(e) => setQuantite(e.target.value)}
-                    required
-                    min={1}
-                    style={{
-                      width: "100%",
-                      padding: "12px 16px",
-                      borderRadius: 12,
-                      border: "2px solid #e5e7eb",
-                      fontSize: 16,
-                      background: "white",
-                      transition: "all 0.2s ease",
-                      outline: "none",
-                    }}
-                    onFocus={(e) => (e.target.style.borderColor = "#3b82f6")}
-                    onBlur={(e) => (e.target.style.borderColor = "#e5e7eb")}
-                  />
-                </div>
+    {/* Formulaire */}
+    {showForm && (
+      <div
+        style={{
+          background: "rgba(255, 255, 255, 0.95)",
+          backdropFilter: "blur(20px)",
+          borderRadius: 24,
+          padding: 32,
+          marginBottom: 30,
+          border: "1px solid rgba(255, 255, 255, 0.2)",
+          boxShadow: "0 20px 40px rgba(0, 0, 0, 0.1)",
+        }}
+      >
+        <h2
+          style={{
+            margin: "0 0 32px",
+            fontSize: 28,
+            fontWeight: 700,
+            color: "#1f2937",
+            textAlign: "center",
+          }}
+        >
+          {isEditing ? "Modifier la vente" : "Nouvelle vente multi-lots"}
+        </h2>
 
-                <div>
-                  <label
-                    style={{
-                      display: "block",
-                      fontSize: 14,
-                      fontWeight: 600,
-                      color: "#374151",
-                      marginBottom: 8,
-                    }}
-                  >
-                    Prix unitaire (DH) *
-                  </label>
-                  <input
-                    type="number"
-                    value={prixUnitaire}
-                    onChange={(e) => setPrixUnitaire(e.target.value)}
-                    required
-                    min={0}
-                    step="0.01"
-                    style={{
-                      width: "100%",
-                      padding: "12px 16px",
-                      borderRadius: 12,
-                      border: "2px solid #e5e7eb",
-                      fontSize: 16,
-                      background: "white",
-                      transition: "all 0.2s ease",
-                      outline: "none",
-                    }}
-                    onFocus={(e) => (e.target.style.borderColor = "#3b82f6")}
-                    onBlur={(e) => (e.target.style.borderColor = "#e5e7eb")}
-                  />
-                </div>
+        {/* Zone scan */}
+        <div style={{ display: "flex", gap: 8, alignItems: "center", margin: "6px 0 18px" }}>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            onClick={() => setShowScanner(true)}
+            style={{ borderRadius: 10, padding: "8px 12px", cursor: "pointer" }}
+          >
+            📷 Scanner avec caméra
+          </button>
+          <CameraBarcodeInlineModal
+            open={showScanner}
+            onClose={() => setShowScanner(false)}
+            onDetected={(code) => {
+              onBarcodeDetected(code);
+              setShowScanner(false);
+            }}
+          />
+          <span style={{ color: "#6b7280", fontSize: 13 }}>
+            (Ou scannez avec votre douchette : validation via <b>Entrée</b>)
+          </span>
+        </div>
 
-                <div>
-                  <label
-                    style={{
-                      display: "block",
-                      fontSize: 14,
-                      fontWeight: 600,
-                      color: "#374151",
-                      marginBottom: 8,
-                    }}
-                  >
-                    Remise (DH)
-                  </label>
-                  <input
-                    type="number"
-                    value={remiseArticle}
-                    onChange={(e) => setRemiseArticle(e.target.value)}
-                    min={0}
-                    step="0.01"
-                    style={{
-                      width: "100%",
-                      padding: "12px 16px",
-                      borderRadius: 12,
-                      border: "2px solid #e5e7eb",
-                      fontSize: 16,
-                      background: "white",
-                      transition: "all 0.2s ease",
-                      outline: "none",
-                    }}
-                    onFocus={(e) => (e.target.style.borderColor = "#3b82f6")}
-                    onBlur={(e) => (e.target.style.borderColor = "#e5e7eb")}
-                  />
-                </div>
+        {/* Section ajout d'articles */}
+        <div
+          style={{
+            background: "linear-gradient(135deg, #f0f9ff, #e0f2fe)",
+            borderRadius: 20,
+            padding: 24,
+            marginBottom: 24,
+            border: "2px solid #0ea5e9",
+          }}
+        >
+          <h3 style={{ margin: "0 0 24px", color: "#0c4a6e", fontSize: 20, fontWeight: 600 }}>
+            Ajouter des articles
+          </h3>
 
-                {/* N° article (code-barres) */}
-                <div>
-                  <label
-                    style={{
-                      display: "block",
-                      fontSize: 14,
-                      fontWeight: 600,
-                      color: "#374151",
-                      marginBottom: 8,
-                    }}
-                  >
-                    N° article (code-barres) — optionnel
-                  </label>
-                  <input
-                    type="text"
-                    value={numeroArticle}
-                    onChange={(e) => setNumeroArticle(e.target.value)}
-                    placeholder="Scannez ou saisissez le code-barres"
-                    style={{
-                      width: "100%",
-                      padding: "12px 16px",
-                      borderRadius: 12,
-                      border: "2px solid #e5e7eb",
-                      fontSize: 16,
-                      background: "white",
-                      transition: "all 0.2s ease",
-                      outline: "none",
-                    }}
-                    onFocus={(e) => (e.target.style.borderColor = "#3b82f6")}
-                    onBlur={(e) => (e.target.style.borderColor = "#e5e7eb")}
-                  />
-                </div>
-              </div>
-
-              {/* Sélection des lots */}
-              {availableLots.length > 0 && (
-                <div style={{ marginBottom: 24 }}>
-                  <label
-                    style={{
-                      display: "block",
-                      fontSize: 16,
-                      fontWeight: 600,
-                      color: "#374151",
-                      marginBottom: 16,
-                    }}
-                  >
-                    Sélectionner un lot spécifique (FIFO recommandé)
-                  </label>
-                  <div
-                    style={{
-                      display: "grid",
-                      gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))",
-                      gap: 16,
-                    }}
-                  >
-                    {availableLots.map((lot) => {
-                      const lotDate = safeParseDate(lot.datePeremption);
-                      const isExpired = lotDate && lotDate < new Date();
-                      const isExpSoon = lotDate && !isExpired && lotDate <= new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
-                      return (
-                        <div
-                          key={lot.id}
-                          onClick={() => handleLotSelection(lot.id)}
-                          style={{
-                            padding: 16,
-                            borderRadius: 16,
-                            cursor: "pointer",
-                            transition: "all 0.3s ease",
-                            border: selectedLot === lot.id ? "3px solid #10b981" : "2px solid #e5e7eb",
-                            background:
-                              selectedLot === lot.id
-                                ? "linear-gradient(135deg, #dcfce7, #bbf7d0)"
-                                : isExpired
-                                ? "linear-gradient(135deg, #fee2e2, #fecaca)"
-                                : isExpSoon
-                                ? "linear-gradient(135deg, #fef3c7, #fed7aa)"
-                                : "linear-gradient(135deg, #f9fafb, #f3f4f6)",
-                            transform: selectedLot === lot.id ? "scale(1.02)" : "scale(1)",
-                            boxShadow:
-                              selectedLot === lot.id
-                                ? "0 12px 25px rgba(16, 185, 129, 0.2)"
-                                : "0 4px 12px rgba(0, 0, 0, 0.05)",
-                          }}
-                        >
-                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-                            <span style={{ fontWeight: 700, fontSize: 16, color: "#1f2937" }}>Lot: {lot.numeroLot}</span>
-                            <span
-                              style={{
-                                background: selectedLot === lot.id ? "#10b981" : "#6b7280",
-                                color: "white",
-                                padding: "4px 12px",
-                                borderRadius: 20,
-                                fontSize: 12,
-                                fontWeight: 600,
-                              }}
-                            >
-                              Qté: {lot.quantite}
-                            </span>
-                          </div>
-                          <div style={{ fontSize: 14, color: "#6b7280", marginBottom: 8 }}>
-                            <span
-                              style={{
-                                background: "#dbeafe",
-                                color: "#2563eb",
-                                padding: "2px 8px",
-                                borderRadius: 12,
-                                marginRight: 8,
-                                fontSize: 12,
-                                fontWeight: 500,
-                              }}
-                            >
-                              {lot.fournisseur}
-                            </span>
-                            <span
-                              style={{
-                                background: "#f3e8ff",
-                                color: "#7c3aed",
-                                padding: "2px 8px",
-                                borderRadius: 12,
-                                fontSize: 12,
-                                fontWeight: 600,
-                              }}
-                            >
-                              {safeToFixed(lot.prixVente)} DH
-                            </span>
-                          </div>
-                          <div
-                            style={{
-                              fontSize: 13,
-                              fontWeight: 600,
-                              color: isExpired ? "#dc2626" : isExpSoon ? "#d97706" : "#16a34a",
-                            }}
-                          >
-                            Exp: {formatDateSafe(lot.datePeremption)}
-                            {isExpired && " ⚠️ EXPIRÉ"}
-                            {isExpSoon && " ⏰ Expire bientôt"}
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
-
-              <div style={{ display: "flex", justifyContent: "center" }}>
-                <button
-                  type="submit"
-                  disabled={isSaving}
+          <form onSubmit={handleAddArticle}>
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fit, minmax(250px, 1fr))",
+                gap: 20,
+                marginBottom: 24,
+              }}
+            >
+              <div>
+                <label
                   style={{
-                    background: "linear-gradient(135deg, #10b981, #059669)",
-                    color: "white",
-                    border: "none",
-                    padding: "14px 32px",
-                    borderRadius: 16,
-                    fontSize: 16,
+                    display: "block",
+                    fontSize: 14,
                     fontWeight: 600,
-                    cursor: isSaving ? "not-allowed" : "pointer",
-                    opacity: isSaving ? 0.7 : 1,
-                    transition: "all 0.3s ease",
-                    boxShadow: "0 8px 25px rgba(16, 185, 129, 0.3)",
-                    transform: "translateY(0)",
-                  }}
-                  onMouseEnter={(e) => {
-                    if (!isSaving) {
-                      e.target.style.transform = "translateY(-2px)";
-                      e.target.style.boxShadow = "0 12px 35px rgba(16, 185, 129, 0.4)";
-                    }
-                  }}
-                  onMouseLeave={(e) => {
-                    e.target.style.transform = "translateY(0)";
-                    e.target.style.boxShadow = "0 8px 25px rgba(16, 185, 129, 0.3)";
+                    color: "#374151",
+                    marginBottom: 8,
                   }}
                 >
-                  {isSaving ? "Ajout..." : "Ajouter l'article"}
-                </button>
-              </div>
-            </form>
-          </div>
-
-          {/* Liste des articles */}
-          {articles.length > 0 && (
-            <div
-              style={{
-                background: "linear-gradient(135deg, #fff7ed, #fed7aa)",
-                borderRadius: 20,
-                padding: 24,
-                marginBottom: 24,
-                border: "2px solid #f97316",
-              }}
-            >
-              <h3
-                style={{
-                  margin: "0 0 20px",
-                  color: "#c2410c",
-                  fontSize: 20,
-                  fontWeight: 600,
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 8,
-                }}
-              >
-                Articles de la vente ({articles.length})
-              </h3>
-
-              <div style={{ background: "white", borderRadius: 16, overflow: "hidden", boxShadow: "0 8px 25px rgba(0, 0, 0, 0.1)" }}>
-                <div style={{ overflowX: "auto" }}>
-                  <table style={{ width: "100%", minWidth: 600, borderCollapse: "collapse" }}>
-                    <thead>
-                      <tr style={{ background: "linear-gradient(135deg, #f97316, #ea580c)", color: "white" }}>
-                        <th style={{ padding: 16, textAlign: "left", fontWeight: 600, fontSize: 14, letterSpacing: "0.5px" }}>
-                          Produit / Traçabilité
-                        </th>
-                        <th style={{ padding: 16, textAlign: "center", fontWeight: 600, fontSize: 14 }}>Qté</th>
-                        <th style={{ padding: 16, textAlign: "right", fontWeight: 600, fontSize: 14 }}>Prix unit.</th>
-                        <th style={{ padding: 16, textAlign: "right", fontWeight: 600, fontSize: 14 }}>Remise</th>
-                        <th style={{ padding: 16, textAlign: "right", fontWeight: 600, fontSize: 14 }}>Total</th>
-                        <th style={{ padding: 16, textAlign: "center", fontWeight: 600, fontSize: 14, width: 60 }}>Action</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {articles.map((a, i) => (
-                        <tr
-                          key={i}
-                          style={{ borderBottom: "1px solid #f3f4f6", transition: "background 0.2s ease" }}
-                          onMouseEnter={(e) => (e.target.closest("tr").style.background = "#fafafa")}
-                          onMouseLeave={(e) => (e.target.closest("tr").style.background = "white")}
-                        >
-                          <td style={{ padding: 16 }}>
-                            <div style={{ fontWeight: 600, color: "#1f2937", marginBottom: 4 }}>{a.produit}</div>
-                            {(a.numeroArticle || a.numeroLot || a.fournisseur || a.datePeremption) && (
-                              <div
-                                style={{
-                                  fontSize: 12,
-                                  color: "#6b7280",
-                                  background: "#f8fafc",
-                                  padding: 8,
-                                  borderRadius: 8,
-                                  border: "1px solid #e5e7eb",
-                                }}
-                              >
-                                {a.numeroArticle && (
-                                  <span
-                                    style={{
-                                      background: "#e0e7ff",
-                                      color: "#4f46e5",
-                                      padding: "2px 6px",
-                                      borderRadius: 8,
-                                      fontSize: 11,
-                                      fontWeight: 600,
-                                      marginRight: 6,
-                                    }}
-                                  >
-                                    N° article: {a.numeroArticle}
-                                  </span>
-                                )}
-                                {a.numeroLot && (
-                                  <span
-                                    style={{
-                                      background: "#dcfce7",
-                                      color: "#16a34a",
-                                      padding: "2px 6px",
-                                      borderRadius: 8,
-                                      fontSize: 11,
-                                      fontWeight: 500,
-                                      marginRight: 6,
-                                    }}
-                                  >
-                                    Lot: {a.numeroLot}
-                                  </span>
-                                )}
-                                {a.fournisseur && (
-                                  <span
-                                    style={{
-                                      background: "#dbeafe",
-                                      color: "#2563eb",
-                                      padding: "2px 6px",
-                                      borderRadius: 8,
-                                      fontSize: 11,
-                                      fontWeight: 500,
-                                      marginRight: 6,
-                                    }}
-                                  >
-                                    {a.fournisseur}
-                                  </span>
-                                )}
-                                {a.datePeremption && (
-                                  <div style={{ marginTop: 4, fontSize: 11 }}>Exp: {formatDateSafe(a.datePeremption)}</div>
-                                )}
-                              </div>
-                            )}
-                          </td>
-                          <td style={{ padding: 16, textAlign: "center", fontWeight: 600, fontSize: 16 }}>
-                            {safeNumber(a.quantite)}
-                          </td>
-                          <td style={{ padding: 16, textAlign: "right", fontWeight: 500, fontSize: 15 }}>
-                            {safeToFixed(a.prixUnitaire)} DH
-                          </td>
-                          <td
-                            style={{
-                              padding: 16,
-                              textAlign: "right",
-                              fontWeight: 500,
-                              fontSize: 15,
-                              color: safeNumber(a.remise) > 0 ? "#dc2626" : "#6b7280",
-                            }}
-                          >
-                            {safeToFixed(a.remise)} DH
-                          </td>
-                          <td style={{ padding: 16, textAlign: "right", fontWeight: 700, fontSize: 16, color: "#16a34a" }}>
-                            {safeToFixed(safeNumber(a.prixUnitaire) * safeNumber(a.quantite) - safeNumber(a.remise))} DH
-                          </td>
-                          <td style={{ padding: 16, textAlign: "center" }}>
-                            <button
-                              onClick={() => handleRemoveArticle(i)}
-                              style={{
-                                background: "linear-gradient(135deg, #ef4444, #dc2626)",
-                                color: "white",
-                                border: "none",
-                                borderRadius: 8,
-                                padding: "6px 12px",
-                                cursor: "pointer",
-                                fontSize: 12,
-                                fontWeight: 600,
-                                transition: "all 0.2s ease",
-                              }}
-                              onMouseEnter={(e) => {
-                                e.target.style.transform = "scale(1.05)";
-                                e.target.style.boxShadow = "0 4px 12px rgba(239, 68, 68, 0.3)";
-                              }}
-                              onMouseLeave={(e) => {
-                                e.target.style.transform = "scale(1)";
-                                e.target.style.boxShadow = "none";
-                              }}
-                            >
-                              Retirer
-                            </button>
-                          </td>
-                        </tr>
-                      ))}
-                      <tr style={{ background: "linear-gradient(135deg, #f0fdf4, #dcfce7)", borderTop: "2px solid #16a34a" }}>
-                        <td
-                          colSpan={4}
-                          style={{ padding: 20, textAlign: "right", fontSize: 18, fontWeight: 700, color: "#15803d" }}
-                        >
-                          TOTAL DE LA VENTE
-                        </td>
-                        <td style={{ padding: 20, textAlign: "right", fontSize: 22, fontWeight: 800, color: "#16a34a" }}>
-                          {safeToFixed(totalVenteCourante)} DH
-                        </td>
-                        <td style={{ padding: 20 }}></td>
-                      </tr>
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* Finalisation */}
-          <div
-            style={{
-              background: "linear-gradient(135deg, #f3e8ff, #e9d5ff)",
-              borderRadius: 20,
-              padding: 24,
-              border: "2px solid #8b5cf6",
-            }}
-          >
-            <h3 style={{ margin: "0 0 24px", color: "#581c87", fontSize: 20, fontWeight: 600 }}>
-              Finaliser la vente
-            </h3>
-
-            <form onSubmit={handleAddVente}>
-              <div
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: "repeat(auto-fit, minmax(250px, 1fr))",
-                  gap: 20,
-                  marginBottom: 24,
-                }}
-              >
-                <div>
-                  <label style={{ display: "block", fontSize: 14, fontWeight: 600, color: "#374151", marginBottom: 8 }}>
-                    Client *
-                  </label>
-                  <input
-                    type="text"
-                    value={client}
-                    onChange={(e) => setClient(e.target.value)}
-                    required
-                    placeholder="Nom du client"
-                    list="clients-list"
-                    style={{
-                      width: "100%",
-                      padding: "12px 16px",
-                      borderRadius: 12,
-                      border: "2px solid #e5e7eb",
-                      fontSize: 16,
-                      background: "white",
-                      transition: "all 0.2s ease",
-                      outline: "none",
-                    }}
-                    onFocus={(e) => (e.target.style.borderColor = "#8b5cf6")}
-                    onBlur={(e) => (e.target.style.borderColor = "#e5e7eb")}
-                  />
-                  <datalist id="clients-list">{clients.map((c) => <option key={c} value={c} />)}</datalist>
-                </div>
-
-                <div>
-                  <label style={{ display: "block", fontSize: 14, fontWeight: 600, color: "#374151", marginBottom: 8 }}>
-                    Date de vente *
-                  </label>
-                  <input
-                    type="date"
-                    value={dateVente}
-                    onChange={(e) => setDateVente(e.target.value)}
-                    required
-                    style={{
-                      width: "100%",
-                      padding: "12px 16px",
-                      borderRadius: 12,
-                      border: "2px solid #e5e7eb",
-                      fontSize: 16,
-                      background: "white",
-                      transition: "all 0.2s ease",
-                      outline: "none",
-                    }}
-                    onFocus={(e) => (e.target.style.borderColor = "#8b5cf6")}
-                    onBlur={(e) => (e.target.style.borderColor = "#e5e7eb")}
-                  />
-                </div>
-
-                <div>
-                  <label style={{ display: "block", fontSize: 14, fontWeight: 600, color: "#374151", marginBottom: 8 }}>
-                    Statut de paiement
-                  </label>
-                  <select
-                    value={statutPaiement}
-                    onChange={(e) => setStatutPaiement(e.target.value)}
-                    style={{
-                      width: "100%",
-                      padding: "12px 16px",
-                      borderRadius: 12,
-                      border: "2px solid #e5e7eb",
-                      fontSize: 16,
-                      background: "white",
-                      transition: "all 0.2s ease",
-                      outline: "none",
-                    }}
-                    onFocus={(e) => (e.target.style.borderColor = "#8b5cf6")}
-                    onBlur={(e) => (e.target.style.borderColor = "#e5e7eb")}
-                  >
-                    <option value="payé">Payé</option>
-                    <option value="partiel">Partiel</option>
-                    <option value="impayé">Impayé</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label style={{ display: "block", fontSize: 14, fontWeight: 600, color: "#374151", marginBottom: 8 }}>
-                    Mode de paiement
-                  </label>
-                  <select
-                    value={modePaiement}
-                    onChange={(e) => setModePaiement(e.target.value)}
-                    style={{
-                      width: "100%",
-                      padding: "12px 16px",
-                      borderRadius: 12,
-                      border: "2px solid #e5e7eb",
-                      fontSize: 16,
-                      background: "white",
-                      transition: "all 0.2s ease",
-                      outline: "none",
-                    }}
-                    onFocus={(e) => (e.target.style.borderColor = "#8b5cf6")}
-                    onBlur={(e) => (e.target.style.borderColor = "#e5e7eb")}
-                  >
-                    <option value="Espèces">Espèces</option>
-                    <option value="Carte">Carte bancaire</option>
-                    <option value="Chèque">Chèque</option>
-                    <option value="Virement">Virement</option>
-                    <option value="Crédit">Crédit</option>
-                  </select>
-                </div>
-              </div>
-
-              <div style={{ marginBottom: 24 }}>
-                <label style={{ display: "block", fontSize: 14, fontWeight: 600, color: "#374151", marginBottom: 8 }}>
-                  Notes / Observations
+                  Médicament *
                 </label>
-                <textarea
-                  value={notesVente}
-                  onChange={(e) => setNotesVente(e.target.value)}
-                  rows={3}
-                  placeholder="Notes optionnelles sur la vente..."
+                <select
+                  value={produit}
+                  onChange={(e) => handleProduitChange(e.target.value)}
+                  required
                   style={{
                     width: "100%",
                     padding: "12px 16px",
@@ -1973,125 +1319,719 @@ export default function Ventes() {
                     background: "white",
                     transition: "all 0.2s ease",
                     outline: "none",
-                    resize: "vertical",
-                    fontFamily: "inherit",
+                  }}
+                  onFocus={(e) => (e.target.style.borderColor = "#3b82f6")}
+                  onBlur={(e) => (e.target.style.borderColor = "#e5e7eb")}
+                >
+                  <option value="">-- Sélectionner un médicament --</option>
+                  {getAllAvailableMedicaments.map((m) => (
+                    <option key={m.nom} value={m.nom}>
+                      {m.nom} ({m.hasLots ? "Lots" : "Stock"}: {m.quantiteTotal})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label
+                  style={{
+                    display: "block",
+                    fontSize: 14,
+                    fontWeight: 600,
+                    color: "#374151",
+                    marginBottom: 8,
+                  }}
+                >
+                  Quantité *
+                </label>
+                <input
+                  type="number"
+                  value={quantite}
+                  onChange={(e) => setQuantite(e.target.value)}
+                  required
+                  min={1}
+                  style={{
+                    width: "100%",
+                    padding: "12px 16px",
+                    borderRadius: 12,
+                    border: "2px solid #e5e7eb",
+                    fontSize: 16,
+                    background: "white",
+                    transition: "all 0.2s ease",
+                    outline: "none",
+                  }}
+                  onFocus={(e) => (e.target.style.borderColor = "#3b82f6")}
+                  onBlur={(e) => (e.target.style.borderColor = "#e5e7eb")}
+                />
+              </div>
+
+              <div>
+                <label
+                  style={{
+                    display: "block",
+                    fontSize: 14,
+                    fontWeight: 600,
+                    color: "#374151",
+                    marginBottom: 8,
+                  }}
+                >
+                  Prix unitaire (DH) *
+                </label>
+                <input
+                  type="number"
+                  value={prixUnitaire}
+                  onChange={(e) => setPrixUnitaire(e.target.value)}
+                  required
+                  min={0}
+                  step="0.01"
+                  style={{
+                    width: "100%",
+                    padding: "12px 16px",
+                    borderRadius: 12,
+                    border: "2px solid #e5e7eb",
+                    fontSize: 16,
+                    background: "white",
+                    transition: "all 0.2s ease",
+                    outline: "none",
+                  }}
+                  onFocus={(e) => (e.target.style.borderColor = "#3b82f6")}
+                  onBlur={(e) => (e.target.style.borderColor = "#e5e7eb")}
+                />
+              </div>
+
+              <div>
+                <label
+                  style={{
+                    display: "block",
+                    fontSize: 14,
+                    fontWeight: 600,
+                    color: "#374151",
+                    marginBottom: 8,
+                  }}
+                >
+                  Remise (DH)
+                </label>
+                <input
+                  type="number"
+                  value={remiseArticle}
+                  onChange={(e) => setRemiseArticle(e.target.value)}
+                  min={0}
+                  step="0.01"
+                  style={{
+                    width: "100%",
+                    padding: "12px 16px",
+                    borderRadius: 12,
+                    border: "2px solid #e5e7eb",
+                    fontSize: 16,
+                    background: "white",
+                    transition: "all 0.2s ease",
+                    outline: "none",
+                  }}
+                  onFocus={(e) => (e.target.style.borderColor = "#3b82f6")}
+                  onBlur={(e) => (e.target.style.borderColor = "#e5e7eb")}
+                />
+              </div>
+
+              {/* N° article (code-barres) */}
+              <div>
+                <label
+                  style={{
+                    display: "block",
+                    fontSize: 14,
+                    fontWeight: 600,
+                    color: "#374151",
+                    marginBottom: 8,
+                  }}
+                >
+                  N° article (code-barres) — optionnel
+                </label>
+                <input
+                  type="text"
+                  value={numeroArticle}
+                  onChange={(e) => setNumeroArticle(e.target.value)}
+                  placeholder="Scannez ou saisissez le code-barres"
+                  style={{
+                    width: "100%",
+                    padding: "12px 16px",
+                    borderRadius: 12,
+                    border: "2px solid #e5e7eb",
+                    fontSize: 16,
+                    background: "white",
+                    transition: "all 0.2s ease",
+                    outline: "none",
+                  }}
+                  onFocus={(e) => (e.target.style.borderColor = "#3b82f6")}
+                  onBlur={(e) => (e.target.style.borderColor = "#e5e7eb")}
+                />
+              </div>
+            </div>
+
+            {/* Sélection des lots */}
+            {availableLots.length > 0 && (
+              <div style={{ marginBottom: 24 }}>
+                <label
+                  style={{
+                    display: "block",
+                    fontSize: 16,
+                    fontWeight: 600,
+                    color: "#374151",
+                    marginBottom: 16,
+                  }}
+                >
+                  Sélectionner un lot spécifique (FIFO recommandé)
+                </label>
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))",
+                    gap: 16,
+                  }}
+                >
+                  {availableLots.map((lot) => {
+                    const lotDate = safeParseDate(lot.datePeremption);
+                    const isExpired = lotDate && lotDate < new Date();
+                    const isExpSoon = lotDate && !isExpired && lotDate <= new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+                    return (
+                      <div
+                        key={lot.id}
+                        onClick={() => handleLotSelection(lot.id)}
+                        style={{
+                          padding: 16,
+                          borderRadius: 16,
+                          cursor: "pointer",
+                          transition: "all 0.3s ease",
+                          border: selectedLot === lot.id ? "3px solid #10b981" : "2px solid #e5e7eb",
+                          background:
+                            selectedLot === lot.id
+                              ? "linear-gradient(135deg, #dcfce7, #bbf7d0)"
+                              : isExpired
+                              ? "linear-gradient(135deg, #fee2e2, #fecaca)"
+                              : isExpSoon
+                              ? "linear-gradient(135deg, #fef3c7, #fed7aa)"
+                              : "linear-gradient(135deg, #f9fafb, #f3f4f6)",
+                          transform: selectedLot === lot.id ? "scale(1.02)" : "scale(1)",
+                          boxShadow:
+                            selectedLot === lot.id
+                              ? "0 12px 25px rgba(16, 185, 129, 0.2)"
+                              : "0 4px 12px rgba(0, 0, 0, 0.05)",
+                        }}
+                      >
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                          <span style={{ fontWeight: 700, fontSize: 16, color: "#1f2937" }}>Lot: {lot.numeroLot}</span>
+                          <span
+                            style={{
+                              background: selectedLot === lot.id ? "#10b981" : "#6b7280",
+                              color: "white",
+                              padding: "4px 12px",
+                              borderRadius: 20,
+                              fontSize: 12,
+                              fontWeight: 600,
+                            }}
+                          >
+                            Qté: {lot.quantite}
+                          </span>
+                        </div>
+                        <div style={{ fontSize: 14, color: "#6b7280", marginBottom: 8 }}>
+                          <span
+                            style={{
+                              background: "#dbeafe",
+                              color: "#2563eb",
+                              padding: "2px 8px",
+                              borderRadius: 12,
+                              marginRight: 8,
+                              fontSize: 12,
+                              fontWeight: 500,
+                            }}
+                          >
+                            {lot.fournisseur}
+                          </span>
+                          <span
+                            style={{
+                              background: "#f3e8ff",
+                              color: "#7c3aed",
+                              padding: "2px 8px",
+                              borderRadius: 12,
+                              fontSize: 12,
+                              fontWeight: 600,
+                            }}
+                          >
+                            {safeToFixed(lot.prixVente)} DH
+                          </span>
+                        </div>
+                        <div
+                          style={{
+                            fontSize: 13,
+                            fontWeight: 600,
+                            color: isExpired ? "#dc2626" : isExpSoon ? "#d97706" : "#16a34a",
+                          }}
+                        >
+                          Exp: {formatDateSafe(lot.datePeremption)}
+                          {isExpired && " ⚠️ EXPIRÉ"}
+                          {isExpSoon && " ⏰ Expire bientôt"}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            <div style={{ display: "flex", justifyContent: "center" }}>
+              <button
+                type="submit"
+                disabled={isSaving}
+                style={{
+                  background: "linear-gradient(135deg, #10b981, #059669)",
+                  color: "white",
+                  border: "none",
+                  padding: "14px 32px",
+                  borderRadius: 16,
+                  fontSize: 16,
+                  fontWeight: 600,
+                  cursor: isSaving ? "not-allowed" : "pointer",
+                  opacity: isSaving ? 0.7 : 1,
+                  transition: "all 0.3s ease",
+                  boxShadow: "0 8px 25px rgba(16, 185, 129, 0.3)",
+                  transform: "translateY(0)",
+                }}
+                onMouseEnter={(e) => {
+                  if (!isSaving) {
+                    e.target.style.transform = "translateY(-2px)";
+                    e.target.style.boxShadow = "0 12px 35px rgba(16, 185, 129, 0.4)";
+                  }
+                }}
+                onMouseLeave={(e) => {
+                  e.target.style.transform = "translateY(0)";
+                  e.target.style.boxShadow = "0 8px 25px rgba(16, 185, 129, 0.3)";
+                }}
+              >
+                {isSaving ? "Ajout..." : "Ajouter l'article"}
+              </button>
+            </div>
+          </form>
+        </div>
+
+        {/* Liste des articles */}
+        {articles.length > 0 && (
+          <div
+            style={{
+              background: "linear-gradient(135deg, #fff7ed, #fed7aa)",
+              borderRadius: 20,
+              padding: 24,
+              marginBottom: 24,
+              border: "2px solid #f97316",
+            }}
+          >
+            <h3
+              style={{
+                margin: "0 0 20px",
+                color: "#c2410c",
+                fontSize: 20,
+                fontWeight: 600,
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+              }}
+            >
+              Articles de la vente ({articles.length})
+            </h3>
+
+            <div style={{ background: "white", borderRadius: 16, overflow: "hidden", boxShadow: "0 8px 25px rgba(0, 0, 0, 0.1)" }}>
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ width: "100%", minWidth: 600, borderCollapse: "collapse" }}>
+                  <thead>
+                    <tr style={{ background: "linear-gradient(135deg, #f97316, #ea580c)", color: "white" }}>
+                      <th style={{ padding: 16, textAlign: "left", fontWeight: 600, fontSize: 14, letterSpacing: "0.5px" }}>
+                        Produit / Traçabilité
+                      </th>
+                      <th style={{ padding: 16, textAlign: "center", fontWeight: 600, fontSize: 14 }}>Qté</th>
+                      <th style={{ padding: 16, textAlign: "right", fontWeight: 600, fontSize: 14 }}>Prix unit.</th>
+                      <th style={{ padding: 16, textAlign: "right", fontWeight: 600, fontSize: 14 }}>Remise</th>
+                      <th style={{ padding: 16, textAlign: "right", fontWeight: 600, fontSize: 14 }}>Total</th>
+                      <th style={{ padding: 16, textAlign: "center", fontWeight: 600, fontSize: 14, width: 60 }}>Action</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {articles.map((a, i) => (
+                      <tr
+                        key={i}
+                        style={{ borderBottom: "1px solid #f3f4f6", transition: "background 0.2s ease" }}
+                        onMouseEnter={(e) => (e.target.closest("tr").style.background = "#fafafa")}
+                        onMouseLeave={(e) => (e.target.closest("tr").style.background = "white")}
+                      >
+                        <td style={{ padding: 16 }}>
+                          <div style={{ fontWeight: 600, color: "#1f2937", marginBottom: 4 }}>{a.produit}</div>
+                          {(a.numeroArticle || a.numeroLot || a.fournisseur || a.datePeremption) && (
+                            <div
+                              style={{
+                                fontSize: 12,
+                                color: "#6b7280",
+                                background: "#f8fafc",
+                                padding: 8,
+                                borderRadius: 8,
+                                border: "1px solid #e5e7eb",
+                              }}
+                            >
+                              {a.numeroArticle && (
+                                <span
+                                  style={{
+                                    background: "#e0e7ff",
+                                    color: "#4f46e5",
+                                    padding: "2px 6px",
+                                    borderRadius: 8,
+                                    fontSize: 11,
+                                    fontWeight: 600,
+                                    marginRight: 6,
+                                  }}
+                                >
+                                  N° article: {a.numeroArticle}
+                                </span>
+                              )}
+                              {a.numeroLot && (
+                                <span
+                                  style={{
+                                    background: "#dcfce7",
+                                    color: "#16a34a",
+                                    padding: "2px 6px",
+                                    borderRadius: 8,
+                                    fontSize: 11,
+                                    fontWeight: 500,
+                                    marginRight: 6,
+                                  }}
+                                >
+                                  Lot: {a.numeroLot}
+                                </span>
+                              )}
+                              {a.fournisseur && (
+                                <span
+                                  style={{
+                                    background: "#dbeafe",
+                                    color: "#2563eb",
+                                    padding: "2px 6px",
+                                    borderRadius: 8,
+                                    fontSize: 11,
+                                    fontWeight: 500,
+                                    marginRight: 6,
+                                  }}
+                                >
+                                  {a.fournisseur}
+                                </span>
+                              )}
+                              {a.datePeremption && (
+                                <div style={{ marginTop: 4, fontSize: 11 }}>Exp: {formatDateSafe(a.datePeremption)}</div>
+                              )}
+                            </div>
+                          )}
+                        </td>
+                        <td style={{ padding: 16, textAlign: "center", fontWeight: 600, fontSize: 16 }}>
+                          {safeNumber(a.quantite)}
+                        </td>
+                        <td style={{ padding: 16, textAlign: "right", fontWeight: 500, fontSize: 15 }}>
+                          {safeToFixed(a.prixUnitaire)} DH
+                        </td>
+                        <td
+                          style={{
+                            padding: 16,
+                            textAlign: "right",
+                            fontWeight: 500,
+                            fontSize: 15,
+                            color: safeNumber(a.remise) > 0 ? "#dc2626" : "#6b7280",
+                          }}
+                        >
+                          {safeToFixed(a.remise)} DH
+                        </td>
+                        <td style={{ padding: 16, textAlign: "right", fontWeight: 700, fontSize: 16, color: "#16a34a" }}>
+                          {safeToFixed(safeNumber(a.prixUnitaire) * safeNumber(a.quantite) - safeNumber(a.remise))} DH
+                        </td>
+                        <td style={{ padding: 16, textAlign: "center" }}>
+                          <button
+                            onClick={() => handleRemoveArticle(i)}
+                            style={{
+                              background: "linear-gradient(135deg, #ef4444, #dc2626)",
+                              color: "white",
+                              border: "none",
+                              borderRadius: 8,
+                              padding: "6px 12px",
+                              cursor: "pointer",
+                              fontSize: 12,
+                              fontWeight: 600,
+                              transition: "all 0.2s ease",
+                            }}
+                            onMouseEnter={(e) => {
+                              e.target.style.transform = "scale(1.05)";
+                              e.target.style.boxShadow = "0 4px 12px rgba(239, 68, 68, 0.3)";
+                            }}
+                            onMouseLeave={(e) => {
+                              e.target.style.transform = "scale(1)";
+                              e.target.style.boxShadow = "none";
+                            }}
+                          >
+                            Retirer
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                    <tr style={{ background: "linear-gradient(135deg, #f0fdf4, #dcfce7)", borderTop: "2px solid #16a34a" }}>
+                      <td
+                        colSpan={4}
+                        style={{ padding: 20, textAlign: "right", fontSize: 18, fontWeight: 700, color: "#15803d" }}
+                      >
+                        TOTAL DE LA VENTE
+                      </td>
+                      <td style={{ padding: 20, textAlign: "right", fontSize: 22, fontWeight: 800, color: "#16a34a" }}>
+                        {safeToFixed(totalVenteCourante)} DH
+                      </td>
+                      <td style={{ padding: 20 }}></td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Finalisation */}
+        <div
+          style={{
+            background: "linear-gradient(135deg, #f3e8ff, #e9d5ff)",
+            borderRadius: 20,
+            padding: 24,
+            border: "2px solid #8b5cf6",
+          }}
+        >
+          <h3 style={{ margin: "0 0 24px", color: "#581c87", fontSize: 20, fontWeight: 600 }}>
+            Finaliser la vente
+          </h3>
+
+          <form onSubmit={handleAddVente}>
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fit, minmax(250px, 1fr))",
+                gap: 20,
+                marginBottom: 24,
+              }}
+            >
+              <div>
+                <label style={{ display: "block", fontSize: 14, fontWeight: 600, color: "#374151", marginBottom: 8 }}>
+                  Client *
+                </label>
+                <input
+                  type="text"
+                  value={client}
+                  onChange={(e) => setClient(e.target.value)}
+                  required
+                  placeholder="Nom du client"
+                  list="clients-list"
+                  style={{
+                    width: "100%",
+                    padding: "12px 16px",
+                    borderRadius: 12,
+                    border: "2px solid #e5e7eb",
+                    fontSize: 16,
+                    background: "white",
+                    transition: "all 0.2s ease",
+                    outline: "none",
+                  }}
+                  onFocus={(e) => (e.target.style.borderColor = "#8b5cf6")}
+                  onBlur={(e) => (e.target.style.borderColor = "#e5e7eb")}
+                />
+                <datalist id="clients-list">{clients.map((c) => <option key={c} value={c} />)}</datalist>
+              </div>
+
+              <div>
+                <label style={{ display: "block", fontSize: 14, fontWeight: 600, color: "#374151", marginBottom: 8 }}>
+                  Date de vente *
+                </label>
+                <input
+                  type="date"
+                  value={dateVente}
+                  onChange={(e) => setDateVente(e.target.value)}
+                  required
+                  style={{
+                    width: "100%",
+                    padding: "12px 16px",
+                    borderRadius: 12,
+                    border: "2px solid #e5e7eb",
+                    fontSize: 16,
+                    background: "white",
+                    transition: "all 0.2s ease",
+                    outline: "none",
                   }}
                   onFocus={(e) => (e.target.style.borderColor = "#8b5cf6")}
                   onBlur={(e) => (e.target.style.borderColor = "#e5e7eb")}
                 />
               </div>
 
-              <div style={{ display: "flex", gap: 16, justifyContent: "center", flexWrap: "wrap" }}>
-                {isEditing && (
-                  <button
-                    type="button"
-                    onClick={resetForm}
-                    style={{
-                      background: "linear-gradient(135deg, #6b7280, #4b5563)",
-                      color: "white",
-                      border: "none",
-                      padding: "14px 32px",
-                      borderRadius: 16,
-                      fontSize: 16,
-                      fontWeight: 600,
-                      cursor: "pointer",
-                      transition: "all 0.3s ease",
-                      boxShadow: "0 8px 25px rgba(107, 114, 128, 0.3)",
-                      transform: "translateY(0)",
-                    }}
-                    onMouseEnter={(e) => {
-                      e.target.style.transform = "translateY(-2px)";
-                      e.target.style.boxShadow = "0 12px 35px rgba(107, 114, 128, 0.4)";
-                    }}
-                    onMouseLeave={(e) => {
-                      e.target.style.transform = "translateY(0)";
-                      e.target.style.boxShadow = "0 8px 25px rgba(107, 114, 128, 0.3)";
-                    }}
-                  >
-                    Annuler
-                  </button>
-                )}
-
-                <button
-                  type="submit"
-                  disabled={isSaving || articles.length === 0}
+              <div>
+                <label style={{ display: "block", fontSize: 14, fontWeight: 600, color: "#374151", marginBottom: 8 }}>
+                  Statut de paiement
+                </label>
+                <select
+                  value={statutPaiement}
+                  onChange={(e) => setStatutPaiement(e.target.value)}
                   style={{
-                    background: isEditing ? "linear-gradient(135deg, #f59e0b, #d97706)" : "linear-gradient(135deg, #8b5cf6, #7c3aed)",
+                    width: "100%",
+                    padding: "12px 16px",
+                    borderRadius: 12,
+                    border: "2px solid #e5e7eb",
+                    fontSize: 16,
+                    background: "white",
+                    transition: "all 0.2s ease",
+                    outline: "none",
+                  }}
+                  onFocus={(e) => (e.target.style.borderColor = "#8b5cf6")}
+                  onBlur={(e) => (e.target.style.borderColor = "#e5e7eb")}
+                >
+                  <option value="payé">Payé</option>
+                  <option value="partiel">Partiel</option>
+                  <option value="impayé">Impayé</option>
+                </select>
+              </div>
+
+              <div>
+                <label style={{ display: "block", fontSize: 14, fontWeight: 600, color: "#374151", marginBottom: 8 }}>
+                  Mode de paiement
+                </label>
+                <select
+                  value={modePaiement}
+                  onChange={(e) => setModePaiement(e.target.value)}
+                  style={{
+                    width: "100%",
+                    padding: "12px 16px",
+                    borderRadius: 12,
+                    border: "2px solid #e5e7eb",
+                    fontSize: 16,
+                    background: "white",
+                    transition: "all 0.2s ease",
+                    outline: "none",
+                  }}
+                  onFocus={(e) => (e.target.style.borderColor = "#8b5cf6")}
+                  onBlur={(e) => (e.target.style.borderColor = "#e5e7eb")}
+                >
+                  <option value="Espèces">Espèces</option>
+                  <option value="Carte">Carte bancaire</option>
+                  <option value="Chèque">Chèque</option>
+                  <option value="Virement">Virement</option>
+                  <option value="Crédit">Crédit</option>
+                </select>
+              </div>
+            </div>
+
+            <div style={{ marginBottom: 24 }}>
+              <label style={{ display: "block", fontSize: 14, fontWeight: 600, color: "#374151", marginBottom: 8 }}>
+                Notes / Observations
+              </label>
+              <textarea
+                value={notesVente}
+                onChange={(e) => setNotesVente(e.target.value)}
+                rows={3}
+                placeholder="Notes optionnelles sur la vente..."
+                style={{
+                  width: "100%",
+                  padding: "12px 16px",
+                  borderRadius: 12,
+                  border: "2px solid #e5e7eb",
+                  fontSize: 16,
+                  background: "white",
+                  transition: "all 0.2s ease",
+                  outline: "none",
+                  resize: "vertical",
+                  fontFamily: "inherit",
+                }}
+                onFocus={(e) => (e.target.style.borderColor = "#8b5cf6")}
+                onBlur={(e) => (e.target.style.borderColor = "#e5e7eb")}
+              />
+            </div>
+
+            <div style={{ display: "flex", gap: 16, justifyContent: "center", flexWrap: "wrap" }}>
+              {isEditing && (
+                <button
+                  type="button"
+                  onClick={resetForm}
+                  style={{
+                    background: "linear-gradient(135deg, #6b7280, #4b5563)",
                     color: "white",
                     border: "none",
-                    padding: "16px 40px",
+                    padding: "14px 32px",
                     borderRadius: 16,
-                    fontSize: 18,
-                    fontWeight: 700,
-                    cursor: isSaving || articles.length === 0 ? "not-allowed" : "pointer",
-                    opacity: isSaving || articles.length === 0 ? 0.6 : 1,
+                    fontSize: 16,
+                    fontWeight: 600,
+                    cursor: "pointer",
                     transition: "all 0.3s ease",
-                    boxShadow: "0 12px 35px rgba(139, 92, 246, 0.4)",
+                    boxShadow: "0 8px 25px rgba(107, 114, 128, 0.3)",
                     transform: "translateY(0)",
                   }}
                   onMouseEnter={(e) => {
-                    if (!isSaving && articles.length > 0) {
-                      e.target.style.transform = "translateY(-3px)";
-                      e.target.style.boxShadow = "0 16px 45px rgba(139, 92, 246, 0.5)";
-                    }
+                    e.target.style.transform = "translateY(-2px)";
+                    e.target.style.boxShadow = "0 12px 35px rgba(107, 114, 128, 0.4)";
                   }}
                   onMouseLeave={(e) => {
                     e.target.style.transform = "translateY(0)";
-                    e.target.style.boxShadow = "0 12px 35px rgba(139, 92, 246, 0.4)";
+                    e.target.style.boxShadow = "0 8px 25px rgba(107, 114, 128, 0.3)";
                   }}
                 >
-                  {isSaving ? "Enregistrement..." : isEditing ? "Modifier la vente" : "Enregistrer la vente"}
+                  Annuler
                 </button>
-              </div>
-            </form>
-          </div>
+              )}
+
+              <button
+                type="submit"
+                disabled={isSaving || articles.length === 0}
+                style={{
+                  background: isEditing ? "linear-gradient(135deg, #f59e0b, #d97706)" : "linear-gradient(135deg, #8b5cf6, #7c3aed)",
+                  color: "white",
+                  border: "none",
+                  padding: "16px 40px",
+                  borderRadius: 16,
+                  fontSize: 18,
+                  fontWeight: 700,
+                  cursor: isSaving || articles.length === 0 ? "not-allowed" : "pointer",
+                  opacity: isSaving || articles.length === 0 ? 0.6 : 1,
+                  transition: "all 0.3s ease",
+                  boxShadow: "0 12px 35px rgba(139, 92, 246, 0.4)",
+                  transform: "translateY(0)",
+                }}
+                onMouseEnter={(e) => {
+                  if (!isSaving && articles.length > 0) {
+                    e.target.style.transform = "translateY(-3px)";
+                    e.target.style.boxShadow = "0 16px 45px rgba(139, 92, 246, 0.5)";
+                  }
+                }}
+                onMouseLeave={(e) => {
+                  e.target.style.transform = "translateY(0)";
+                  e.target.style.boxShadow = "0 12px 35px rgba(139, 92, 246, 0.4)";
+                }}
+              >
+                {isSaving ? "Enregistrement..." : isEditing ? "Modifier la vente" : "Enregistrer la vente"}
+              </button>
+            </div>
+          </form>
         </div>
-      )}
+      </div>
+    )}
 
-      {/* Filtres */}
-      <div
-        style={{
-          background: "rgba(255, 255, 255, 0.95)",
-          backdropFilter: "blur(20px)",
-          borderRadius: 20,
-          padding: 24,
-          marginBottom: 24,
-          border: "1px solid rgba(255, 255, 255, 0.2)",
-          boxShadow: "0 12px 30px rgba(0, 0, 0, 0.08)",
-        }}
-      >
-        <div style={{ display: "flex", gap: 16, alignItems: "center", flexWrap: "wrap" }}>
-          <div style={{ flex: "1", minWidth: 250 }}>
-            <input
-              type="text"
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              placeholder="Rechercher client, produit, numéro de lot ou N° article..."
-              style={{
-                width: "100%",
-                padding: "12px 20px",
-                borderRadius: 25,
-                border: "2px solid #e5e7eb",
-                fontSize: 16,
-                background: "white",
-                transition: "all 0.3s ease",
-                outline: "none",
-              }}
-              onFocus={(e) => {
-                e.target.style.borderColor = "#3b82f6";
-                e.target.style.boxShadow = "0 0 0 3px rgba(59, 130, 246, 0.1)";
-              }}
-              onBlur={(e) => {
-                e.target.style.borderColor = "#e5e7eb";
-                e.target.style.boxShadow = "none";
-              }}
-            />
-          </div>
-
-          <select
-            value={filterStatut}
-            onChange={(e) => setFilterStatut(e.target.value)}
+    {/* Filtres */}
+    <div
+      style={{
+        background: "rgba(255, 255, 255, 0.95)",
+        backdropFilter: "blur(20px)",
+        borderRadius: 20,
+        padding: 24,
+        marginBottom: 24,
+        border: "1px solid rgba(255, 255, 255, 0.2)",
+        boxShadow: "0 12px 30px rgba(0, 0, 0, 0.08)",
+      }}
+    >
+      <div style={{ display: "flex", gap: 16, alignItems: "center", flexWrap: "wrap" }}>
+        <div style={{ flex: "1", minWidth: 250 }}>
+          <input
+            type="text"
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            placeholder="Rechercher client, produit, numéro de lot ou N° article..."
             style={{
+              width: "100%",
               padding: "12px 20px",
               borderRadius: 25,
               border: "2px solid #e5e7eb",
@@ -2099,7 +2039,6 @@ export default function Ventes() {
               background: "white",
               transition: "all 0.3s ease",
               outline: "none",
-              minWidth: 180,
             }}
             onFocus={(e) => {
               e.target.style.borderColor = "#3b82f6";
@@ -2109,499 +2048,523 @@ export default function Ventes() {
               e.target.style.borderColor = "#e5e7eb";
               e.target.style.boxShadow = "none";
             }}
-          >
-            <option value="">Tous les statuts</option>
-            <option value="payé">Payé</option>
-            <option value="partiel">Partiel</option>
-            <option value="impayé">Impayé</option>
-          </select>
-
-          {(searchTerm || filterStatut) && (
-            <button
-              onClick={() => {
-                setSearchTerm("");
-                setFilterStatut("");
-              }}
-              style={{
-                background: "linear-gradient(135deg, #ef4444, #dc2626)",
-                color: "white",
-                border: "none",
-                padding: "12px 20px",
-                borderRadius: 25,
-                fontSize: 14,
-                fontWeight: 600,
-                cursor: "pointer",
-                transition: "all 0.3s ease",
-                boxShadow: "0 6px 20px rgba(239, 68, 68, 0.3)",
-              }}
-              onMouseEnter={(e) => {
-                e.target.style.transform = "translateY(-2px)";
-                e.target.style.boxShadow = "0 8px 25px rgba(239, 68, 68, 0.4)";
-              }}
-              onMouseLeave={(e) => {
-                e.target.style.transform = "translateY(0)";
-                e.target.style.boxShadow = "0 6px 20px rgba(239, 68, 68, 0.3)";
-              }}
-            >
-              Réinitialiser
-            </button>
-          )}
+          />
         </div>
-      </div>
 
-      {/* Tableau des ventes */}
-      <div
-        style={{
-          background: "rgba(255, 255, 255, 0.95)",
-          backdropFilter: "blur(20px)",
-          borderRadius: 24,
-          overflow: "hidden",
-          border: "1px solid rgba(255, 255, 255, 0.2)",
-          boxShadow: "0 20px 40px rgba(0, 0, 0, 0.1)",
-        }}
-      >
-        <div style={{ overflowX: "auto", maxHeight: "70vh", overflowY: "auto" }}>
-          <table style={{ width: "100%", minWidth: 1000, borderCollapse: "collapse" }}>
-            <thead
-              style={{
-                position: "sticky",
-                top: 0,
-                background: "linear-gradient(135deg, #1e293b, #334155)",
-                color: "white",
-                zIndex: 10,
-              }}
-            >
+        <select
+          value={filterStatut}
+          onChange={(e) => setFilterStatut(e.target.value)}
+          style={{
+            padding: "12px 20px",
+            borderRadius: 25,
+            border: "2px solid #e5e7eb",
+            fontSize: 16,
+            background: "white",
+            transition: "all 0.3s ease",
+            outline: "none",
+            minWidth: 180,
+          }}
+          onFocus={(e) => {
+            e.target.style.borderColor = "#3b82f6";
+            e.target.style.boxShadow = "0 0 0 3px rgba(59, 130, 246, 0.1)";
+          }}
+          onBlur={(e) => {
+            e.target.style.borderColor = "#e5e7eb";
+            e.target.style.boxShadow = "none";
+          }}
+        >
+          <option value="">Tous les statuts</option>
+          <option value="payé">Payé</option>
+          <option value="partiel">Partiel</option>
+          <option value="impayé">Impayé</option>
+        </select>
+
+        {(searchTerm || filterStatut) && (
+          <button
+            onClick={() => {
+              setSearchTerm("");
+              setFilterStatut("");
+            }}
+            style={{
+              background: "linear-gradient(135deg, #ef4444, #dc2626)",
+              color: "white",
+              border: "none",
+              padding: "12px 20px",
+              borderRadius: 25,
+              fontSize: 14,
+              fontWeight: 600,
+              cursor: "pointer",
+              transition: "all 0.3s ease",
+              boxShadow: "0 6px 20px rgba(239, 68, 68, 0.3)",
+            }}
+            onMouseEnter={(e) => {
+              e.target.style.transform = "translateY(-2px)";
+              e.target.style.boxShadow = "0 8px 25px rgba(239, 68, 68, 0.4)";
+            }}
+            onMouseLeave={(e) => {
+              e.target.style.transform = "translateY(0)";
+              e.target.style.boxShadow = "0 6px 20px rgba(239, 68, 68, 0.3)";
+            }}
+          >
+            Réinitialiser
+          </button>
+        )}
+      </div>
+    </div>
+
+    {/* Tableau des ventes */}
+    <div
+      style={{
+        background: "rgba(255, 255, 255, 0.95)",
+        backdropFilter: "blur(20px)",
+        borderRadius: 24,
+        overflow: "hidden",
+        border: "1px solid rgba(255, 255, 255, 0.2)",
+        boxShadow: "0 20px 40px rgba(0, 0, 0, 0.1)",
+      }}
+    >
+      <div style={{ overflowX: "auto", maxHeight: "70vh", overflowY: "auto" }}>
+        <table style={{ width: "100%", minWidth: 1000, borderCollapse: "collapse" }}>
+          <thead
+            style={{
+              position: "sticky",
+              top: 0,
+              background: "linear-gradient(135deg, #1e293b, #334155)",
+              color: "white",
+              zIndex: 10,
+            }}
+          >
+            <tr>
+              <th style={{ padding: 20, textAlign: "left", fontWeight: 700, fontSize: 14, letterSpacing: "0.5px", borderRight: "1px solid rgba(255,255,255,0.1)" }}>
+                N° VENTE
+              </th>
+              <th style={{ padding: 20, textAlign: "left", fontWeight: 700, fontSize: 14, letterSpacing: "0.5px", borderRight: "1px solid rgba(255,255,255,0.1)" }}>
+                CLIENT
+              </th>
+              <th style={{ padding: 20, textAlign: "center", fontWeight: 700, fontSize: 14, letterSpacing: "0.5px", borderRight: '1px solid #f1f5f9' }}>
+                DATE
+              </th>
+              <th style={{ padding: 20, textAlign: "center", fontWeight: 700, fontSize: 14, letterSpacing: "0.5px", borderRight: '1px solid #f1f5f9' }}>
+                ARTICLES
+              </th>
+              <th style={{ padding: 20, textAlign: "center", fontWeight: 700, fontSize: 14, letterSpacing: "0.5px", borderRight: '1px solid #f1f5f9' }}>
+                STATUT
+              </th>
+              <th style={{ padding: 20, textAlign: "right", fontWeight: 700, fontSize: 14, letterSpacing: "0.5px", borderRight: '1px solid #f1f5f9' }}>
+                TOTAL
+              </th>
+              <th style={{ padding: 20, textAlign: "center", fontWeight: 700, fontSize: 14, letterSpacing: "0.5px", width: 220 }}>
+                ACTIONS
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {ventesFiltrees.length === 0 ? (
               <tr>
-                <th style={{ padding: 20, textAlign: "left", fontWeight: 700, fontSize: 14, letterSpacing: "0.5px", borderRight: "1px solid rgba(255,255,255,0.1)" }}>
-                  N° VENTE
-                </th>
-                <th style={{ padding: 20, textAlign: "left", fontWeight: 700, fontSize: 14, letterSpacing: "0.5px", borderRight: "1px solid rgba(255,255,255,0.1)" }}>
-                  CLIENT
-                </th>
-                <th style={{ padding: 20, textAlign: "center", fontWeight: 700, fontSize: 14, letterSpacing: "0.5px", borderRight: '1px solid #f1f5f9' }}>
-                  DATE
-                </th>
-                <th style={{ padding: 20, textAlign: "center", fontWeight: 700, fontSize: 14, letterSpacing: "0.5px", borderRight: '1px solid #f1f5f9' }}>
-                  ARTICLES
-                </th>
-                <th style={{ padding: 20, textAlign: "center", fontWeight: 700, fontSize: 14, letterSpacing: "0.5px", borderRight: '1px solid #f1f5f9' }}>
-                  STATUT
-                </th>
-                <th style={{ padding: 20, textAlign: "right", fontWeight: 700, fontSize: 14, letterSpacing: "0.5px", borderRight: '1px solid #f1f5f9' }}>
-                  TOTAL
-                </th>
-                <th style={{ padding: 20, textAlign: "center", fontWeight: 700, fontSize: 14, letterSpacing: "0.5px", width: 220 }}>
-                  ACTIONS
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {ventesFiltrees.length === 0 ? (
-                <tr>
-                  <td colSpan={7} style={{ padding: "60px 20px", textAlign: "center", color: "#6b7280", fontSize: 18, fontWeight: 500 }}>
-                    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 16 }}>
-                      <div style={{ width: 64, height: 64, borderRadius: "50%", background: "linear-gradient(135deg, #e5e7eb, #d1d5db)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 24 }}>
-                        📊
-                      </div>
-                      <div>
-                        <h3 style={{ margin: "0 0 8px", color: "#374151" }}>
-                          {ventes.length === 0 ? "Aucune vente enregistrée" : "Aucun résultat"}
-                        </h3>
-                        <p style={{ margin: 0, color: "#9ca3af" }}>
-                          {ventes.length === 0
-                            ? "Commencez par créer votre première vente"
-                            : "Aucune vente ne correspond aux critères de filtrage"}
-                        </p>
-                      </div>
+                <td colSpan={7} style={{ padding: "60px 20px", textAlign: "center", color: "#6b7280", fontSize: 18, fontWeight: 500 }}>
+                  <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 16 }}>
+                    <div style={{ width: 64, height: 64, borderRadius: "50%", background: "linear-gradient(135deg, #e5e7eb, #d1d5db)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 24 }}>
+                      📊
                     </div>
-                  </td>
-                </tr>
-              ) : (
-                ventesFiltrees.map((v, index) => {
-                  const total =
-                    v.montantTotal ||
-                    (Array.isArray(v.articles) ? v.articles : []).reduce(
-                      (sum, a) => sum + (safeNumber(a.prixUnitaire) * safeNumber(a.quantite) - safeNumber(a.remise || 0)),
-                      0
-                    );
-                  const articlesAvecLots = (v.articles || []).filter((a) => a.numeroLot || a.numeroArticle).length;
-                  const totalArticles = (v.articles || []).length;
-                  return (
-                    <tr
-                      key={v.id}
-                      style={{
-                        borderBottom: '1px solid #f1f5f9',
-                        transition: "all 0.3s ease",
-                        background: index % 2 === 0 ? "rgba(248, 250, 252, 0.5)" : "white",
-                      }}
-                      onMouseEnter={(e) => {
-                        const tr = e.target.closest("tr");
-                        tr.style.background = "linear-gradient(135deg, #f0f9ff, #e0f2fe)";
-                        tr.style.transform = "scale(1.001)";
-                        tr.style.boxShadow = "0 4px 20px rgba(59, 130, 246, 0.1)";
-                      }}
-                      onMouseLeave={(e) => {
-                        const tr = e.target.closest("tr");
-                        tr.style.background = index % 2 === 0 ? "rgba(248, 250, 252, 0.5)" : "white";
-                        tr.style.transform = "scale(1)";
-                        tr.style.boxShadow = "none";
-                      }}
-                    >
-                      <td style={{ padding: 20, borderRight: '1px solid #f1f5f9' }}>
-                        <div
-                          style={{
-                            background: "linear-gradient(135deg, #3b82f6, #2563eb)",
-                            color: "white",
-                            padding: "6px 12px",
-                            borderRadius: 12,
-                            fontSize: 12,
-                            fontWeight: 700,
-                            letterSpacing: "0.5px",
-                            display: "inline-block",
-                          }}
-                        >
-                          #{(v.id || "").slice(-6).toUpperCase()}
-                        </div>
-                      </td>
-                      <td style={{ padding: 20, borderRight: '1px solid #f1f5f9' }}>
-                        <div style={{ fontWeight: 600, fontSize: 16, color: "#1f2937", marginBottom: 4 }}>{v.client}</div>
-                        <div style={{ fontSize: 12, color: "#6b7280", background: "#f8fafc", padding: "2px 8px", borderRadius: 8, display: "inline-block" }}>
-                          {v.modePaiement || "Espèces"}
-                        </div>
-                      </td>
-                      <td style={{ padding: 20, textAlign: "center", borderRight: '1px solid #f1f5f9' }}>
-                        <div style={{ fontSize: 14, fontWeight: 600, color: "#374151" }}>{formatDateSafe(v.date)}</div>
-                      </td>
-                      <td style={{ padding: 20, textAlign: "center", borderRight: '1px solid #f1f5f9' }}>
-                        <div style={{ display: "flex", gap: 8, justifyContent: "center", alignItems: "center" }}>
-                          <span
-                            style={{
-                              background: "linear-gradient(135deg, #8b5cf6, #7c3aed)",
-                              color: "white",
-                              padding: "6px 12px",
-                              borderRadius: 20,
-                              fontSize: 12,
-                              fontWeight: 600,
-                            }}
-                          >
-                            {totalArticles}
-                          </span>
-                          {articlesAvecLots > 0 && (
-                            <span
-                              style={{
-                                background: "linear-gradient(135deg, #10b981, #059669)",
-                                color: "white",
-                                padding: "4px 8px",
-                                borderRadius: 12,
-                                fontSize: 10,
-                                fontWeight: 600,
-                              }}
-                            >
-                              {articlesAvecLots} tracés
-                            </span>
-                          )}
-                        </div>
-                      </td>
-                      <td style={{ padding: 20, textAlign: "center", borderRight: '1px solid #f1f5f9' }}>
+                    <div>
+                      <h3 style={{ margin: "0 0 8px", color: "#374151" }}>
+                        {ventes.length === 0 ? "Aucune vente enregistrée" : "Aucun résultat"}
+                      </h3>
+                      <p style={{ margin: 0, color: "#9ca3af" }}>
+                        {ventes.length === 0
+                          ? "Commencez par créer votre première vente"
+                          : "Aucune vente ne correspond aux critères de filtrage"}
+                      </p>
+                    </div>
+                  </div>
+                </td>
+              </tr>
+            ) : (
+              ventesFiltrees.map((v, index) => {
+                const total =
+                  v.montantTotal ||
+                  (Array.isArray(v.articles) ? v.articles : []).reduce(
+                    (sum, a) => sum + (safeNumber(a.prixUnitaire) * safeNumber(a.quantite) - safeNumber(a.remise || 0)),
+                    0
+                  );
+                const articlesAvecLots = (v.articles || []).filter((a) => a.numeroLot || a.numeroArticle).length;
+                const totalArticles = (v.articles || []).length;
+                return (
+                  <tr
+                    key={v.id}
+                    style={{
+                      borderBottom: '1px solid #f1f5f9',
+                      transition: "all 0.3s ease",
+                      background: index % 2 === 0 ? "rgba(248, 250, 252, 0.5)" : "white",
+                    }}
+                    onMouseEnter={(e) => {
+                      const tr = e.target.closest("tr");
+                      tr.style.background = "linear-gradient(135deg, #f0f9ff, #e0f2fe)";
+                      tr.style.transform = "scale(1.001)";
+                      tr.style.boxShadow = "0 4px 20px rgba(59, 130, 246, 0.1)";
+                    }}
+                    onMouseLeave={(e) => {
+                      const tr = e.target.closest("tr");
+                      tr.style.background = index % 2 === 0 ? "rgba(248, 250, 252, 0.5)" : "white";
+                      tr.style.transform = "scale(1)";
+                      tr.style.boxShadow = "none";
+                    }}
+                  >
+                    <td style={{ padding: 20, borderRight: '1px solid #f1f5f9' }}>
+                      <div
+                        style={{
+                          background: "linear-gradient(135deg, #3b82f6, #2563eb)",
+                          color: "white",
+                          padding: "6px 12px",
+                          borderRadius: 12,
+                          fontSize: 12,
+                          fontWeight: 700,
+                          letterSpacing: "0.5px",
+                          display: "inline-block",
+                        }}
+                      >
+                        #{(v.id || "").slice(-6).toUpperCase()}
+                      </div>
+                    </td>
+                    <td style={{ padding: 20, borderRight: '1px solid #f1f5f9' }}>
+                      <div style={{ fontWeight: 600, fontSize: 16, color: "#1f2937", marginBottom: 4 }}>{v.client}</div>
+                      <div style={{ fontSize: 12, color: "#6b7280", background: "#f8fafc", padding: "2px 8px", borderRadius: 8, display: "inline-block" }}>
+                        {v.modePaiement || "Espèces"}
+                      </div>
+                    </td>
+                    <td style={{ padding: 20, textAlign: "center", borderRight: '1px solid #f1f5f9' }}>
+                      <div style={{ fontSize: 14, fontWeight: 600, color: "#374151" }}>{formatDateSafe(v.date)}</div>
+                    </td>
+                    <td style={{ padding: 20, textAlign: "center", borderRight: '1px solid #f1f5f9' }}>
+                      <div style={{ display: "flex", gap: 8, justifyContent: "center", alignItems: "center" }}>
                         <span
                           style={{
-                            background:
-                              v.statutPaiement === "payé"
-                                ? "linear-gradient(135deg, #22c55e, #16a34a)"
-                                : v.statutPaiement === "partiel"
-                                ? "linear-gradient(135deg, #eab308, #ca8a04)"
-                                : "linear-gradient(135deg, #ef4444, #dc2626)",
+                            background: "linear-gradient(135deg, #8b5cf6, #7c3aed)",
                             color: "white",
-                            padding: "6px 16px",
+                            padding: "6px 12px",
                             borderRadius: 20,
                             fontSize: 12,
                             fontWeight: 600,
-                            textTransform: "capitalize",
                           }}
                         >
-                          {v.statutPaiement}
+                          {totalArticles}
                         </span>
-                      </td>
-                      <td style={{ padding: 20, textAlign: "right", borderRight: '1px solid #f1f5f9' }}>
-                        <div style={{ fontSize: 16, fontWeight: 700, color: "#16a34a" }}>{safeToFixed(total)} DH</div>
-                      </td>
-                      <td style={{ padding: 20, textAlign: "center" }}>
-                        <div style={{ display: "flex", gap: 8, justifyContent: "center" }}>
+                        {articlesAvecLots > 0 && (
                           <span
-                            onClick={() => handleViewDetails(v)}
-                            style={{ cursor: "pointer", fontSize: 18, transition: "transform 0.2s ease" }}
-                            onMouseEnter={(e) => (e.target.style.transform = "scale(1.2)")}
-                            onMouseLeave={(e) => (e.target.style.transform = "scale(1)")}
+                            style={{
+                              background: "linear-gradient(135deg, #10b981, #059669)",
+                              color: "white",
+                              padding: "4px 8px",
+                              borderRadius: 12,
+                              fontSize: 10,
+                              fontWeight: 600,
+                            }}
                           >
-                            👁️
+                            {articlesAvecLots} tracés
                           </span>
-                          <span
-                            onClick={() => handleEditVente(v)}
-                            style={{ cursor: "pointer", fontSize: 18, marginRight: 10, transition: "transform 0.2s ease" }}
-                            onMouseEnter={(e) => (e.target.style.transform = "scale(1.2)")}
-                            onMouseLeave={(e) => (e.target.style.transform = "scale(1)")}
-                          >
-                            ✏️
-                          </span>
-                          <span
-                            onClick={() => handlePrintVente(v)}
-                            style={{ cursor: "pointer", fontSize: 18, marginRight: 10, transition: "transform 0.2s ease" }}
-                            onMouseEnter={(e) => (e.target.style.transform = "scale(1.2)")}
-                            onMouseLeave={(e) => (e.target.style.transform = "scale(1)")}
-                          >
-                            🖨️
-                          </span>
-                          <span
-                            onClick={() => handleDeleteVente(v)}
-                            style={{ cursor: "pointer", fontSize: 18, transition: "transform 0.2s ease" }}
-                            onMouseEnter={(e) => (e.target.style.transform = "scale(1.2)")}
-                            onMouseLeave={(e) => (e.target.style.transform = "scale(1)")}
-                          >
-                            🗑️
-                          </span>
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })
-              )}
-            </tbody>
-          </table>
-        </div>
+                        )}
+                      </div>
+                    </td>
+                    <td style={{ padding: 20, textAlign: "center", borderRight: '1px solid #f1f5f9' }}>
+                      <span
+                        style={{
+                          background:
+                            v.statutPaiement === "payé"
+                              ? "linear-gradient(135deg, #22c55e, #16a34a)"
+                              : v.statutPaiement === "partiel"
+                              ? "linear-gradient(135deg, #eab308, #ca8a04)"
+                              : "linear-gradient(135deg, #ef4444, #dc2626)",
+                          color: "white",
+                          padding: "6px 16px",
+                          borderRadius: 20,
+                          fontSize: 12,
+                          fontWeight: 600,
+                          textTransform: "capitalize",
+                        }}
+                      >
+                        {v.statutPaiement}
+                      </span>
+                    </td>
+                    <td style={{ padding: 20, textAlign: "right", borderRight: '1px solid #f1f5f9' }}>
+                      <div style={{ fontSize: 16, fontWeight: 700, color: "#16a34a" }}>{safeToFixed(total)} DH</div>
+                    </td>
+                    <td style={{ padding: 20, textAlign: "center" }}>
+                      <div style={{ display: "flex", gap: 8, justifyContent: "center" }}>
+                        <span
+                          onClick={() => handleViewDetails(v)}
+                          style={{ cursor: "pointer", fontSize: 18, transition: "transform 0.2s ease" }}
+                          onMouseEnter={(e) => (e.target.style.transform = "scale(1.2)")}
+                          onMouseLeave={(e) => (e.target.style.transform = "scale(1)")}
+                        >
+                          👁️
+                        </span>
+                        <span
+                          onClick={() => handleEditVente(v)}
+                          style={{ cursor: "pointer", fontSize: 18, marginRight: 10, transition: "transform 0.2s ease" }}
+                          onMouseEnter={(e) => (e.target.style.transform = "scale(1.2)")}
+                          onMouseLeave={(e) => (e.target.style.transform = "scale(1)")}
+                        >
+                          ✏️
+                        </span>
+                        <span
+                          onClick={() => handlePrintVente(v)}
+                          style={{ cursor: "pointer", fontSize: 18, marginRight: 10, transition: "transform 0.2s ease" }}
+                          onMouseEnter={(e) => (e.target.style.transform = "scale(1.2)")}
+                          onMouseLeave={(e) => (e.target.style.transform = "scale(1)")}
+                        >
+                          🖨️
+                        </span>
+                        <span
+                          onClick={() => handleDeleteVente(v)}
+                          style={{ cursor: "pointer", fontSize: 18, transition: "transform 0.2s ease" }}
+                          onMouseEnter={(e) => (e.target.style.transform = "scale(1.2)")}
+                          onMouseLeave={(e) => (e.target.style.transform = "scale(1)")}
+                        >
+                          🗑️
+                        </span>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })
+            )}
+          </tbody>
+        </table>
       </div>
+    </div>
 
-      {/* Modal de détails via Portal */}
-      {showDetails &&
-        selectedVente &&
-        createPortal(
+    {/* Modal de détails via Portal */}
+    {showDetails &&
+      selectedVente &&
+      createPortal(
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label={`Détails de la vente ${(selectedVente?.id || "").slice(-6).toUpperCase()}`}
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setShowDetails(false);
+          }}
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(0, 0, 0, 0.5)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 20000,
+            backdropFilter: "blur(5px)",
+            padding: 16,
+          }}
+        >
           <div
-            role="dialog"
-            aria-modal="true"
-            aria-label={`Détails de la vente ${(selectedVente?.id || "").slice(-6).toUpperCase()}`}
-            onClick={(e) => {
-              if (e.target === e.currentTarget) setShowDetails(false);
-            }}
             style={{
-              position: "fixed",
-              inset: 0,
-              background: "rgba(0, 0, 0, 0.5)",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              zIndex: 20000,
-              backdropFilter: "blur(5px)",
+              background: "linear-gradient(135deg, #ffffff, #f9fafb)",
+              borderRadius: 20,
               padding: 16,
+              width: "min(100%, 980px)",
+              maxHeight: "90vh",
+              overflowY: "auto",
+              overflowX: "hidden",
+              boxShadow: "0 20px 50px rgba(0, 0, 0, 0.2)",
+              border: "1px solid rgba(0, 0, 0, 0.05)",
+              position: "relative",
             }}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") setShowDetails(false);
+            }}
+            tabIndex={-1}
           >
             <div
               style={{
+                position: "sticky",
+                top: 0,
+                zIndex: 2,
                 background: "linear-gradient(135deg, #ffffff, #f9fafb)",
-                borderRadius: 20,
-                padding: 16,
-                width: "min(100%, 980px)",
-                maxHeight: "90vh",
-                overflowY: "auto",
-                overflowX: "hidden",
-                boxShadow: "0 20px 50px rgba(0, 0, 0, 0.2)",
-                border: "1px solid rgba(0, 0, 0, 0.05)",
-                position: "relative",
+                padding: "12px 40px 12px 12px",
+                margin: "-16px -16px 16px",
+                borderBottom: "1px solid rgba(0,0,0,0.06)",
+                display: "flex",
+                alignItems: "center",
+                minHeight: 48,
               }}
-              onKeyDown={(e) => {
-                if (e.key === "Escape") setShowDetails(false);
-              }}
-              tabIndex={-1}
             >
-              <div
+              <h2
                 style={{
-                  position: "sticky",
-                  top: 0,
-                  zIndex: 2,
-                  background: "linear-gradient(135deg, #ffffff, #f9fafb)",
-                  padding: "12px 40px 12px 12px",
-                  margin: "-16px -16px 16px",
-                  borderBottom: "1px solid rgba(0,0,0,0.06)",
-                  display: "flex",
-                  alignItems: "center",
-                  minHeight: 48,
+                  margin: 0,
+                  fontSize: "clamp(18px, 2.5vw, 28px)",
+                  fontWeight: 700,
+                  color: "#1f2937",
+                  lineHeight: 1.2,
+                  flex: 1,
                 }}
               >
-                <h2
-                  style={{
-                    margin: 0,
-                    fontSize: "clamp(18px, 2.5vw, 28px)",
-                    fontWeight: 700,
-                    color: "#1f2937",
-                    lineHeight: 1.2,
-                    flex: 1,
-                  }}
-                >
-                  Détails de la vente #{(selectedVente?.id || "").slice(-6).toUpperCase()}
-                </h2>
-                <button
-                  onClick={() => setShowDetails(false)}
-                  aria-label="Fermer"
-                  style={{
-                    position: "absolute",
-                    right: 12,
-                    top: 12,
-                    width: 36,
-                    height: 36,
-                    display: "grid",
-                    placeItems: "center",
-                    background: "transparent",
-                    border: "none",
-                    borderRadius: 10,
-                    fontSize: 24,
-                    lineHeight: 1,
-                    color: "#111827",
-                    cursor: "pointer",
-                    transition: "background 0.2s ease, transform 0.1s ease",
-                    zIndex: 3,
-                  }}
-                  onMouseEnter={(e) => (e.currentTarget.style.background = "#f3f4f6")}
-                  onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
-                  onMouseDown={(e) => (e.currentTarget.style.transform = "scale(0.97)")}
-                  onMouseUp={(e) => (e.currentTarget.style.transform = "scale(1)")}
-                >
-                  ×
-                </button>
-              </div>
-
-              <div
+                Détails de la vente #{(selectedVente?.id || "").slice(-6).toUpperCase()}
+              </h2>
+              <button
+                onClick={() => setShowDetails(false)}
+                aria-label="Fermer"
                 style={{
+                  position: "absolute",
+                  right: 12,
+                  top: 12,
+                  width: 36,
+                  height: 36,
                   display: "grid",
-                  gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
-                  gap: 12,
-                  marginBottom: 24,
+                  placeItems: "center",
+                  background: "transparent",
+                  border: "none",
+                  borderRadius: 10,
+                  fontSize: 24,
+                  lineHeight: 1,
+                  color: "#111827",
+                  cursor: "pointer",
+                  transition: "background 0.2s ease, transform 0.1s ease",
+                  zIndex: 3,
                 }}
+                onMouseEnter={(e) => (e.currentTarget.style.background = "#f3f4f6")}
+                onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+                onMouseDown={(e) => (e.currentTarget.style.transform = "scale(0.97)")}
+                onMouseUp={(e) => (e.currentTarget.style.transform = "scale(1)")}
               >
-                <div style={{ background: "linear-gradient(135deg, #dbeafe, #bfdbfe)", borderRadius: 14, padding: 16, boxShadow: "0 4px 15px rgba(59, 130, 246, 0.08)" }}>
-                  <h4 style={{ margin: "0 0 6px", color: "#1d4ed8", fontSize: 14, fontWeight: 600 }}>Client</h4>
-                  <p style={{ margin: 0, fontSize: 16, fontWeight: 700, color: "#1f2937", wordBreak: "break-word" }}>
-                    {selectedVente?.client || "-"}
-                  </p>
-                </div>
-                <div style={{ background: "linear-gradient(135deg, #dcfce7, #bbf7d0)", borderRadius: 14, padding: 16, boxShadow: "0 4px 15px rgba(34, 197, 94, 0.08)" }}>
-                  <h4 style={{ margin: "0 0 6px", color: "#15803d", fontSize: 14, fontWeight: 600 }}>Date</h4>
-                  <p style={{ margin: 0, fontSize: 16, fontWeight: 700, color: "#1f2937" }}>{formatDateSafe(selectedVente?.date)}</p>
-                </div>
-                <div style={{ background: "linear-gradient(135deg, #fef3c7, #fde68a)", borderRadius: 14, padding: 16, boxShadow: "0 4px 15px rgba(245, 158, 11, 0.08)" }}>
-                  <h4 style={{ margin: "0 0 6px", color: "#b45309", fontSize: 14, fontWeight: 600 }}>Statut</h4>
-                  <p style={{ margin: 0, fontSize: 16, fontWeight: 700, color: "#1f2937" }}>{selectedVente?.statutPaiement || "-"}</p>
-                </div>
-                <div style={{ background: "linear-gradient(135deg, #f3e8ff, #e9d5ff)", borderRadius: 14, padding: 16, boxShadow: "0 4px 15px rgba(168, 85, 247, 0.08)" }}>
-                  <h4 style={{ margin: "0 0 6px", color: "#7e22ce", fontSize: 14, fontWeight: 600 }}>Mode</h4>
-                  <p style={{ margin: 0, fontSize: 16, fontWeight: 700, color: "#1f2937" }}>{selectedVente?.modePaiement || "Espèces"}</p>
-                </div>
-                <div style={{ background: "linear-gradient(135deg, #d1fae5, #a7f3d0)", borderRadius: 14, padding: 16, boxShadow: "0 4px 15px rgba(16, 185, 129, 0.08)" }}>
-                  <h4 style={{ margin: "0 0 6px", color: "#065f46", fontSize: 14, fontWeight: 600 }}>Total</h4>
-                  <p style={{ margin: 0, fontSize: 16, fontWeight: 800, color: "#1f2937" }}>
-                    {safeToFixed(selectedVente?.montantTotal)} DH
-                  </p>
-                </div>
-              </div>
+                ×
+              </button>
+            </div>
 
-              <h3 style={{ margin: "0 0 12px", fontSize: "clamp(16px, 2.2vw, 20px)", fontWeight: 600, color: "#374151" }}>
-                Articles ({selectedVente?.articles?.length || 0})
-              </h3>
-              <div style={{ background: "#fff", borderRadius: 14, boxShadow: "0 8px 25px rgba(0, 0, 0, 0.05)", marginBottom: 20, overflowX: "auto" }}>
-                <table style={{ width: "100%", minWidth: 640, borderCollapse: "collapse" }}>
-                  <thead>
-                    <tr style={{ background: "linear-gradient(135deg, #6d28d9, #5b21b6)", color: "white" }}>
-                      <th style={{ padding: 12, textAlign: "left" }}>Produit / Traçabilité</th>
-                      <th style={{ padding: 12, textAlign: "center" }}>Qté</th>
-                      <th style={{ padding: 12, textAlign: "right" }}>Prix Unit.</th>
-                      <th style={{ padding: 12, textAlign: "right" }}>Remise</th>
-                      <th style={{ padding: 12, textAlign: "right" }}>Total</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {(selectedVente?.articles || []).map((a, i) => (
-                      <tr key={i} style={{ borderBottom: '1px solid #f1f5f9' }}>
-                        <td style={{ padding: 12, verticalAlign: "top" }}>
-                          <strong>{a?.produit || "-"}</strong>
-                          {(a?.numeroArticle || a?.numeroLot || a?.fournisseur || a?.datePeremption) && (
-                            <div style={{ fontSize: 12, color: "#6b7280", marginTop: 4 }}>
-                              {a?.numeroArticle ? `N° article: ${a.numeroArticle}` : ""}
-                              {a?.numeroLot ? `${a?.numeroArticle ? " | " : ""}Lot: ${a.numeroLot}` : ""}
-                              {a?.fournisseur ? `${(a?.numeroArticle || a?.numeroLot) ? " | " : ""}Fournisseur: ${a.fournisseur}` : ""}
-                              {a?.datePeremption ? `${(a?.numeroArticle || a?.numeroLot || a?.fournisseur) ? " | " : ""}Exp: ${formatDateSafe(a.datePeremption)}` : ""}
-                            </div>
-                          )}
-                        </td>
-                        <td style={{ padding: 12, textAlign: "center" }}>{safeNumber(a?.quantite)}</td>
-                        <td style={{ padding: 12, textAlign: "right" }}>{safeToFixed(a?.prixUnitaire)} DH</td>
-                        <td style={{ padding: 12, textAlign: "right" }}>{safeToFixed(a?.remise)} DH</td>
-                        <td style={{ padding: 12, textAlign: "right", fontWeight: 600 }}>
-                          {safeToFixed(safeNumber(a?.prixUnitaire) * safeNumber(a?.quantite) - safeNumber(a?.remise))} DH
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+                gap: 12,
+                marginBottom: 24,
+              }}
+            >
+              <div style={{ background: "linear-gradient(135deg, #dbeafe, #bfdbfe)", borderRadius: 14, padding: 16, boxShadow: "0 4px 15px rgba(59, 130, 246, 0.08)" }}>
+                <h4 style={{ margin: "0 0 6px", color: "#1d4ed8", fontSize: 14, fontWeight: 600 }}>Client</h4>
+                <p style={{ margin: 0, fontSize: 16, fontWeight: 700, color: "#1f2937", wordBreak: "break-word" }}>
+                  {selectedVente?.client || "-"}
+                </p>
               </div>
-
-              <div style={{ display: "flex", gap: 12, justifyContent: "flex-end", flexWrap: "wrap" }}>
-                <button
-                  onClick={() => {
-                    setShowDetails(false);
-                    handleEditVente?.(selectedVente);
-                  }}
-                  style={{
-                    background: "linear-gradient(135deg, #f59e0b, #d97706)",
-                    color: "white",
-                    border: "none",
-                    padding: "10px 18px",
-                    borderRadius: 10,
-                    fontSize: 14,
-                    fontWeight: 600,
-                    cursor: "pointer",
-                    transition: "transform 0.2s ease, box-shadow 0.2s ease",
-                  }}
-                  onMouseEnter={(e) => {
-                    e.currentTarget.style.transform = "translateY(-2px)";
-                    e.currentTarget.style.boxShadow = "0 8px 20px rgba(245, 158, 11, 0.3)";
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.transform = "translateY(0)";
-                    e.currentTarget.style.boxShadow = "none";
-                  }}
-                >
-                  Modifier
-                </button>
-                <button
-                  onClick={() => {
-                    setShowDetails(false);
-                    handlePrintVente?.(selectedVente);
-                  }}
-                  style={{
-                    background: "linear-gradient(135deg, #6d28d9, #5b21b6)",
-                    color: "white",
-                    border: "none",
-                    padding: "10px 18px",
-                    borderRadius: 10,
-                    fontSize: 14,
-                    fontWeight: 600,
-                    cursor: "pointer",
-                    transition: "transform 0.2s ease, box-shadow 0.2s ease",
-                  }}
-                  onMouseEnter={(e) => {
-                    e.currentTarget.style.transform = "translateY(-2px)";
-                    e.currentTarget.style.boxShadow = "0 8px 20px rgba(109, 40, 217, 0.3)";
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.transform = "translateY(0)";
-                    e.currentTarget.style.boxShadow = "none";
-                  }}
-                >
-                  Imprimer
-                </button>
+              <div style={{ background: "linear-gradient(135deg, #dcfce7, #bbf7d0)", borderRadius: 14, padding: 16, boxShadow: "0 4px 15px rgba(34, 197, 94, 0.08)" }}>
+                <h4 style={{ margin: "0 0 6px", color: "#15803d", fontSize: 14, fontWeight: 600 }}>Date</h4>
+                <p style={{ margin: 0, fontSize: 16, fontWeight: 700, color: "#1f2937" }}>{formatDateSafe(selectedVente?.date)}</p>
+              </div>
+              <div style={{ background: "linear-gradient(135deg, #fef3c7, #fde68a)", borderRadius: 14, padding: 16, boxShadow: "0 4px 15px rgba(245, 158, 11, 0.08)" }}>
+                <h4 style={{ margin: "0 0 6px", color: "#b45309", fontSize: 14, fontWeight: 600 }}>Statut</h4>
+                <p style={{ margin: 0, fontSize: 16, fontWeight: 700, color: "#1f2937" }}>{selectedVente?.statutPaiement || "-"}</p>
+              </div>
+              <div style={{ background: "linear-gradient(135deg, #f3e8ff, #e9d5ff)", borderRadius: 14, padding: 16, boxShadow: "0 4px 15px rgba(168, 85, 247, 0.08)" }}>
+                <h4 style={{ margin: "0 0 6px", color: "#7e22ce", fontSize: 14, fontWeight: 600 }}>Mode</h4>
+                <p style={{ margin: 0, fontSize: 16, fontWeight: 700, color: "#1f2937" }}>{selectedVente?.modePaiement || "Espèces"}</p>
+              </div>
+              <div style={{ background: "linear-gradient(135deg, #d1fae5, #a7f3d0)", borderRadius: 14, padding: 16, boxShadow: "0 4px 15px rgba(16, 185, 129, 0.08)" }}>
+                <h4 style={{ margin: "0 0 6px", color: "#065f46", fontSize: 14, fontWeight: 600 }}>Total</h4>
+                <p style={{ margin: 0, fontSize: 16, fontWeight: 800, color: "#1f2937" }}>
+                  {safeToFixed(selectedVente?.montantTotal)} DH
+                </p>
               </div>
             </div>
-          </div>,
-          document.body
-        )}
-    </div>
+
+            <h3 style={{ margin: "0 0 12px", fontSize: "clamp(16px, 2.2vw, 20px)", fontWeight: 600, color: "#374151" }}>
+              Articles ({selectedVente?.articles?.length || 0})
+            </h3>
+            <div style={{ background: "#fff", borderRadius: 14, boxShadow: "0 8px 25px rgba(0, 0, 0, 0.05)", marginBottom: 20, overflowX: "auto" }}>
+              <table style={{ width: "100%", minWidth: 640, borderCollapse: "collapse" }}>
+                <thead>
+                  <tr style={{ background: "linear-gradient(135deg, #6d28d9, #5b21b6)", color: "white" }}>
+                    <th style={{ padding: 12, textAlign: "left" }}>Produit / Traçabilité</th>
+                    <th style={{ padding: 12, textAlign: "center" }}>Qté</th>
+                    <th style={{ padding: 12, textAlign: "right" }}>Prix Unit.</th>
+                    <th style={{ padding: 12, textAlign: "right" }}>Remise</th>
+                    <th style={{ padding: 12, textAlign: "right" }}>Total</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(selectedVente?.articles || []).map((a, i) => (
+                    <tr key={i} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                      <td style={{ padding: 12, verticalAlign: "top" }}>
+                        <strong>{a?.produit || "-"}</strong>
+                        {(a?.numeroArticle || a?.numeroLot || a?.fournisseur || a?.datePeremption) && (
+                          <div style={{ fontSize: 12, color: "#6b7280", marginTop: 4 }}>
+                            {a?.numeroArticle ? `N° article: ${a.numeroArticle}` : ""}
+                            {a?.numeroLot ? `${a?.numeroArticle ? " | " : ""}Lot: ${a.numeroLot}` : ""}
+                            {a?.fournisseur ? `${(a?.numeroArticle || a?.numeroLot) ? " | " : ""}Fournisseur: ${a.fournisseur}` : ""}
+                            {a?.datePeremption ? `${(a?.numeroArticle || a?.numeroLot || a?.fournisseur) ? " | " : ""}Exp: ${formatDateSafe(a.datePeremption)}` : ""}
+                          </div>
+                        )}
+                      </td>
+                      <td style={{ padding: 12, textAlign: "center" }}>{safeNumber(a?.quantite)}</td>
+                      <td style={{ padding: 12, textAlign: "right" }}>{safeToFixed(a?.prixUnitaire)} DH</td>
+                      <td style={{ padding: 12, textAlign: "right" }}>{safeToFixed(a?.remise)} DH</td>
+                      <td style={{ padding: 12, textAlign: "right", fontWeight: 600 }}>
+                        {safeToFixed(safeNumber(a?.prixUnitaire) * safeNumber(a?.quantite) - safeNumber(a?.remise))} DH
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <div style={{ display: "flex", gap: 12, justifyContent: "flex-end", flexWrap: "wrap" }}>
+              <button
+                onClick={() => {
+                  setShowDetails(false);
+                  handleEditVente?.(selectedVente);
+                }}
+                style={{
+                  background: "linear-gradient(135deg, #f59e0b, #d97706)",
+                  color: "white",
+                  border: "none",
+                  padding: "10px 18px",
+                  borderRadius: 10,
+                  fontSize: 14,
+                  fontWeight: 600,
+                  cursor: "pointer",
+                  transition: "transform 0.2s ease, box-shadow 0.2s ease",
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.transform = "translateY(-2px)";
+                  e.currentTarget.style.boxShadow = "0 8px 20px rgba(245, 158, 11, 0.3)";
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.transform = "translateY(0)";
+                  e.currentTarget.style.boxShadow = "none";
+                }}
+              >
+                Modifier
+              </button>
+              <button
+                onClick={() => {
+                  setShowDetails(false);
+                  handlePrintVente?.(selectedVente);
+                }}
+                style={{
+                  background: "linear-gradient(135deg, #6d28d9, #5b21b6)",
+                  color: "white",
+                  border: "none",
+                  padding: "10px 18px",
+                  borderRadius: 10,
+                  fontSize: 14,
+                  fontWeight: 600,
+                  cursor: "pointer",
+                  transition: "transform 0.2s ease, box-shadow 0.2s ease",
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.transform = "translateY(-2px)";
+                  e.currentTarget.style.boxShadow = "0 8px 20px rgba(109, 40, 217, 0.3)";
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.transform = "translateY(0)";
+                  e.currentTarget.style.boxShadow = "none";
+                }}
+              >
+                Imprimer
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
+  </div>
   );
 }
 
@@ -2730,9 +2693,7 @@ function CameraBarcodeInlineModal({ open, onClose, onDetected }) {
               cursor: "pointer",
             }}
           >
-            Fermer
-          </button>
-        </div>
+            Fermer </button> </div>
 
         <div
           style={{

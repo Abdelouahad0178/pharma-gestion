@@ -1,7 +1,14 @@
 // src/components/dashboard/Dashboard.js
 import React, { useState, useEffect, useMemo, useCallback } from "react";
 import { db } from "../../firebase/config";
-import { collection, getDocs, doc, getDoc } from "firebase/firestore";
+import {
+  collection,
+  doc,
+  onSnapshot,
+  query,
+  orderBy,
+  getDoc,
+} from "firebase/firestore";
 import { useUserRole } from "../../contexts/UserRoleContext";
 import { Link } from "react-router-dom";
 
@@ -239,89 +246,90 @@ export default function Dashboard() {
   }, []);
 
   /* =========================
-      Fetch Société & Données
+      Fetch Société & Données (temps réel)
   ========================= */
-  const fetchSocieteInfo = useCallback(async () => {
-    if (!societeId) {
-      setSocieteInfo(null);
-      return;
-    }
-    try {
-      setSocieteLoading(true);
-      const ref = doc(db, "societe", societeId);
-      const snap = await getDoc(ref);
-      setSocieteInfo(snap.exists() ? snap.data() : { nom: "Société inconnue" });
-    } catch {
-      setSocieteInfo({ nom: "Erreur de chargement" });
-    } finally {
-      setSocieteLoading(false);
-    }
-  }, [societeId]);
-
-  const cleanImportedData = (data) => {
-    const cleaned = { ...data };
-    delete cleaned._exportedAt;
-    delete cleaned._collection;
-    return cleaned;
-  };
-
-  const fetchAllData = useCallback(async () => {
-    if (!societeId) {
-      setVentes([]); setAchats([]); setStock([]); setStockEntries([]);
-      setPaiements([]); setDataLoading(false);
-      return;
-    }
-    try {
-      setDataLoading(true);
-
-      const [
-        ventesSnap,
-        achatsSnap,
-        stockSnap,
-        stockEntriesSnap,
-        paiementsSnap,
-      ] = await Promise.all([
-        getDocs(collection(db, "societe", societeId, "ventes")).catch(() => ({ docs: [] })),
-        getDocs(collection(db, "societe", societeId, "achats")).catch(() => ({ docs: [] })),
-        getDocs(collection(db, "societe", societeId, "stock")).catch(() => ({ docs: [] })),             // stock traditionnel
-        getDocs(collection(db, "societe", societeId, "stock_entries")).catch(() => ({ docs: [] })),     // multi-lots
-        getDocs(collection(db, "societe", societeId, "paiements")).catch(() => ({ docs: [] })),
-      ]);
-
-      const ventesArr = ventesSnap.docs.map((d) => ({ id: d.id, ...cleanImportedData(d.data()) }));
-      const achatsArr = achatsSnap.docs.map((d) => ({ id: d.id, ...cleanImportedData(d.data()) }));
-      const stockArr = stockSnap.docs.map((d) => ({ id: d.id, ...cleanImportedData(d.data()) }));
-      const stockEntriesArr = stockEntriesSnap.docs.map((d) => ({ id: d.id, ...cleanImportedData(d.data()) }));
-      const paiementsArr = paiementsSnap.docs.map((d) => ({ id: d.id, ...cleanImportedData(d.data()) }));
-
-      // Sort achats by date (newest first)
-      achatsArr.sort((a, b) => {
-        const da = parseDate(getAchatDate(a)) || new Date(0);
-        const dbb = parseDate(getAchatDate(b)) || new Date(0);
-        return dbb - da;
-      });
-
-      setVentes(ventesArr);
-      setAchats(achatsArr);
-      setStock(stockArr);
-      setStockEntries(stockEntriesArr);
-      setPaiements(paiementsArr);
-
-      showNotification("Données chargées avec succès !", "success");
-    } catch {
-      showNotification("Erreur lors du chargement des données", "error");
-    } finally {
-      setDataLoading(false);
-    }
-  }, [societeId, showNotification]);
-
-  // Initial load
   useEffect(() => {
-    if (!loading && user && societeId) {
-      fetchSocieteInfo();
-      fetchAllData();
-    }
-  }, [loading, user, societeId, fetchSocieteInfo, fetchAllData]);
+    if (loading || !user || !societeId) return;
+
+    setDataLoading(true);
+    const unsubs = [];
+
+    // Société (doc)
+    (async () => {
+      try {
+        setSocieteLoading(true);
+        // onSnapshot doc -> temps réel (fallback getDoc si erreur)
+        const ref = doc(db, "societe", societeId);
+        const unsubSociete = onSnapshot(
+          ref,
+          (snap) => setSocieteInfo(snap.exists() ? snap.data() : { nom: "Société inconnue" }),
+          async () => {
+            const snap = await getDoc(ref).catch(() => null);
+            setSocieteInfo(snap?.exists() ? snap.data() : { nom: "Société inconnue" });
+          }
+        );
+        unsubs.push(unsubSociete);
+      } finally {
+        setSocieteLoading(false);
+      }
+    })();
+
+    // Collections (ordonnées pour confort)
+    const qVentes = query(collection(db, "societe", societeId, "ventes"), orderBy("date", "desc"));
+    const qAchats = query(collection(db, "societe", societeId, "achats"), orderBy("timestamp", "desc"));
+    const qStock = collection(db, "societe", societeId, "stock");
+    const qStockEntries = query(collection(db, "societe", societeId, "stock_entries"), orderBy("nom"));
+    const qPaiements = query(collection(db, "societe", societeId, "paiements"), orderBy("date", "desc"));
+
+    const unsubVentes = onSnapshot(
+      qVentes,
+      (snap) => {
+        const arr = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+        setVentes(arr);
+      },
+      () => setVentes([])
+    );
+    const unsubAchats = onSnapshot(
+      qAchats,
+      (snap) => {
+        const arr = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+        // tri supplémentaire par date d'achat/réception si besoin
+        arr.sort((a, b) => {
+          const da = parseDate(getAchatDate(a)) || new Date(0);
+          const dbb = parseDate(getAchatDate(b)) || new Date(0);
+          return dbb - da;
+        });
+        setAchats(arr);
+      },
+      () => setAchats([])
+    );
+    const unsubStock = onSnapshot(
+      qStock,
+      (snap) => setStock(snap.docs.map((d) => ({ id: d.id, ...d.data() }))),
+      () => setStock([])
+    );
+    const unsubStockEntries = onSnapshot(
+      qStockEntries,
+      (snap) => setStockEntries(snap.docs.map((d) => ({ id: d.id, ...d.data() }))),
+      () => setStockEntries([])
+    );
+    const unsubPaiements = onSnapshot(
+      qPaiements,
+      (snap) => setPaiements(snap.docs.map((d) => ({ id: d.id, ...d.data() }))),
+      () => setPaiements([])
+    );
+
+    unsubs.push(unsubVentes, unsubAchats, unsubStock, unsubStockEntries, unsubPaiements);
+
+    setDataLoading(false);
+    showNotification("Données (temps réel) prêtes ✅", "success");
+
+    return () => {
+      unsubs.forEach((u) => {
+        try { u && u(); } catch {}
+      });
+    };
+  }, [loading, user, societeId, showNotification]);
 
   /* =========================
       Calculs Statistiques (mémo)
@@ -620,7 +628,7 @@ export default function Dashboard() {
           </div>
 
           {/* Titre et sous-titre */}
-          <div style={styles.headerCenter}>
+          <div style={{ textAlign: "center" }}>
             <h1 style={styles.title}>Tableau de Bord</h1>
             <div style={styles.subtitle}>{getSocieteDisplayName()}</div>
           </div>
@@ -779,3 +787,4 @@ export default function Dashboard() {
     </div>
   );
 }
+
