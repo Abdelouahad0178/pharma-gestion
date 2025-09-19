@@ -63,8 +63,6 @@ const normalize = (s) =>
     .toLowerCase();
 
 const encodeWhatsAppText = (t) => encodeURIComponent(t);
-
-// Normalise pour wa.me (chiffres uniquement)
 const normalizePhoneForWa = (num) => (num || "").replace(/\D/g, "");
 
 /* ======================================================
@@ -154,20 +152,17 @@ function looksLikeArticle(obj) {
 }
 function extractVenteArticles(vDoc) {
   if (Array.isArray(vDoc?.articles)) return vDoc.articles.filter(looksLikeArticle);
-
   const candidates = [];
   const candidateKeys = ["items", "lignes", "produits", "products", "details", "cart", "panier"];
   candidateKeys.forEach((k) => {
     if (Array.isArray(vDoc?.[k])) candidates.push(...vDoc[k]);
   });
-
   Object.keys(vDoc || {}).forEach((k) => {
     const val = vDoc[k];
     if (Array.isArray(val) && val.length && typeof val[0] === "object") {
       candidates.push(...val);
     }
   });
-
   return (candidates || []).filter(looksLikeArticle);
 }
 
@@ -210,12 +205,16 @@ export default function Stock() {
 
   // Ventes
   const [ventes, setVentes] = useState([]);
-  // Lignes à commander issues des ventes (persistantes jusqu'à suppression)
+  // Lignes à commander issues des ventes
   const [toOrder, setToOrder] = useState([]); // [{key, nom, numeroLot, quantite, date, remise, urgent, fournisseur}]
-  const dismissedRef = useRef(new Set()); // clés supprimées par l'utilisateur
+  const dismissedRef = useRef(new Set());
 
   // Commerciaux sélectionnés par fournisseurId
   const [groupCommercial, setGroupCommercial] = useState({}); // { supplierId: telephone }
+
+  // Statut par ligne (envoyée / validée), persistant en localStorage
+  const [lineStatus, setLineStatus] = useState({}); // { key: { sent:boolean, validated:boolean, sentAt, validatedAt } }
+  const LS_STATUS_KEY = "toOrder_status_v2";
 
   /* -------------------- Garde de chargement -------------------- */
   useEffect(() => {
@@ -391,7 +390,7 @@ export default function Stock() {
     return acc;
   }, [ventes, findSupplierName]);
 
-  // Charger les clés supprimées (localStorage)
+  // Lignes supprimées (localStorage)
   useEffect(() => {
     try {
       const raw = localStorage.getItem("toOrder_dismissed");
@@ -414,15 +413,45 @@ export default function Stock() {
     setTimeout(() => setSuccess(""), 1200);
   }, [persistDismissed]);
 
+  // Status par ligne (localStorage)
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(LS_STATUS_KEY);
+      if (raw) {
+        const obj = JSON.parse(raw);
+        if (obj && typeof obj === "object") setLineStatus(obj);
+      }
+    } catch {}
+  }, []);
+  useEffect(() => {
+    try {
+      localStorage.setItem(LS_STATUS_KEY, JSON.stringify(lineStatus));
+    } catch {}
+  }, [lineStatus]);
+
+  const setLineStatusPartial = useCallback((key, patch) => {
+    setLineStatus((prev) => {
+      const cur = prev[key] || {};
+      return { ...prev, [key]: { ...cur, ...patch } };
+    });
+  }, []);
+
+  const clearLineStatus = useCallback((key) => {
+    setLineStatus((prev) => {
+      if (!prev[key]) return prev;
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
+  }, []);
+
   // Fusion ventesAggregate -> toOrder (quantité vendue imposée)
   useEffect(() => {
     const fromSales = Object.values(ventesAggregate).filter(
       (x) => !dismissedRef.current.has(x.key)
     );
-
     const currentByKey = {};
     toOrder.forEach((l) => (currentByKey[l.key] = l));
-
     const merged = fromSales.map((x) => {
       const prev = currentByKey[x.key];
       return {
@@ -436,7 +465,6 @@ export default function Stock() {
         urgent: !!prev?.urgent,
       };
     });
-
     const manual = toOrder.filter((l) => !ventesAggregate[l.key]);
     setToOrder([...merged, ...manual]);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -486,9 +514,10 @@ export default function Stock() {
     (key) => {
       dismissedRef.current.add(key);
       persistDismissed();
+      clearLineStatus(key);
       setToOrder((prev) => prev.filter((l) => l.key !== key));
     },
-    [persistDismissed]
+    [persistDismissed, clearLineStatus]
   );
 
   // Garantit l’existence d’un doc fournisseur, sinon le crée
@@ -520,7 +549,7 @@ export default function Stock() {
     [societeId, fournisseurs, fetchFournisseurs, findSupplierRecord, beepErr]
   );
 
-  // ✅ Sélection du commercial — débloquée (crée le fournisseur si besoin)
+  // Sélection du commercial
   const handleCommercialSelectChange = useCallback(
     async (supplierName, telRaw) => {
       const tel = normalizePhoneForWa(telRaw);
@@ -535,7 +564,7 @@ export default function Stock() {
     [findSupplierRecord, ensureSupplierDoc, beepErr]
   );
 
-  // ✅ +Commercial — débloqué (création fournisseur si besoin, sélection automatique)
+  // +Commercial
   const addCommercial = useCallback(
     async (supplierName) => {
       const rec0 =
@@ -557,7 +586,6 @@ export default function Stock() {
         return;
       }
       try {
-        // rafraîchir et reprendre la version la plus récente
         await fetchFournisseurs();
         let rec = findSupplierRecord(supplierName) || rec0;
         if (!rec) {
@@ -567,11 +595,9 @@ export default function Stock() {
         }
         const lst = Array.isArray(rec.commerciaux) ? rec.commerciaux : [];
         const newList = [...lst, { nom: nomCom.trim(), telephone: tel }];
-
         await updateDoc(doc(db, "societe", societeId, "fournisseurs", rec.id), {
           commerciaux: newList,
         });
-
         await fetchFournisseurs();
         setGroupCommercial((p) => ({ ...p, [rec.id]: tel }));
         setSuccess("Commercial ajouté");
@@ -601,7 +627,7 @@ export default function Stock() {
     return `${header}\n${body}${footer}`;
   }, []);
 
-  // ✅ Envoyer WhatsApp — débloqué (crée fournisseur/ajoute commercial si besoin)
+  // Envoyer WhatsApp : marque toutes les lignes du groupe comme "envoyées"
   const sendWhatsAppForSupplier = useCallback(
     async (supplierName) => {
       const lines = groups[supplierName] || [];
@@ -693,10 +719,16 @@ export default function Stock() {
         return;
       }
 
+      // Ouvre WhatsApp
       const msg = buildWhatsAppMessage(supplierName, lines, comName);
       const url = `https://wa.me/${tel}?text=${encodeWhatsAppText(msg)}`;
       window.open(url, "_blank", "noopener,noreferrer");
-      setSuccess("Message WhatsApp ouvert");
+
+      // Marque toutes les lignes du groupe comme envoyées
+      const now = new Date().toISOString();
+      lines.forEach((l) => setLineStatusPartial(l.key, { sent: true, sentAt: now }));
+
+      setSuccess("Message WhatsApp ouvert — lignes marquées comme envoyées");
       beepOk();
       setTimeout(() => setSuccess(""), 1200);
     },
@@ -708,10 +740,17 @@ export default function Stock() {
       fetchFournisseurs,
       addCommercial,
       buildWhatsAppMessage,
+      setLineStatusPartial,
       beepOk,
       beepErr,
     ]
   );
+
+  // Marquer une ligne "validée"
+  const markLineValidated = useCallback((key) => {
+    const now = new Date().toISOString();
+    setLineStatusPartial(key, { validated: true, validatedAt: now, sent: true });
+  }, [setLineStatusPartial]);
 
   /* -------------------- Scanner clavier pour code-barres -------------------- */
   useEffect(() => {
@@ -898,6 +937,146 @@ export default function Stock() {
     });
   }, [lots, search]);
 
+  /* ======================================================
+     Retour / Avoir : demande → validation → règlement
+  ===================================================== */
+  const computeStockAfterReturn = (lot) => {
+    const R = Math.max(0, safeNumber(lot.retourQuantite, 0));
+    const Q = Math.max(0, safeNumber(lot.quantite, 0));
+    const S1 = Math.max(0, safeNumber(lot.stock1, 0));
+    const S2 = Math.max(0, safeNumber(lot.stock2, 0));
+    const newQ = Math.max(0, Q - R);
+    const newS2 = Math.max(0, S2 - R);
+    const remaining = Math.max(0, R - S2);
+    const newS1 = Math.max(0, S1 - remaining);
+    return { newQ, newS1, newS2 };
+  };
+
+  const requestReturn = useCallback(
+    async (lot) => {
+      if (!user || !societeId) return;
+      const q = Number(window.prompt("Nombre d'unités à retourner :", 0));
+      if (!Number.isFinite(q) || q <= 0 || q > safeNumber(lot.quantite, 0)) {
+        setError("Quantité invalide (doit être > 0 et ≤ au stock total).");
+        beepErr();
+        return;
+      }
+      const montant = Number(window.prompt("Montant (DH) de l'avoir (peut être 0) :", 0));
+      if (!Number.isFinite(montant) || montant < 0) {
+        setError("Montant invalide.");
+        beepErr();
+        return;
+      }
+      try {
+        await updateDoc(doc(db, "societe", societeId, "stock_entries", lot.id), {
+          retourEnCours: true,
+          retourValide: false,
+          avoirRegle: false,
+          retourQuantite: q,
+          avoirMontant: montant,
+          retourAt: Timestamp.now(),
+          retourValideAt: null,
+          retourClotureAt: null,
+        });
+        setSuccess("Retour/Avoir demandé");
+        beepOk();
+        await fetchLots();
+        setTimeout(() => setSuccess(""), 1500);
+      } catch (e) {
+        console.error(e);
+        setError("Erreur lors de la demande de retour.");
+        beepErr();
+      }
+    },
+    [societeId, user, fetchLots, beepOk, beepErr]
+  );
+
+  const validateReturn = useCallback(
+    async (lot) => {
+      if (!user || !societeId) return;
+      if (!lot.retourEnCours || safeNumber(lot.retourQuantite, 0) <= 0) {
+        setError("Aucun retour à valider.");
+        beepErr();
+        return;
+      }
+      try {
+        await updateDoc(doc(db, "societe", societeId, "stock_entries", lot.id), {
+          retourValide: true,
+          retourValideAt: Timestamp.now(),
+        });
+        setSuccess("Retour validé (en attente de règlement)");
+        beepOk();
+        await fetchLots();
+        setTimeout(() => setSuccess(""), 1500);
+      } catch (e) {
+        console.error(e);
+        setError("Impossible de valider le retour.");
+        beepErr();
+      }
+    },
+    [societeId, user, fetchLots, beepOk, beepErr]
+  );
+
+  const approveReturn = useCallback(
+    async (lot) => {
+      if (!user || !societeId) return;
+      if (!lot.retourValide || safeNumber(lot.retourQuantite, 0) <= 0) {
+        setError("Le retour doit être validé avant règlement.");
+        beepErr();
+        return;
+      }
+      if (!window.confirm("Confirmer : l’avoir est réglé ? Le stock sera diminué automatiquement.")) return;
+      const { newQ, newS1, newS2 } = computeStockAfterReturn(lot);
+      try {
+        await updateDoc(doc(db, "societe", societeId, "stock_entries", lot.id), {
+          avoirRegle: true,
+          retourEnCours: false,
+          retourClotureAt: Timestamp.now(),
+          quantite: newQ,
+          stock1: newS1,
+          stock2: newS2,
+        });
+        setSuccess("Avoir réglé — stock ajusté");
+        beepOk();
+        await fetchLots();
+        setTimeout(() => setSuccess(""), 1500);
+      } catch (e) {
+        console.error(e);
+        setError("Impossible de clôturer le retour.");
+        beepErr();
+      }
+    },
+    [societeId, user, fetchLots, beepOk, beepErr]
+  );
+
+  const cancelReturn = useCallback(
+    async (lot) => {
+      if (!user || !societeId) return;
+      if (!window.confirm("Annuler la demande de retour/avoir ?")) return;
+      try {
+        await updateDoc(doc(db, "societe", societeId, "stock_entries", lot.id), {
+          retourEnCours: false,
+          retourValide: false,
+          avoirRegle: false,
+          retourQuantite: null,
+          avoirMontant: null,
+          retourAt: null,
+          retourValideAt: null,
+          retourClotureAt: null,
+        });
+        setSuccess("Retour/Avoir annulé");
+        beepOk();
+        await fetchLots();
+        setTimeout(() => setSuccess(""), 1200);
+      } catch (e) {
+        console.error(e);
+        setError("Impossible d’annuler le retour.");
+        beepErr();
+      }
+    },
+    [societeId, user, fetchLots, beepOk, beepErr]
+  );
+
   /* -------------------- UI -------------------- */
   if (waiting) {
     return (
@@ -956,7 +1135,7 @@ export default function Stock() {
               Stock (Lots)
             </h1>
             <p style={{ margin: "6px 0 0", color: "#6b7280" }}>
-              Ventes → quantités à commander (groupées par fournisseur) + WhatsApp.
+              Ventes → quantités à commander (groupées par fournisseur) + WhatsApp. Gestion retours/avoirs.
             </p>
           </div>
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
@@ -1226,7 +1405,7 @@ export default function Stock() {
         }}
       >
         <div style={{ overflowX: "auto", maxHeight: "60vh", overflowY: "auto" }}>
-          <table style={{ width: "100%", minWidth: 1100, borderCollapse: "collapse" }}>
+          <table style={{ width: "100%", minWidth: 1150, borderCollapse: "collapse" }}>
             <thead
               style={{
                 position: "sticky",
@@ -1246,7 +1425,7 @@ export default function Stock() {
                 <th style={{ padding: 14, textAlign: "right" }}>Prix vente</th>
                 <th style={{ padding: 14, textAlign: "center" }}>Expiration</th>
                 <th style={{ padding: 14, textAlign: "left" }}>Code-barres</th>
-                <th style={{ padding: 14, textAlign: "center", width: 240 }}>Actions</th>
+                <th style={{ padding: 14, textAlign: "center", width: 430 }}>Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -1261,6 +1440,17 @@ export default function Stock() {
                   const d = safeParseDate(l.datePeremption);
                   const expired = d && d < new Date();
                   const expSoon = d && !expired && d <= new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+
+                  const qRet = safeNumber(l.retourQuantite, 0);
+                  const badgeRetour =
+                    l.retourEnCours && !l.retourValide
+                      ? `🟥 Retour/Avoir demandé (Qté: ${qRet})`
+                      : l.retourValide && !l.avoirRegle
+                      ? `🟨 Retour validé (Qté: ${qRet})`
+                      : l.avoirRegle
+                      ? `🟩 Retour réglé`
+                      : "";
+
                   return (
                     <tr
                       key={l.id}
@@ -1269,7 +1459,14 @@ export default function Stock() {
                         borderBottom: "1px solid #f3f4f6",
                       }}
                     >
-                      <td style={{ padding: 12, fontWeight: 600 }}>{l.nom}</td>
+                      <td style={{ padding: 12, fontWeight: 600 }}>
+                        {l.nom}{" "}
+                        {badgeRetour && (
+                          <span style={{ marginLeft: 8, fontSize: 12 }} title="Statut retour/avoir">
+                            {badgeRetour}
+                          </span>
+                        )}
+                      </td>
                       <td style={{ padding: 12 }}>{l.numeroLot}</td>
                       <td style={{ padding: 12 }}>{l.fournisseur || "-"}</td>
                       <td style={{ padding: 12, textAlign: "center", fontWeight: 700 }}>{safeNumber(l.quantite)}</td>
@@ -1326,6 +1523,72 @@ export default function Stock() {
                           >
                             🗑️ Supprimer
                           </button>
+
+                          {/* Retour/Avoir actions */}
+                          {!l.retourEnCours && !l.retourValide && !l.avoirRegle && (
+                            <button
+                              onClick={() => requestReturn(l)}
+                              style={{
+                                background: "linear-gradient(135deg,#fb7185,#f43f5e)",
+                                color: "#fff",
+                                border: "none",
+                                borderRadius: 10,
+                                padding: "8px 12px",
+                                cursor: "pointer",
+                              }}
+                              title="Demander un retour/avoir"
+                            >
+                              ↩️ Retour/Avoir
+                            </button>
+                          )}
+                          {l.retourEnCours && !l.retourValide && (
+                            <>
+                              <button
+                                onClick={() => validateReturn(l)}
+                                style={{
+                                  background: "linear-gradient(135deg,#0ea5e9,#0284c7)",
+                                  color: "#fff",
+                                  border: "none",
+                                  borderRadius: 10,
+                                  padding: "8px 12px",
+                                  cursor: "pointer",
+                                }}
+                                title="Valider la demande de retour"
+                              >
+                                ✅ Valider
+                              </button>
+                              <button
+                                onClick={() => cancelReturn(l)}
+                                style={{
+                                  background: "linear-gradient(135deg,#6b7280,#4b5563)",
+                                  color: "#fff",
+                                  border: "none",
+                                  borderRadius: 10,
+                                  padding: "8px 12px",
+                                  cursor: "pointer",
+                                }}
+                                title="Annuler la demande de retour"
+                              >
+                                ❌ Annuler
+                              </button>
+                            </>
+                          )}
+                          {l.retourValide && !l.avoirRegle && (
+                            <button
+                              onClick={() => approveReturn(l)}
+                              style={{
+                                background: "linear-gradient(135deg,#22c55e,#16a34a)",
+                                color: "#fff",
+                                border: "none",
+                                borderRadius: 10,
+                                padding: "8px 12px",
+                                cursor: "pointer",
+                              }}
+                              title="Marquer l’avoir comme réglé et diminuer le stock"
+                            >
+                              💸 Avoir réglé
+                            </button>
+                          )}
                         </div>
                       </td>
                     </tr>
@@ -1462,7 +1725,7 @@ export default function Stock() {
                 </div>
 
                 <div style={{ overflowX: "auto" }}>
-                  <table style={{ width: "100%", minWidth: 900, borderCollapse: "collapse" }}>
+                  <table style={{ width: "100%", minWidth: 980, borderCollapse: "collapse" }}>
                     <thead>
                       <tr style={{ background: "linear-gradient(135deg,#1f2937,#111827)", color: "#fff" }}>
                         <th style={{ padding: 10, textAlign: "left" }}>Médicament</th>
@@ -1471,116 +1734,177 @@ export default function Stock() {
                         <th style={{ padding: 10, textAlign: "center" }}>Quantité</th>
                         <th style={{ padding: 10, textAlign: "center" }}>Remise (DH)</th>
                         <th style={{ padding: 10, textAlign: "center" }}>URGENT</th>
-                        <th style={{ padding: 10, textAlign: "center", width: 220 }}>Actions</th>
+                        <th style={{ padding: 10, textAlign: "center" }}>Statut</th>
+                        <th style={{ padding: 10, textAlign: "center", width: 260 }}>Actions</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {lines.map((l, idx) => (
-                        <tr
-                          key={l.key}
-                          style={{
-                            background: idx % 2 ? "rgba(249,250,251,.6)" : "white",
-                            borderBottom: "1px solid #f3f4f6",
-                          }}
-                        >
-                          <td style={{ padding: 10, fontWeight: 700 }}>{l.nom}</td>
-                          <td style={{ padding: 10 }}>{l.numeroLot}</td>
-                          <td style={{ padding: 10, textAlign: "center" }}>
-                            <input
-                              type="date"
-                              value={l.date}
-                              onChange={(e) => setLineField(l.key, "date", e.target.value)}
-                              style={{ padding: "6px 8px", borderRadius: 8, border: "1px solid #e5e7eb" }}
-                            />
-                          </td>
-                          <td style={{ padding: 10, textAlign: "center" }}>
-                            <input
-                              type="number"
-                              min={1}
-                              value={l.quantite}
-                              onChange={(e) =>
-                                setLineField(l.key, "quantite", Math.max(1, safeNumber(e.target.value)))
-                              }
-                              style={{
-                                width: 100,
-                                textAlign: "center",
-                                padding: "6px 8px",
-                                borderRadius: 8,
-                                border: "1px solid #e5e7eb",
-                              }}
-                            />
-                          </td>
-                          <td style={{ padding: 10, textAlign: "center" }}>
-                            <input
-                              type="number"
-                              step="0.01"
-                              min={0}
-                              value={l.remise}
-                              onChange={(e) =>
-                                setLineField(l.key, "remise", Math.max(0, safeNumber(e.target.value)))
-                              }
-                              style={{
-                                width: 120,
-                                textAlign: "center",
-                                padding: "6px 8px",
-                                borderRadius: 8,
-                                border: "1px solid #e5e7eb",
-                              }}
-                            />
-                          </td>
-                          <td style={{ padding: 10, textAlign: "center" }}>
-                            <label
-                              style={{
-                                display: "inline-flex",
-                                alignItems: "center",
-                                gap: 8,
-                                fontWeight: 700,
-                                color: l.urgent ? "#DC2626" : "#374151",
-                              }}
-                            >
+                      {lines.map((l, idx) => {
+                        const st = lineStatus[l.key] || {};
+                        return (
+                          <tr
+                            key={l.key}
+                            style={{
+                              background: idx % 2 ? "rgba(249,250,251,.6)" : "white",
+                              borderBottom: "1px solid #f3f4f6",
+                            }}
+                          >
+                            <td style={{ padding: 10, fontWeight: 700 }}>{l.nom}</td>
+                            <td style={{ padding: 10 }}>{l.numeroLot}</td>
+                            <td style={{ padding: 10, textAlign: "center" }}>
                               <input
-                                type="checkbox"
-                                checked={!!l.urgent}
-                                onChange={(e) => setLineField(l.key, "urgent", !!e.target.checked)}
+                                type="date"
+                                value={l.date}
+                                onChange={(e) => setLineField(l.key, "date", e.target.value)}
+                                style={{ padding: "6px 8px", borderRadius: 8, border: "1px solid #e5e7eb" }}
                               />
-                              {l.urgent ? "🔴 URGENT" : "—"}
-                            </label>
-                          </td>
-                          <td style={{ padding: 10, textAlign: "center" }}>
-                            <button
-                              onClick={() => duplicateLine(l.key)}
-                              style={{
-                                marginRight: 8,
-                                background: "linear-gradient(135deg,#60a5fa,#3b82f6)",
-                                color: "#fff",
-                                border: "none",
-                                borderRadius: 10,
-                                padding: "6px 10px",
-                                cursor: "pointer",
-                              }}
-                              title="Dupliquer la ligne"
-                            >
-                              ➕ Dupliquer
-                            </button>
-                            <button
-                              onClick={() => removeLine(l.key)}
-                              style={{
-                                background: "linear-gradient(135deg,#ef4444,#dc2626)",
-                                color: "#fff",
-                                border: "none",
-                                borderRadius: 10,
-                                padding: "6px 10px",
-                                cursor: "pointer",
-                              }}
-                            >
-                              🗑️ Supprimer
-                            </button>
-                          </td>
-                        </tr>
-                      ))}
+                            </td>
+                            <td style={{ padding: 10, textAlign: "center" }}>
+                              <input
+                                type="number"
+                                min={1}
+                                value={l.quantite}
+                                onChange={(e) =>
+                                  setLineField(l.key, "quantite", Math.max(1, safeNumber(e.target.value)))
+                                }
+                                style={{
+                                  width: 100,
+                                  textAlign: "center",
+                                  padding: "6px 8px",
+                                  borderRadius: 8,
+                                  border: "1px solid #e5e7eb",
+                                }}
+                              />
+                            </td>
+                            <td style={{ padding: 10, textAlign: "center" }}>
+                              <input
+                                type="number"
+                                step="0.01"
+                                min={0}
+                                value={l.remise}
+                                onChange={(e) =>
+                                  setLineField(l.key, "remise", Math.max(0, safeNumber(e.target.value)))
+                                }
+                                style={{
+                                  width: 120,
+                                  textAlign: "center",
+                                  padding: "6px 8px",
+                                  borderRadius: 8,
+                                  border: "1px solid #e5e7eb",
+                                }}
+                              />
+                            </td>
+                            <td style={{ padding: 10, textAlign: "center" }}>
+                              <label
+                                style={{
+                                  display: "inline-flex",
+                                  alignItems: "center",
+                                  gap: 8,
+                                  fontWeight: 700,
+                                  color: l.urgent ? "#DC2626" : "#374151",
+                                }}
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={!!l.urgent}
+                                  onChange={(e) => setLineField(l.key, "urgent", !!e.target.checked)}
+                                />
+                                {l.urgent ? "🔴 URGENT" : "—"}
+                              </label>
+                            </td>
+
+                            {/* Statut (ENVOYÉ / VALIDÉ) */}
+                            <td style={{ padding: 10, textAlign: "center" }}>
+                              {st.sent ? (
+                                <span
+                                  style={{
+                                    display: "inline-block",
+                                    padding: "2px 8px",
+                                    borderRadius: 999,
+                                    background: "#DBEAFE",
+                                    border: "1px solid #93C5FD",
+                                    fontSize: 12,
+                                    marginRight: 6,
+                                  }}
+                                  title={st.sentAt ? `Envoyé le ${formatDateSafe(st.sentAt)}` : "Envoyé"}
+                                >
+                                  📤 Envoyé
+                                </span>
+                              ) : (
+                                <span style={{ color: "#9CA3AF" }}>—</span>
+                              )}
+
+                              {st.validated && (
+                                <span
+                                  style={{
+                                    display: "inline-block",
+                                    padding: "2px 8px",
+                                    borderRadius: 999,
+                                    background: "#DCFCE7",
+                                    border: "1px solid #86EFAC",
+                                    fontSize: 12,
+                                  }}
+                                  title={st.validatedAt ? `Validé le ${formatDateSafe(st.validatedAt)}` : "Validé"}
+                                >
+                                  ✅ Validé
+                                </span>
+                              )}
+                            </td>
+
+                            <td style={{ padding: 10, textAlign: "center" }}>
+                              {!st.validated && st.sent && (
+                                <button
+                                  onClick={() => markLineValidated(l.key)}
+                                  style={{
+                                    marginRight: 8,
+                                    background: "linear-gradient(135deg,#34d399,#10b981)",
+                                    color: "#fff",
+                                    border: "none",
+                                    borderRadius: 10,
+                                    padding: "6px 10px",
+                                    cursor: "pointer",
+                                  }}
+                                  title="Marquer la commande de cette ligne comme validée"
+                                >
+                                  ✅ Valider
+                                </button>
+                              )}
+
+                              <button
+                                onClick={() => duplicateLine(l.key)}
+                                style={{
+                                  marginRight: 8,
+                                  background: "linear-gradient(135deg,#60a5fa,#3b82f6)",
+                                  color: "#fff",
+                                  border: "none",
+                                  borderRadius: 10,
+                                  padding: "6px 10px",
+                                  cursor: "pointer",
+                                }}
+                                title="Dupliquer la ligne"
+                              >
+                                ➕ Dupliquer
+                              </button>
+                              <button
+                                onClick={() => removeLine(l.key)}
+                                style={{
+                                  background: "linear-gradient(135deg,#ef4444,#dc2626)",
+                                  color: "#fff",
+                                  border: "none",
+                                  borderRadius: 10,
+                                  padding: "6px 10px",
+                                  cursor: "pointer",
+                                }}
+                              >
+                                🗑️ Supprimer
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })}
                       {lines.length === 0 && (
                         <tr>
-                          <td colSpan={7} style={{ padding: 12, textAlign: "center", color: "#6b7280" }}>
+                          <td colSpan={8} style={{ padding: 12, textAlign: "center", color: "#6b7280" }}>
                             Aucune ligne pour ce fournisseur
                           </td>
                         </tr>
