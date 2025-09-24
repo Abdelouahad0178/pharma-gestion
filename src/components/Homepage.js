@@ -49,8 +49,8 @@ export default function Homepage({ onLogin, onRegister }) {
     onRegister && onRegister();
   };
 
-  // Lien WhatsApp (numéro fourni : 0033749618704 => +33 7 49 61 87 04)
-  const whatsappNumberIntl = "33749618704";
+  // Lien WhatsApp (numéro fourni : 00212661115240 => +212661115240)
+  const whatsappNumberIntl = "0661115240";
   const whatsappHref = `https://wa.me/${whatsappNumberIntl}?text=${encodeURIComponent(
     "Bonjour PharmaGest Pro, j’ai besoin d’aide concernant…"
   )}`;
@@ -532,7 +532,7 @@ export default function Homepage({ onLogin, onRegister }) {
         <div className="support-contact" role="contentinfo" aria-label="Coordonnées du support technique">
           <div>
             <strong>Support technique :</strong> WhatsApp&nbsp;
-            <strong>0033749618704</strong>
+            <strong>00212661112540</strong>
           </div>
           <div>
             <a href={whatsappHref} target="_blank" rel="noopener noreferrer">

@@ -9,6 +9,7 @@ import React, {
 import { getAuth, onAuthStateChanged } from "firebase/auth";
 import { doc, getDoc, onSnapshot } from "firebase/firestore";
 import { db, disableFirestoreNetwork, enableFirestoreNetwork } from "../firebase/config";
+import permissions, { DOCTOR_ONLY_PERMISSIONS } from "../utils/permissions";
 
 // Création du contexte
 const UserRoleContext = createContext();
@@ -42,12 +43,15 @@ export function UserRoleProvider({ children }) {
   const [adminPopup, setAdminPopup] = useState(null);
   const [paymentWarning, setPaymentWarning] = useState(null);
 
+  // --- NOUVEAU : Permissions personnalisées ---
+  const [customPermissions, setCustomPermissions] = useState([]);
+
   // --- Refs pour garantir 1 seul listener actif ---
   const authUnsubRef = useRef(null);
   const userUnsubRef = useRef(null);
   const socUnsubRef = useRef(null);
 
-  // Utilitaire : reset réseau si “Target ID already exists”
+  // Utilitaire : reset réseau si "Target ID already exists"
   const tryRecoverWatchError = async (err) => {
     const msg = String(err?.message || "");
     if (msg.includes("Target ID already exists")) {
@@ -112,6 +116,9 @@ export function UserRoleProvider({ children }) {
                 setIsActive(data.active !== false && data.isActive !== false);
                 setAdminPopup(data.adminPopup || null);
                 setPaymentWarning(data.paymentWarning || null);
+                
+                // NOUVEAU : Charger les permissions personnalisées
+                setCustomPermissions(data.customPermissions || []);
 
                 // Objet utilisateur enrichi
                 setUser({
@@ -125,6 +132,7 @@ export function UserRoleProvider({ children }) {
                   active: data.active !== false && data.isActive !== false,
                   adminPopup: data.adminPopup || null,
                   paymentWarning: data.paymentWarning || null,
+                  customPermissions: data.customPermissions || [], // NOUVEAU
                 });
               } else {
                 // Document utilisateur absent → valeurs par défaut
@@ -138,6 +146,7 @@ export function UserRoleProvider({ children }) {
                   active: true,
                   adminPopup: null,
                   paymentWarning: null,
+                  customPermissions: [], // NOUVEAU
                 };
 
                 setRole(defaultData.role);
@@ -148,6 +157,7 @@ export function UserRoleProvider({ children }) {
                 setIsActive(defaultData.active);
                 setAdminPopup(defaultData.adminPopup);
                 setPaymentWarning(defaultData.paymentWarning);
+                setCustomPermissions(defaultData.customPermissions); // NOUVEAU
 
                 setUser({
                   ...firebaseUser,
@@ -170,6 +180,7 @@ export function UserRoleProvider({ children }) {
                 setIsActive(false);
                 setAdminPopup("Erreur de permissions - contactez l'administrateur");
                 setPaymentWarning(null);
+                setCustomPermissions([]); // NOUVEAU
 
                 setUser({
                   ...firebaseUser,
@@ -181,6 +192,7 @@ export function UserRoleProvider({ children }) {
                   active: false,
                   adminPopup: "Erreur de permissions - contactez l'administrateur",
                   paymentWarning: null,
+                  customPermissions: [], // NOUVEAU
                 });
               } else {
                 console.warn("[auth] Erreur réseau ou autre, valeurs par défaut");
@@ -192,6 +204,7 @@ export function UserRoleProvider({ children }) {
                 setIsActive(true);
                 setAdminPopup(null);
                 setPaymentWarning(null);
+                setCustomPermissions([]); // NOUVEAU
 
                 setUser({
                   ...firebaseUser,
@@ -203,6 +216,7 @@ export function UserRoleProvider({ children }) {
                   active: true,
                   adminPopup: null,
                   paymentWarning: null,
+                  customPermissions: [], // NOUVEAU
                 });
               }
 
@@ -213,7 +227,7 @@ export function UserRoleProvider({ children }) {
         } catch (e) {
           console.error("Erreur init écoute utilisateur:", e);
 
-          // Valeurs par défaut en cas d’erreur init
+          // Valeurs par défaut en cas d'erreur init
           setRole("vendeuse");
           setSocieteId(null);
           setIsLocked(false);
@@ -222,6 +236,7 @@ export function UserRoleProvider({ children }) {
           setIsActive(true);
           setAdminPopup(null);
           setPaymentWarning(null);
+          setCustomPermissions([]); // NOUVEAU
 
           setUser({
             ...firebaseUser,
@@ -233,6 +248,7 @@ export function UserRoleProvider({ children }) {
             active: true,
             adminPopup: null,
             paymentWarning: null,
+            customPermissions: [], // NOUVEAU
           });
 
           setLoading(false);
@@ -262,11 +278,12 @@ export function UserRoleProvider({ children }) {
         setAdminPopup(null);
         setPaymentWarning(null);
         setSocieteName(null);
+        setCustomPermissions([]); // NOUVEAU
         setLoading(false);
       }
     });
 
-    // Cleanup global de l’écoute auth
+    // Cleanup global de l'écoute auth
     return () => {
       if (authUnsubRef.current) {
         authUnsubRef.current();
@@ -352,6 +369,8 @@ export function UserRoleProvider({ children }) {
   // =========================
   // Permissions & Helpers
   // =========================
+
+  // FONCTION can() MODIFIÉE pour le contrôle complet des permissions
   const can = (permission) => {
     if (isDeleted || !user || !authReady) return false;
     if (isLocked && !isOwner) return false;
@@ -371,26 +390,115 @@ export function UserRoleProvider({ children }) {
 
     if (isOwner && user && !isDeleted) return true;
 
-    const rolePermissions = {
-      docteur: [
-        "voir_achats",
-        "voir_ventes",
-        "ajouter_stock",
-        "parametres",
-        "modifier_stock",
-        "supprimer_stock",
-        "voir_devis_factures",
-        "voir_paiements",
-        "voir_dashboard",
-        "voir_invitations",
-      ],
-      vendeuse: ["voir_ventes", "ajouter_vente", "voir_stock", "voir_invitations", "voir_dashboard"],
-    };
+    // NOUVELLE LOGIQUE : Contrôle complet des permissions
+    if (role === "vendeuse") {
+      // Vérifier que la permission n'est pas dans les permissions exclusives au docteur
+      if (DOCTOR_ONLY_PERMISSIONS.includes(permission)) {
+        return false;
+      }
+      
+      // CHANGEMENT PRINCIPAL : Si customPermissions existe, l'utiliser EXCLUSIVEMENT
+      if (customPermissions.length > 0) {
+        // Mode personnalisé : utiliser UNIQUEMENT les permissions personnalisées
+        return customPermissions.includes(permission);
+      } else {
+        // Mode par défaut : utiliser les permissions par défaut du rôle
+        const defaultPermissions = permissions.vendeuse || [];
+        return defaultPermissions.includes(permission);
+      }
+    }
 
-    if (!role) return false;
-    return (rolePermissions[role] || []).includes(permission);
+    // Logique pour le docteur (inchangée)
+    if (role === "docteur") {
+      // Les docteurs peuvent aussi avoir des permissions personnalisées
+      if (customPermissions.length > 0) {
+        return customPermissions.includes(permission);
+      } else {
+        return (permissions.docteur || []).includes(permission);
+      }
+    }
+
+    return false;
   };
 
+  // NOUVELLE FONCTION getUserPermissions() pour le contrôle complet
+  const getUserPermissions = () => {
+    if (role === "docteur") {
+      // Si le docteur a des permissions personnalisées, les utiliser
+      if (customPermissions.length > 0) {
+        return customPermissions;
+      } else {
+        return permissions.docteur || [];
+      }
+    } else if (role === "vendeuse") {
+      // Si la vendeuse a des permissions personnalisées, les utiliser EXCLUSIVEMENT
+      if (customPermissions.length > 0) {
+        return customPermissions;
+      } else {
+        return permissions.vendeuse || [];
+      }
+    }
+    return [];
+  };
+
+  // NOUVELLE FONCTION hasCustomPermissions() - détecte si des permissions personnalisées sont actives
+  const hasCustomPermissions = () => customPermissions.length > 0;
+
+  // NOUVELLE FONCTION getExtraPermissions() - permissions ajoutées par rapport aux permissions par défaut
+  const getExtraPermissions = () => {
+    if (!role || customPermissions.length === 0) return [];
+    
+    const defaultPermissions = permissions[role] || [];
+    return customPermissions.filter(p => !defaultPermissions.includes(p));
+  };
+
+  // NOUVELLE FONCTION getRemovedPermissions() - permissions retirées par rapport aux permissions par défaut
+  const getRemovedPermissions = () => {
+    if (!role || customPermissions.length === 0) return [];
+    
+    const defaultPermissions = permissions[role] || [];
+    return defaultPermissions.filter(p => !customPermissions.includes(p));
+  };
+
+  // NOUVELLE FONCTION getPermissionChanges() - résumé complet des changements
+  const getPermissionChanges = () => {
+    if (!hasCustomPermissions()) {
+      return {
+        hasChanges: false,
+        added: [],
+        removed: [],
+        total: getUserPermissions().length
+      };
+    }
+
+    const added = getExtraPermissions();
+    const removed = getRemovedPermissions();
+
+    return {
+      hasChanges: added.length > 0 || removed.length > 0,
+      added,
+      removed,
+      total: getUserPermissions().length
+    };
+  };
+
+  // Fonction pour recharger les permissions personnalisées
+  const refreshCustomPermissions = async (userId = null) => {
+    const targetUserId = userId || user?.uid;
+    if (!targetUserId) return;
+
+    try {
+      const userDoc = await getDoc(doc(db, 'users', targetUserId));
+      if (userDoc.exists()) {
+        const userData = userDoc.data();
+        setCustomPermissions(userData.customPermissions || []);
+      }
+    } catch (error) {
+      console.error('Erreur lors du rechargement des permissions:', error);
+    }
+  };
+
+  // Fonctions existantes inchangées
   const canAccessApp = () => {
     if (!user || !authReady) return false;
     if (isDeleted) return false;
@@ -454,27 +562,39 @@ export function UserRoleProvider({ children }) {
   const isAdmin = () => role === "docteur" && canAccessApp();
   const isSuperAdmin = () => isOwner && canAccessApp();
 
-  const getUserStats = () => ({
-    isConnected: !!user && authReady,
-    isActive,
-    isLocked,
-    isDeleted,
-    isOwner,
-    role,
-    societeId,
-    hasAccess: canAccessApp(),
-    blockReason: getBlockMessage(),
-    authReady,
-    privileges: {
-      canManageUsers: canManageUsers(),
-      canChangeRoles: canChangeRoles(),
-      canDeleteSociete: canDeleteSociete(),
-      isUntouchable: isOwner,
-      canPromoteUsers: canChangeRoles(),
-      canDemoteUsers: canChangeRoles(),
-    },
-  });
+  // getUserStats() MODIFIÉ pour inclure les nouvelles informations
+  const getUserStats = () => {
+    const changes = getPermissionChanges();
+    
+    return {
+      isConnected: !!user && authReady,
+      isActive,
+      isLocked,
+      isDeleted,
+      isOwner,
+      role,
+      societeId,
+      hasAccess: canAccessApp(),
+      blockReason: getBlockMessage(),
+      authReady,
+      customPermissions,
+      hasCustomPermissions: hasCustomPermissions(),
+      extraPermissions: getExtraPermissions(),
+      removedPermissions: getRemovedPermissions(),
+      permissionChanges: changes,
+      totalPermissions: getUserPermissions().length,
+      privileges: {
+        canManageUsers: canManageUsers(),
+        canChangeRoles: canChangeRoles(),
+        canDeleteSociete: canDeleteSociete(),
+        isUntouchable: isOwner,
+        canPromoteUsers: canChangeRoles(),
+        canDemoteUsers: canChangeRoles(),
+      },
+    };
+  };
 
+  // getPermissionMessages() MODIFIÉ pour les nouvelles informations
   const getPermissionMessages = () => {
     const messages = [];
     if (!authReady) {
@@ -491,15 +611,55 @@ export function UserRoleProvider({ children }) {
     } else if (!isActive && !isOwner) {
       messages.push({ type: "warning", text: "⏸️ Votre compte est désactivé" });
     }
+    
+    // NOUVEAUX MESSAGES pour les permissions personnalisées
+    if (hasCustomPermissions()) {
+      const changes = getPermissionChanges();
+      
+      if (changes.added.length > 0 && changes.removed.length > 0) {
+        messages.push({ 
+          type: "info", 
+          text: `🔧 Permissions personnalisées : +${changes.added.length} ajoutées, -${changes.removed.length} retirées` 
+        });
+      } else if (changes.added.length > 0) {
+        messages.push({ 
+          type: "info", 
+          text: `✨ Vous avez ${changes.added.length} permission(s) supplémentaire(s) accordée(s)` 
+        });
+      } else if (changes.removed.length > 0) {
+        messages.push({ 
+          type: "warning", 
+          text: `⚠️ ${changes.removed.length} permission(s) de base ont été retirées` 
+        });
+      }
+    }
+    
     if (adminPopup) messages.push({ type: "info", text: "📢 " + adminPopup });
     if (paymentWarning) messages.push({ type: "warning", text: "💳 " + paymentWarning });
     return messages;
   };
 
+  // getUserRoleDisplay() MODIFIÉ pour les nouvelles informations
   const getUserRoleDisplay = () => {
     if (!role) return "Non défini";
-    if (isOwner) return `${role === "docteur" ? "Docteur" : "Vendeuse"} (👑 Propriétaire)`;
-    return role === "docteur" ? "Docteur" : "Vendeuse";
+    
+    let baseDisplay = role === "docteur" ? "Docteur" : "Vendeuse";
+    if (isOwner) baseDisplay += " (👑 Propriétaire)";
+    
+    // NOUVELLES INFORMATIONS sur les permissions personnalisées
+    if (hasCustomPermissions()) {
+      const changes = getPermissionChanges();
+      
+      if (changes.added.length > 0 && changes.removed.length > 0) {
+        baseDisplay += ` (±${changes.added.length}/${changes.removed.length})`;
+      } else if (changes.added.length > 0) {
+        baseDisplay += ` (+${changes.added.length})`;
+      } else if (changes.removed.length > 0) {
+        baseDisplay += ` (-${changes.removed.length})`;
+      }
+    }
+    
+    return baseDisplay;
   };
 
   const getOwnershipStatus = () => {
@@ -509,7 +669,7 @@ export function UserRoleProvider({ children }) {
     return "Utilisateur standard";
   };
 
-  // Valeur du contexte
+  // Valeur du contexte avec TOUTES les nouvelles fonctions
   const contextValue = {
     // États de base
     role,
@@ -529,7 +689,16 @@ export function UserRoleProvider({ children }) {
     adminPopup,
     paymentWarning,
 
-    // Permissions / helpers
+    // NOUVEAU : Permissions personnalisées complètes
+    customPermissions,
+    hasCustomPermissions,
+    getExtraPermissions,
+    getRemovedPermissions,
+    getPermissionChanges,
+    getUserPermissions,
+    refreshCustomPermissions,
+
+    // Permissions / helpers existants
     can,
     canAccessApp,
     getBlockMessage,

@@ -1,6 +1,6 @@
-// src/App.js - Version avec page d'accueil au démarrage et import de sauvegarde
+// src/App.js - Version avec indicateur de chargement au démarrage
 
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import Login from './components/auth/Login';
 import Register from './components/auth/Register';
@@ -14,7 +14,7 @@ import Parametres from './components/parametres/Parametres';
 import DevisFactures from './components/devisFactures/DevisFactures';
 import Paiements from './components/paiements/Paiements';
 import BackupExport from './components/BackupExport';
-import ImportBackup from './components/ImportBackup'; // Nouveau composant d'import
+import ImportBackup from './components/ImportBackup';
 import UsersManagement from './components/users/UsersManagement';
 import GestionUtilisateurs from './components/admin/GestionUtilisateurs';
 import Homepage from './components/Homepage';
@@ -24,15 +24,206 @@ import AddSocieteIdToAllUsers from './components/admin/AddSocieteIdToAllUsers';
 import InitOwner from './components/admin/InitOwner';
 import './styles/main.css';
 
-// Page dédiée aux sauvegardes - Version complète avec export et import
+// Composant Loader de démarrage
+const AppLoader = ({ onLoadingComplete, minLoadingTime = 2500 }) => {
+  const [progress, setProgress] = useState(0);
+  const [loadingText, setLoadingText] = useState('Initialisation...');
+  
+  const loadingSteps = [
+    { progress: 20, text: 'Chargement des ressources...' },
+    { progress: 40, text: 'Configuration Firebase...' },
+    { progress: 60, text: 'Synchronisation des données...' },
+    { progress: 80, text: 'Préparation de l\'interface...' },
+    { progress: 100, text: 'Prêt !' }
+  ];
+
+  useEffect(() => {
+    let currentStep = 0;
+    const startTime = Date.now();
+    
+    const updateProgress = () => {
+      if (currentStep < loadingSteps.length) {
+        const step = loadingSteps[currentStep];
+        setProgress(step.progress);
+        setLoadingText(step.text);
+        currentStep++;
+        
+        const delay = currentStep === loadingSteps.length ? 500 : Math.random() * 800 + 400;
+        setTimeout(updateProgress, delay);
+      } else {
+        const elapsed = Date.now() - startTime;
+        const remainingTime = Math.max(0, minLoadingTime - elapsed);
+        
+        setTimeout(() => {
+          if (onLoadingComplete) {
+            onLoadingComplete();
+          }
+        }, remainingTime);
+      }
+    };
+
+    const timer = setTimeout(updateProgress, 300);
+    
+    return () => {
+      clearTimeout(timer);
+    };
+  }, [minLoadingTime, onLoadingComplete, loadingSteps]);
+
+  return (
+    <div style={{
+      position: 'fixed',
+      inset: 0,
+      background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+      display: 'flex',
+      flexDirection: 'column',
+      alignItems: 'center',
+      justifyContent: 'center',
+      zIndex: 10000,
+      color: '#ffffff',
+      fontFamily: '"Inter", -apple-system, BlinkMacSystemFont, sans-serif'
+    }}>
+      
+      <div style={{
+        marginBottom: '40px',
+        textAlign: 'center'
+      }}>
+        <div style={{
+          fontSize: window.innerWidth < 768 ? '28px' : '42px',
+          fontWeight: '800',
+          background: 'linear-gradient(45deg, #ffffff, #f0f9ff)',
+          WebkitBackgroundClip: 'text',
+          WebkitTextFillColor: 'transparent',
+          backgroundClip: 'text',
+          marginBottom: '8px',
+          textShadow: '0 2px 4px rgba(0,0,0,0.1)'
+        }}>
+          Stock & Gestion
+        </div>
+        <div style={{
+          fontSize: window.innerWidth < 768 ? '14px' : '16px',
+          opacity: 0.9,
+          fontWeight: '500'
+        }}>
+          Synchronisation Avancée
+        </div>
+      </div>
+
+      <div style={{
+        position: 'relative',
+        marginBottom: '30px'
+      }}>
+        <div style={{
+          width: '80px',
+          height: '80px',
+          border: '4px solid rgba(255,255,255,0.3)',
+          borderTop: '4px solid #ffffff',
+          borderRadius: '50%',
+          animation: 'spin 1s linear infinite'
+        }}></div>
+        
+        <div style={{
+          position: 'absolute',
+          top: '50%',
+          left: '50%',
+          transform: 'translate(-50%, -50%)',
+          width: '50px',
+          height: '50px',
+          border: '3px solid rgba(255,255,255,0.2)',
+          borderRight: '3px solid #ffffff',
+          borderRadius: '50%',
+          animation: 'spinReverse 1.5s linear infinite'
+        }}></div>
+      </div>
+
+      <div style={{
+        fontSize: '18px',
+        fontWeight: '600',
+        marginBottom: '20px',
+        minHeight: '25px',
+        opacity: 0.95,
+        textAlign: 'center'
+      }}>
+        {loadingText}
+      </div>
+
+      <div style={{
+        width: window.innerWidth < 768 ? '280px' : '350px',
+        height: '6px',
+        background: 'rgba(255,255,255,0.2)',
+        borderRadius: '3px',
+        overflow: 'hidden',
+        marginBottom: '20px'
+      }}>
+        <div style={{
+          height: '100%',
+          background: 'linear-gradient(90deg, #ffffff, #f0f9ff)',
+          borderRadius: '3px',
+          width: `${progress}%`,
+          transition: 'width 0.5s ease-out',
+          boxShadow: '0 0 10px rgba(255,255,255,0.3)'
+        }}></div>
+      </div>
+
+      <div style={{
+        fontSize: '14px',
+        opacity: 0.8,
+        marginBottom: '30px'
+      }}>
+        {progress}%
+      </div>
+
+      <div style={{
+        display: 'flex',
+        gap: '12px',
+        alignItems: 'center'
+      }}>
+        {[0, 1, 2].map((i) => (
+          <div key={i} style={{
+            width: '10px',
+            height: '10px',
+            background: 'rgba(255,255,255,0.7)',
+            borderRadius: '50%',
+            animation: `pulse 1.5s ease-in-out ${i * 0.3}s infinite`
+          }}></div>
+        ))}
+      </div>
+
+      <style dangerouslySetInnerHTML={{
+        __html: `
+          @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+          }
+          
+          @keyframes spinReverse {
+            0% { transform: translate(-50%, -50%) rotate(360deg); }
+            100% { transform: translate(-50%, -50%) rotate(0deg); }
+          }
+          
+          @keyframes pulse {
+            0%, 100% { 
+              transform: scale(1); 
+              opacity: 0.7; 
+            }
+            50% { 
+              transform: scale(1.3); 
+              opacity: 1; 
+            }
+          }
+        `
+      }} />
+    </div>
+  );
+};
+
+// Page dédiée aux sauvegardes
 function BackupPage() {
-  const [currentTab, setCurrentTab] = React.useState('export');
+  const [currentTab, setCurrentTab] = useState('export');
 
   return (
     <div className="fullscreen-table-wrap">
-      <div className="fullscreen-table-title">💾 Gestion des Sauvegardes</div>
+      <div className="fullscreen-table-title">Gestion des Sauvegardes</div>
       
-      {/* Navigation entre les onglets */}
       <div style={{ 
         display: 'flex', 
         justifyContent: 'center', 
@@ -57,7 +248,7 @@ function BackupPage() {
             transition: 'all 0.3s ease'
           }}
         >
-          📤 Export
+          Export
         </button>
         <button
           onClick={() => setCurrentTab('import')}
@@ -73,38 +264,29 @@ function BackupPage() {
             transition: 'all 0.3s ease'
           }}
         >
-          📥 Import
+          Import
         </button>
       </div>
 
-      {/* Contenu selon l'onglet sélectionné */}
       {currentTab === 'export' ? (
         <>
           <BackupExport />
           
           <div className="paper-card" style={{ maxWidth: 700, margin: '20px auto' }}>
-            <h4 style={{ color: '#e4edfa', marginBottom: 15 }}>📋 Guide Export</h4>
+            <h4 style={{ color: '#e4edfa', marginBottom: 15 }}>Guide Export</h4>
             <div style={{ color: '#99b2d4', lineHeight: 1.8 }}>
               <div style={{ display: 'grid', gap: 12 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                   <span style={{ fontSize: '1.2rem' }}>🔒</span>
-                  <span><strong>Sécurité :</strong> Seul le propriétaire peut créer des sauvegardes complètes de toutes les données.</span>
+                  <span><strong>Sécurité :</strong> Seul le propriétaire peut créer des sauvegardes complètes.</span>
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                   <span style={{ fontSize: '1.2rem' }}>📁</span>
-                  <span><strong>Localisation :</strong> Les fichiers JSON sont téléchargés dans votre dossier "Téléchargements".</span>
+                  <span><strong>Localisation :</strong> Fichiers JSON téléchargés dans "Téléchargements".</span>
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                   <span style={{ fontSize: '1.2rem' }}>📅</span>
-                  <span><strong>Fréquence :</strong> Sauvegarde complète 1x/semaine, sauvegarde rapide quotidienne recommandée.</span>
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                  <span style={{ fontSize: '1.2rem' }}>💾</span>
-                  <span><strong>Format :</strong> Données exportées en JSON (lisible, réimportable, compatible).</span>
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                  <span style={{ fontSize: '1.2rem' }}>🔄</span>
-                  <span><strong>Restauration :</strong> Gardez vos fichiers de sauvegarde en sécurité pour une restauration future.</span>
+                  <span><strong>Fréquence :</strong> Sauvegarde complète hebdomadaire recommandée.</span>
                 </div>
               </div>
             </div>
@@ -115,32 +297,20 @@ function BackupPage() {
           <ImportBackup />
           
           <div className="paper-card" style={{ maxWidth: 700, margin: '20px auto' }}>
-            <h4 style={{ color: '#e4edfa', marginBottom: 15 }}>📋 Guide Import</h4>
+            <h4 style={{ color: '#e4edfa', marginBottom: 15 }}>Guide Import</h4>
             <div style={{ color: '#99b2d4', lineHeight: 1.8 }}>
               <div style={{ display: 'grid', gap: 12 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                   <span style={{ fontSize: '1.2rem' }}>⚠️</span>
-                  <span><strong>Attention :</strong> L'import remplace ou fusionne les données selon le mode choisi.</span>
+                  <span><strong>Attention :</strong> L'import modifie les données selon le mode choisi.</span>
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                   <span style={{ fontSize: '1.2rem' }}>📄</span>
-                  <span><strong>Format accepté :</strong> Fichiers JSON générés par l'export de cette application.</span>
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                  <span style={{ fontSize: '1.2rem' }}>🔄</span>
-                  <span><strong>Mode Remplacement :</strong> Supprime toutes les données existantes avant l'import.</span>
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                  <span style={{ fontSize: '1.2rem' }}>➕</span>
-                  <span><strong>Mode Fusion :</strong> Ajoute les données sans supprimer l'existant.</span>
+                  <span><strong>Format :</strong> Fichiers JSON générés par cette application.</span>
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                   <span style={{ fontSize: '1.2rem' }}>💾</span>
-                  <span><strong>Recommandation :</strong> Créez une sauvegarde avant tout import en mode remplacement.</span>
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                  <span style={{ fontSize: '1.2rem' }}>🔒</span>
-                  <span><strong>Sécurité :</strong> Seul le propriétaire peut importer des sauvegardes complètes.</span>
+                  <span><strong>Recommandation :</strong> Sauvegarde avant import en mode remplacement.</span>
                 </div>
               </div>
             </div>
@@ -151,7 +321,6 @@ function BackupPage() {
   );
 }
 
-// Page dédiée à la gestion des utilisateurs (votre version existante)
 function UsersPage() {
   return (
     <div style={{ minHeight: "100vh", background: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)" }}>
@@ -160,7 +329,6 @@ function UsersPage() {
   );
 }
 
-// Page dédiée à la gestion des rôles propriétaire
 function GestionRolesPage() {
   return (
     <div style={{ minHeight: "100vh", background: "linear-gradient(135deg, #223049 0%, #344060 100%)" }}>
@@ -169,13 +337,11 @@ function GestionRolesPage() {
   );
 }
 
-// Wrapper pour masquer la Navbar sur les pages d'auth, admin et homepage
 function AppWrapper() {
   const location = useLocation();
   
-  // Pages où la navbar doit être masquée
   const hideNavbar = [
-    "/",                    // Page d'accueil
+    "/",
     "/login", 
     "/register", 
     "/accept-invitation"
@@ -184,9 +350,11 @@ function AppWrapper() {
   return (
     <>
       {!hideNavbar && <Navbar />}
-      <div style={{ minHeight: "100vh", background: hideNavbar && location.pathname === "/" ? "transparent" : "#f6f8fa" }}>
+      <div style={{ 
+        minHeight: "100vh", 
+        background: hideNavbar && location.pathname === "/" ? "transparent" : "#f6f8fa" 
+      }}>
         <Routes>
-          {/* ========== PAGE D'ACCUEIL ========== */}
           <Route 
             path="/" 
             element={
@@ -197,12 +365,10 @@ function AppWrapper() {
             } 
           />
 
-          {/* ========== ROUTES D'AUTHENTIFICATION ========== */}
           <Route path="/login" element={<Login />} />
           <Route path="/register" element={<Register />} />
           <Route path="/accept-invitation" element={<AcceptInvitation />} />
 
-          {/* ========== DASHBOARD PRINCIPAL (PROTÉGÉ) ========== */}
           <Route 
             path="/dashboard" 
             element={
@@ -212,7 +378,6 @@ function AppWrapper() {
             } 
           />
 
-          {/* ========== MODULES PRINCIPAUX (PROTÉGÉS) ========== */}
           <Route
             path="/achats"
             element={
@@ -238,7 +403,6 @@ function AppWrapper() {
             }
           />
 
-          {/* ========== MODULES SECONDAIRES (PROTÉGÉS) ========== */}
           <Route
             path="/devis-factures"
             element={
@@ -256,9 +420,6 @@ function AppWrapper() {
             }
           />
 
-          {/* ========== GESTION ET ADMINISTRATION (PROTÉGÉS) ========== */}
-          
-          {/* Paramètres système */}
           <Route
             path="/parametres"
             element={
@@ -268,7 +429,6 @@ function AppWrapper() {
             }
           />
 
-          {/* Gestion des sauvegardes avec import/export */}
           <Route
             path="/backup"
             element={
@@ -278,20 +438,18 @@ function AppWrapper() {
             }
           />
 
-          {/* Page d'import dédiée (alternative) */}
           <Route
             path="/import"
             element={
               <Protected permission="voir_dashboard">
                 <div className="fullscreen-table-wrap">
-                  <div className="fullscreen-table-title">📥 Import de Sauvegarde</div>
+                  <div className="fullscreen-table-title">Import de Sauvegarde</div>
                   <ImportBackup />
                 </div>
               </Protected>
             }
           />
 
-          {/* Gestion des rôles - PROPRIÉTAIRE UNIQUEMENT */}
           <Route
             path="/gestion-utilisateurs"
             element={
@@ -301,7 +459,6 @@ function AppWrapper() {
             }
           />
 
-          {/* Gestion utilisateurs (votre version existante) - Docteurs */}
           <Route
             path="/users"
             element={
@@ -311,17 +468,9 @@ function AppWrapper() {
             }
           />
 
-          {/* ========== ROUTES ADMINISTRATIVES TEMPORAIRES ========== */}
-          
-          {/* Initialisation propriétaire (première fois) */}
           <Route path="/admin-init-owner" element={<InitOwner />} />
-          
-          {/* Migration société (existant) */}
           <Route path="/admin-update-societe" element={<AddSocieteIdToAllUsers />} />
 
-          {/* ========== REDIRECTIONS ========== */}
-          
-          {/* Toute autre route non définie redirige vers la page d'accueil */}
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </div>
@@ -330,6 +479,21 @@ function AppWrapper() {
 }
 
 function App() {
+  const [isLoading, setIsLoading] = useState(true);
+
+  const handleLoadingComplete = () => {
+    setIsLoading(false);
+  };
+
+  if (isLoading) {
+    return (
+      <AppLoader 
+        onLoadingComplete={handleLoadingComplete}
+        minLoadingTime={2500}
+      />
+    );
+  }
+
   return (
     <UserRoleProvider>
       <Router>

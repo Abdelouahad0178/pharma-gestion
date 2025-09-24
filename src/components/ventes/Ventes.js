@@ -1,8 +1,8 @@
+// src/components/ventes/Ventes.js
 import React, { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import { createPortal } from "react-dom";
 import { db } from "../../firebase/config";
 import { useUserRole } from "../../contexts/UserRoleContext";
-
 import {
   collection,
   addDoc,
@@ -11,42 +11,81 @@ import {
   deleteDoc,
   doc,
   query,
-  where,
-  Timestamp,
   orderBy,
   limit,
-  getDoc,
+  Timestamp,
   onSnapshot,
 } from "firebase/firestore";
 
+// util id court et stable
+const newOpKey = () =>
+  `op_${Date.now().toString(36)}_${Math.random().toString(36).slice(2,8)}`;
+
 /* =====================
-UTILITAIRES DATES
+   Normalisation Stock (comme dans Stock.js)
 ===================== */
-function safeParseDate(dateInput) {
+const STOCK_KEYS = ["stock", "stockSource", "originStock", "stockId", "stockName", "stock_label", "depot", "magasin", "source"];
+
+const normalizeStockValue = (val) => {
+  if (val === undefined || val === null) return "unknown";
+  if (typeof val === "number") return val === 1 ? "stock1" : val === 2 ? "stock2" : "unknown";
+  const raw = String(val).toLowerCase().replace(/[\s_\-]/g, "");
+  if (["stock1","s1","magasin1","depot1","principal","primary","p","m1","1"].includes(raw)) return "stock1";
+  if (["stock2","s2","magasin2","depot2","secondaire","secondary","s","m2","2"].includes(raw)) return "stock2";
+  return "unknown";
+};
+
+const pickDocStock = (docData) => {
+  for (const k of STOCK_KEYS) {
+    if (docData?.[k] !== undefined) {
+      const tag = normalizeStockValue(docData[k]);
+      if (tag !== "unknown") return tag;
+    }
+  }
+  return "stock1"; // défaut pour compatibilité
+};
+
+const pickLotStock = (lot) => {
+  if (!lot) return "stock1";
+  
+  // Priorité aux quantités réelles : si stock1 > 0, alors c'est une vente stock1
+  const s1 = Number(lot.stock1 || 0);
+  const s2 = Number(lot.stock2 || 0);
+  
+  if (s1 > 0 && s2 <= 0) return "stock1";
+  if (s2 > 0 && s1 <= 0) return "stock2";
+  if (s1 > 0 && s2 > 0) {
+    // Si les deux stocks ont des quantités, on priorise stock1 (FIFO logique)
+    return "stock1";
+  }
+  
+  // Fallback sur les métadonnées du lot
+  return pickDocStock(lot);
+};
+
+/* =====================
+   Utils dates & nombres
+===================== */
+const safeParseDate = (dateInput) => {
   if (!dateInput) return null;
   try {
-    if (dateInput?.toDate && typeof dateInput.toDate === "function") {
-      return dateInput.toDate();
-    }
-    if (dateInput?.seconds) {
-      return new Date(dateInput.seconds * 1000);
-    }
-    if (dateInput instanceof Date) return dateInput;
-    if (typeof dateInput === "string" || typeof dateInput === "number") {
-      const d = new Date(dateInput);
-      return isNaN(d.getTime()) ? null : d;
-    }
-    return null;
+    if (dateInput?.toDate && typeof dateInput.toDate === "function") return dateInput.toDate();
+    if (dateInput?.seconds != null) return new Date(dateInput.seconds * 1000);
+    if (dateInput instanceof Date) return isNaN(dateInput.getTime()) ? null : dateInput;
+    const d = new Date(dateInput);
+    return isNaN(d.getTime()) ? null : d;
   } catch {
     return null;
   }
-}
-function formatDateSafe(dateInput, { withTime = false } = {}) {
+};
+
+const formatDateSafe = (dateInput, { withTime = false } = {}) => {
   const d = safeParseDate(dateInput);
   if (!d) return "";
   return withTime ? d.toLocaleString("fr-FR") : d.toLocaleDateString("fr-FR");
-}
-function getDateInputValue(dateInput) {
+};
+
+const getDateInputValue = (dateInput) => {
   const d = safeParseDate(dateInput);
   if (!d) return "";
   try {
@@ -54,25 +93,32 @@ function getDateInputValue(dateInput) {
   } catch {
     return "";
   }
-}
+};
+
+const safeNumber = (v, def = 0) => {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : def;
+};
+
+const safeToFixed = (v, dec = 2) => safeNumber(v).toFixed(dec);
 
 /* =====================
-UTILITAIRES NOMBRES
+   Codes-barres
 ===================== */
-function safeNumber(v, def = 0) {
-  const n = Number(v);
-  return isNaN(n) ? def : n;
-}
-function safeToFixed(v, dec = 2) {
-  return safeNumber(v).toFixed(dec);
-}
+const BARCODE_FIELDS = ["codeBarre", "barcode", "ean", "ean13", "upc", "gtin"];
+const findAnyBarcode = (obj) => {
+  for (const f of BARCODE_FIELDS) {
+    const val = obj?.[f];
+    if (val != null && String(val).trim() !== "") return String(val);
+  }
+  return "";
+};
 
 /**
- * Composant de gestion des ventes (multi-lots + scan clavier/caméra)
- * - Champ "N° article (code-barres)" auto-rempli
+ * Composant principal de gestion des ventes (multi-lots + scan + différenciation stock1/stock2)
  */
 export default function Ventes() {
-  /* ===== BIP SONORE (Web Audio API) ===== */
+  /* ===== Audio (bip) ===== */
   const audioCtxRef = useRef(null);
   const getAudioCtx = () => {
     if (!audioCtxRef.current) {
@@ -107,8 +153,8 @@ export default function Ventes() {
     } catch {}
   }, []);
   const beepSuccess = useCallback(() => {
-    playBeep(1175, 90, "sine", 0.15);
-    setTimeout(() => playBeep(1568, 110, "sine", 0.15), 100);
+    playBeep(1175, 90);
+    setTimeout(() => playBeep(1568, 110), 100);
   }, [playBeep]);
   const beepError = useCallback(() => playBeep(220, 220, "square", 0.2), [playBeep]);
 
@@ -120,13 +166,12 @@ export default function Ventes() {
     };
     window.addEventListener("click", unlock, { once: true });
     window.addEventListener("keydown", unlock, { once: true });
-    return () => {};
   }, []);
 
   /* ===== Contexte utilisateur ===== */
   const { user, societeId, loading } = useUserRole();
 
-  /* ===== États ===== */
+  /* ===== Etats formulaire / page ===== */
   const [client, setClient] = useState("(passant)");
   const [dateVente, setDateVente] = useState(new Date().toISOString().split("T")[0]);
   const [statutPaiement, setStatutPaiement] = useState("payé");
@@ -140,7 +185,6 @@ export default function Ventes() {
   const [selectedLot, setSelectedLot] = useState("");
   const [availableLots, setAvailableLots] = useState([]);
 
-// N° article (code-barres)
   const [numeroArticle, setNumeroArticle] = useState("");
 
   const [articles, setArticles] = useState([]);
@@ -172,6 +216,9 @@ export default function Ventes() {
   const [showDetails, setShowDetails] = useState(false);
   const [showScanner, setShowScanner] = useState(false);
 
+  // anti doublon d'ajout par scan/double clic (fenêtre 400ms)
+  const lastAddTsRef = useRef(0);
+
   /* ===== CHARGEMENT ===== */
   useEffect(() => {
     setWaiting(loading || !societeId || !user);
@@ -180,87 +227,80 @@ export default function Ventes() {
   useEffect(() => {
     if (!societeId) return;
 
-    // Écoute en temps réel pour les paramètres
+    // Paramètres
     const paramRef = doc(db, "societe", societeId, "parametres", "documents");
-    const unsubParam = onSnapshot(paramRef, (snap) => {
-      if (snap.exists()) {
-        const data = snap.data() || {};
-        setParametres(data);
-      }
-    }, (e) => {
-      console.error("fetchParametres error:", e);
-    });
+    const unsubParam = onSnapshot(
+      paramRef,
+      (snap) => {
+        if (snap.exists()) setParametres(snap.data() || {});
+      },
+      (e) => console.error("fetchParametres error:", e)
+    );
 
-    // Écoute en temps réel pour les ventes
+    // Ventes (liste)
     const qVentes = query(collection(db, "societe", societeId, "ventes"), orderBy("date", "desc"), limit(200));
-    const unsubVentes = onSnapshot(qVentes, (snap) => {
-      const arr = [];
-      snap.forEach((d) => {
-        const data = d.data();
-        delete data._exportedAt;
-        delete data._collection;
-        arr.push({ id: d.id, ...data });
-      });
-      setVentes(arr);
-      const uniqueClients = [...new Set(arr.map((v) => v.client).filter(Boolean))];
-      setClients(uniqueClients);
-    }, (e) => {
-      console.error("Erreur chargement ventes:", e);
-      setError("Erreur lors du chargement des ventes");
-    });
+    const unsubVentes = onSnapshot(
+      qVentes,
+      (snap) => {
+        const arr = [];
+        snap.forEach((d) => arr.push({ id: d.id, ...d.data() }));
+        setVentes(arr);
+        setClients([...new Set(arr.map((v) => v.client).filter(Boolean))]);
+      },
+      (e) => {
+        console.error("Erreur chargement ventes:", e);
+        setError("Erreur lors du chargement des ventes");
+      }
+    );
 
-    // Écoute en temps réel pour les entrées de stock
+    // Lots (stock_entries)
     const qStockEntries = collection(db, "societe", societeId, "stock_entries");
-    const unsubStockEntries = onSnapshot(qStockEntries, (snap) => {
-      const arr = [];
-      snap.forEach((d) => {
-        const data = d.data();
-        delete data._exportedAt;
-        delete data._collection;
-        arr.push({ id: d.id, ...data });
-      });
-      // Tri par nom puis date de péremption croissante
-      arr.sort((a, b) => {
-        const nameA = String(a.nom || a.name || "");
-        const nameB = String(b.nom || b.name || "");
-        if (nameA !== nameB) return nameA.localeCompare(nameB);
-        const da = safeParseDate(a.datePeremption);
-        const db = safeParseDate(b.datePeremption);
-        if (da && db) return da - db;
-        if (da && !db) return -1;
-        if (!da && db) return 1;
-        return 0;
-      });
-      setStockEntries(arr);
-    }, (e) => {
-      console.error("fetchStockEntries error:", e);
-      setStockEntries([]);
-    });
+    const unsubStockEntries = onSnapshot(
+      qStockEntries,
+      (snap) => {
+        const arr = [];
+        snap.forEach((d) => arr.push({ id: d.id, ...d.data() }));
+        // tri nom + exp
+        arr.sort((a, b) => {
+          const nameA = String(a.nom || a.name || "");
+          const nameB = String(b.nom || b.name || "");
+          if (nameA !== nameB) return nameA.localeCompare(nameB);
+          const da = safeParseDate(a.datePeremption);
+          const db = safeParseDate(b.datePeremption);
+          if (da && db) return da - db;
+          if (da && !db) return -1;
+          if (!da && db) return 1;
+          return 0;
+        });
+        setStockEntries(arr);
+      },
+      (e) => {
+        console.error("fetchStockEntries error:", e);
+        setStockEntries([]);
+      }
+    );
 
-    // Écoute en temps réel pour les médicaments
-    const qMedicaments = collection(db, "societe", societeId, "stock");
-    const unsubMedicaments = onSnapshot(qMedicaments, (snap) => {
-      const arr = [];
-      snap.forEach((d) => {
-        const data = d.data();
-        delete data._exportedAt;
-        delete data._collection;
-        arr.push({ id: d.id, ...data });
-      });
-      setMedicaments(arr);
-    }, (e) => {
-      console.error("Erreur chargement médicaments:", e);
-    });
+    // Stock "traditionnel"
+    const qMedic = collection(db, "societe", societeId, "stock");
+    const unsubMedic = onSnapshot(
+      qMedic,
+      (snap) => {
+        const arr = [];
+        snap.forEach((d) => arr.push({ id: d.id, ...d.data() }));
+        setMedicaments(arr);
+      },
+      (e) => console.error("Erreur chargement médicaments:", e)
+    );
 
     return () => {
       unsubParam();
       unsubVentes();
       unsubStockEntries();
-      unsubMedicaments();
+      unsubMedic();
     };
   }, [societeId]);
 
-  // Fusionne le stock traditionnel et les lots
+  /* ===== Agrégation "catalogue affiché" (stock + lots) ===== */
   const getAllAvailableMedicaments = useMemo(() => {
     const num = (v) => {
       if (typeof v === "number") return v || 0;
@@ -273,36 +313,24 @@ export default function Ventes() {
     (Array.isArray(medicaments) ? medicaments : []).forEach((m) => {
       const key = m?.nom ?? m?.name ?? "";
       if (!key) return;
-      const qStock = num(m?.quantite ?? m?.qty ?? 0);
-      const prix = num(m?.prixVente ?? m?.price ?? 0);
       map.set(key, {
         nom: key,
-        quantiteStock: qStock,
-        quantiteLots: 0,
-        quantiteTotal: qStock,
+        quantiteTotal: num(m?.quantite ?? m?.qty ?? 0),
         hasLots: false,
-        lastPrice: prix,
+        lastPrice: num(m?.prixVente ?? m?.price ?? 0),
       });
     });
 
     (Array.isArray(stockEntries) ? stockEntries : []).forEach((lot) => {
       const key = lot?.nom ?? lot?.name ?? "";
       if (!key) return;
-      const qLot = num(lot?.quantite ?? lot?.qty ?? 0);
+      // Quantité totale = stock1 + stock2
+      const qLot = num(lot?.stock1 ?? 0) + num(lot?.stock2 ?? 0);
       const prixLot = num(lot?.prixVente ?? lot?.price ?? 0);
-      if (!map.has(key)) {
-        map.set(key, {
-          nom: key,
-          quantiteStock: 0,
-          quantiteLots: 0,
-          quantiteTotal: 0,
-          hasLots: false,
-          lastPrice: 0,
-        });
-      }
+
+      if (!map.has(key)) map.set(key, { nom: key, quantiteTotal: 0, hasLots: false, lastPrice: 0 });
       const item = map.get(key);
-      item.quantiteLots += qLot;
-      item.quantiteTotal = num(item.quantiteStock) + num(item.quantiteLots);
+      item.quantiteTotal += qLot;
       if (qLot > 0) item.hasLots = true;
       if (!item.lastPrice && prixLot) item.lastPrice = prixLot;
     });
@@ -310,37 +338,55 @@ export default function Ventes() {
     return Array.from(map.values()).sort((a, b) => a.nom.localeCompare(b.nom));
   }, [medicaments, stockEntries]);
 
+  /* ===== Totaux / filtres (hooks au niveau supérieur !) ===== */
+  const totalVenteCourante = useMemo(
+    () =>
+      articles.reduce(
+        (t, a) => t + (safeNumber(a.prixUnitaire) * safeNumber(a.quantite) - safeNumber(a.remise)),
+        0
+      ),
+    [articles]
+  );
+
+  const ventesFiltrees = useMemo(() => {
+    return ventes.filter((v) => {
+      let keep = true;
+      if (filterStatut && v.statutPaiement !== filterStatut) keep = false;
+      if (searchTerm) {
+        const s = searchTerm.toLowerCase();
+        const clientMatch = v.client?.toLowerCase().includes(s);
+        const produitMatch = v.articles?.some((a) => {
+          const lot = (a.numeroLot || "").toString().toLowerCase();
+          const code = (a.numeroArticle || "").toString().toLowerCase();
+          return a.produit?.toLowerCase().includes(s) || lot.includes(s) || code.includes(s);
+        });
+        keep = keep && (clientMatch || produitMatch);
+      }
+      return keep;
+    });
+  }, [ventes, filterStatut, searchTerm]);
+
   /* =====================
-  GESTION FORMULAIRE
+     Gestion formulaire avec détection automatique du stock
   ===================== */
-  const barcodeFields = ["codeBarre", "barcode", "ean", "ean13", "upc", "gtin"];
-
-  const findAnyBarcode = (obj) => {
-    for (const f of barcodeFields) {
-      const val = obj?.[f];
-      if (val != null && String(val).trim() !== "") return String(val);
-    }
-    return "";
-  };
-
   const handleProduitChange = (value) => {
     setProduit(value);
     setSelectedLot("");
     setAvailableLots([]);
 
     if (!value) {
-      // si aucun produit sélectionné, vider le champ
       setNumeroArticle("");
       return;
     }
 
-    // lots disponibles pour ce produit
-    const lotsForProduct = (stockEntries || []).filter(
-      (entry) => (entry.nom || entry.name) === value && safeNumber(entry.quantite) > 0
-    );
+    // Filtrer les lots disponibles (qui ont du stock1 ou stock2 > 0)
+    const lotsForProduct = (stockEntries || []).filter((entry) => {
+      const nomMatch = (entry.nom || entry.name) === value;
+      const hasStock = (safeNumber(entry.stock1) + safeNumber(entry.stock2)) > 0;
+      return nomMatch && hasStock;
+    });
     setAvailableLots(lotsForProduct);
 
-    // prix
     if (lotsForProduct.length > 0) {
       setPrixUnitaire(safeNumber(lotsForProduct[0]?.prixVente));
     } else {
@@ -348,13 +394,10 @@ export default function Ventes() {
       if (med) setPrixUnitaire(safeNumber(med.prixVente));
     }
 
-    // *** AUTO-FILL du N° article (code-barres) ***
-    // On priorise un code-barres sur un lot disponible ; sinon on prend celui du stock "traditionnel"
     let code = "";
     const lotWithCode = lotsForProduct.find((l) => findAnyBarcode(l));
-    if (lotWithCode) {
-      code = findAnyBarcode(lotWithCode);
-    } else {
+    if (lotWithCode) code = findAnyBarcode(lotWithCode);
+    else {
       const med = (medicaments || []).find((m) => (m.nom || m.name) === value);
       if (med) code = findAnyBarcode(med);
     }
@@ -366,7 +409,6 @@ export default function Ventes() {
     const selectedLotData = (availableLots || []).find((lot) => lot.id === lotId);
     if (selectedLotData) {
       setPrixUnitaire(safeNumber(selectedLotData.prixVente));
-      // *** met à jour l'input N° article même s'il y avait déjà une valeur ***
       const code = findAnyBarcode(selectedLotData);
       setNumeroArticle(String(code || ""));
     }
@@ -375,41 +417,49 @@ export default function Ventes() {
   const handleAddArticle = useCallback(
     (e) => {
       e?.preventDefault?.();
+
+      // anti double clic/scan < 400ms
+      const now = Date.now();
+      if (now - lastAddTsRef.current < 400) return;
+      lastAddTsRef.current = now;
+
       if (!produit || !quantite || (!prixUnitaire && prixUnitaire !== 0)) {
         setError("Veuillez remplir tous les champs obligatoires");
         return;
       }
 
-      let stockSource = null;
-      let maxQuantity = 0;
+      let selectedLotData = null;
+      let stockSource = "stock1"; // défaut
 
       if (selectedLot) {
-        const lotData = (availableLots || []).find((lot) => lot.id === selectedLot);
-        if (lotData) {
-          stockSource = { type: "lot", data: lotData };
-          maxQuantity = safeNumber(lotData.quantite);
-        }
-      } else {
-        const availableMed = (getAllAvailableMedicaments || []).find((m) => m.nom === produit);
-        if (availableMed && availableMed.hasLots) {
-          const firstLot = (availableLots || [])[0];
-          if (firstLot) {
-            stockSource = { type: "lot", data: firstLot };
-            maxQuantity = safeNumber(firstLot.quantite);
-          }
-        } else {
-          const medStock = (medicaments || []).find((m) => (m.nom || m.name) === produit);
-          if (medStock) {
-            stockSource = { type: "traditional", data: medStock };
-            maxQuantity = safeNumber(medStock.quantite);
-          }
-        }
+        selectedLotData = (availableLots || []).find((lot) => lot.id === selectedLot);
+      } else if (availableLots.length > 0) {
+        // Si lots présents mais non sélectionné → premier lot (FIFO UI)
+        selectedLotData = availableLots[0];
       }
 
-      if (!stockSource || maxQuantity < safeNumber(quantite)) {
-        setError(`Stock insuffisant ! Disponible: ${maxQuantity}`);
-        beepError();
-        return;
+      // Détection automatique du stock source
+      if (selectedLotData) {
+        stockSource = pickLotStock(selectedLotData);
+        
+        // Vérification de la disponibilité dans le bon stock
+        const stockDisponible = stockSource === "stock1" 
+          ? safeNumber(selectedLotData.stock1) 
+          : safeNumber(selectedLotData.stock2);
+        
+        if (stockDisponible < safeNumber(quantite)) {
+          setError(`Stock ${stockSource} insuffisant ! Disponible: ${stockDisponible}`);
+          beepError();
+          return;
+        }
+      } else {
+        // Pour les produits sans lots, on utilise le stock traditionnel
+        const medStock = getAllAvailableMedicaments.find((m) => m.nom === produit);
+        if (medStock && medStock.quantiteTotal < safeNumber(quantite)) {
+          setError(`Stock insuffisant ! Disponible: ${medStock.quantiteTotal}`);
+          beepError();
+          return;
+        }
       }
 
       const articleData = {
@@ -418,26 +468,21 @@ export default function Ventes() {
         prixUnitaire: safeNumber(prixUnitaire),
         remise: safeNumber(remiseArticle),
         numeroArticle: String(numeroArticle || ""),
-        stockSource,
+        opKey: newOpKey(),
+        stockSource: stockSource, // IMPORTANT: stockSource pour différencier les ventes
       };
 
-      if (stockSource.type === "lot") {
-        articleData.numeroLot = stockSource.data.numeroLot;
-        articleData.fournisseur = stockSource.data.fournisseur;
-        articleData.datePeremption = stockSource.data.datePeremption;
-        articleData.stockEntryId = stockSource.data.id;
-        // si pas de N° saisi, on récupère le code-barres du lot si présent
+      if (selectedLotData) {
+        articleData.numeroLot = selectedLotData.numeroLot;
+        articleData.fournisseur = selectedLotData.fournisseur;
+        articleData.datePeremption = selectedLotData.datePeremption;
+        articleData.stockEntryId = selectedLotData.id;
         if (!articleData.numeroArticle) {
-          articleData.numeroArticle = findAnyBarcode(stockSource.data) || "";
+          articleData.numeroArticle = findAnyBarcode(selectedLotData) || "";
         }
-      } else {
-        // si pas de N° saisi, on récupère le code-barres du produit si présent
-        if (!articleData.numeroArticle) {
-          const medStock = (medicaments || []).find((m) => (m.nom || m.name) === produit);
-          if (medStock) {
-            articleData.numeroArticle = findAnyBarcode(medStock) || "";
-          }
-        }
+      } else if (!articleData.numeroArticle) {
+        const medStock = (medicaments || []).find((m) => (m.nom || m.name) === produit);
+        if (medStock) articleData.numeroArticle = findAnyBarcode(medStock) || "";
       }
 
       setArticles((prev) => [...prev, articleData]);
@@ -460,9 +505,9 @@ export default function Ventes() {
       availableLots,
       getAllAvailableMedicaments,
       medicaments,
-      beepSuccess,
-      beepError,
       numeroArticle,
+      beepError,
+      beepSuccess,
     ]
   );
 
@@ -471,80 +516,8 @@ export default function Ventes() {
   };
 
   /* =====================
-  GESTION VENTES
+     Enregistrement ventes avec stockSource
   ===================== */
-  const updateStockOnSell = async (vente) => {
-    if (!user || !societeId) return;
-    for (const art of vente.articles || []) {
-      try {
-        if (art.stockSource?.type === "lot" && art.stockEntryId) {
-          const entryRef = doc(db, "societe", societeId, "stock_entries", art.stockEntryId);
-          const entrySnap = await getDoc(entryRef);
-          if (entrySnap.exists()) {
-            const currentEntry = entrySnap.data();
-            const newQuantity = Math.max(0, safeNumber(currentEntry.quantite) - safeNumber(art.quantite));
-            await updateDoc(entryRef, {
-              quantite: newQuantity,
-              modifiePar: user.uid,
-              modifieLe: Timestamp.now(),
-            });
-          }
-        } else {
-          const stockRef = collection(db, "societe", societeId, "stock");
-          const qy = query(stockRef, where("nom", "==", art.produit || ""));
-          const stockSnap = await getDocs(qy);
-          if (!stockSnap.empty) {
-            const docId = stockSnap.docs[0].id;
-            const current = stockSnap.docs[0].data();
-            const newQuantity = Math.max(0, safeNumber(current.quantite) - safeNumber(art.quantite));
-            await updateDoc(doc(db, "societe", societeId, "stock", docId), {
-              quantite: newQuantity,
-              modifiePar: user.uid,
-              modifieLe: Timestamp.now(),
-            });
-          }
-        }
-      } catch (error) {
-        console.error(`Erreur stock ${art.produit}:`, error);
-      }
-    }
-  };
-
-  const updateStockOnCancel = async (vente) => {
-    if (!user || !societeId) return;
-    for (const art of vente.articles || []) {
-      try {
-        if (art.stockEntryId) {
-          const entryRef = doc(db, "societe", societeId, "stock_entries", art.stockEntryId);
-          const entrySnap = await getDoc(entryRef);
-          if (entrySnap.exists()) {
-            const currentEntry = entrySnap.data();
-            await updateDoc(entryRef, {
-              quantite: safeNumber(currentEntry.quantite) + safeNumber(art.quantite),
-              modifiePar: user.uid,
-              modifieLe: Timestamp.now(),
-            });
-          }
-        } else {
-          const stockRef = collection(db, "societe", societeId, "stock");
-          const qy = query(stockRef, where("nom", "==", art.produit || ""));
-          const stockSnap = await getDocs(qy);
-          if (!stockSnap.empty) {
-            const docId = stockSnap.docs[0].id;
-            const current = stockSnap.docs[0].data();
-            await updateDoc(doc(db, "societe", societeId, "stock", docId), {
-              quantite: safeNumber(current.quantite) + safeNumber(art.quantite),
-              modifiePar: user.uid,
-              modifieLe: Timestamp.now(),
-            });
-          }
-        }
-      } catch (error) {
-        console.error(`Erreur restauration ${art.produit}:`, error);
-      }
-    }
-  };
-
   const handleAddVente = async (e) => {
     e.preventDefault();
     if (!user || !societeId || !client || !dateVente || articles.length === 0) {
@@ -553,67 +526,87 @@ export default function Ventes() {
     }
     setIsSaving(true);
     setError("");
+
     try {
-      const montantTotal = articles.reduce((sum, a) => sum + (safeNumber(a.prixUnitaire) * safeNumber(a.quantite) - safeNumber(a.remise)), 0);
+      const montantTotal = articles.reduce(
+        (sum, a) => sum + (safeNumber(a.prixUnitaire) * safeNumber(a.quantite) - safeNumber(a.remise)),
+        0
+      );
       const remiseTotal = articles.reduce((sum, a) => sum + safeNumber(a.remise), 0);
+
+      // Normaliser les articles avec opKey et garder stockSource
+      const normalizedArticles = articles.map(a => ({
+        ...a,
+        opKey: a?.opKey || newOpKey(),
+      }));
+
+      // Détermination du stock principal de la vente (majoritaire)
+      const stockCounts = { stock1: 0, stock2: 0 };
+      normalizedArticles.forEach(a => {
+        const source = a.stockSource || "stock1";
+        if (source === "stock1") stockCounts.stock1++;
+        else if (source === "stock2") stockCounts.stock2++;
+      });
+      
+      const ventePrincipalStock = stockCounts.stock1 >= stockCounts.stock2 ? "stock1" : "stock2";
+
+      // Sécuriser la date (accepte "YYYY-MM-DD")
+      const parsedDate = (() => {
+        const d = new Date(dateVente);
+        return isNaN(d.getTime()) ? new Date() : d;
+      })();
+
       const venteData = {
         client,
-        date: Timestamp.fromDate(new Date(dateVente)),
+        date: Timestamp.fromDate(parsedDate),
         statutPaiement,
         modePaiement,
-        articles: articles.map((a) => ({
-          produit: a.produit,
-          quantite: safeNumber(a.quantite),
-          prixUnitaire: safeNumber(a.prixUnitaire),
-          remise: safeNumber(a.remise),
-          numeroArticle: a.numeroArticle || null,
-          numeroLot: a.numeroLot || null,
-          fournisseur: a.fournisseur || null,
-          datePeremption: a.datePeremption || null,
-          stockEntryId: a.stockEntryId || null,
-          stockSourceType: a.stockSource?.type || null,
-        })),
+        articles: normalizedArticles, // Garde stockSource dans chaque article
         montantTotal,
         remiseTotal,
         notes: notesVente,
         updatedAt: Timestamp.now(),
-        updatedBy: user.email,
+        updatedBy: user.email || user.uid,
+        // IMPORTANT: Métadonnées de stock pour le dashboard
+        stockSource: ventePrincipalStock,
+        stock: ventePrincipalStock,
+        stockTag: ventePrincipalStock,
+        // Compteurs pour analytics
+        articlesStock1: stockCounts.stock1,
+        articlesStock2: stockCounts.stock2,
       };
 
-      let venteRef = null;
       if (isEditing && editId) {
-        const oldVente = ventes.find((v) => v.id === editId);
-        await updateStockOnCancel(oldVente);
         await updateDoc(doc(db, "societe", societeId, "ventes", editId), venteData);
-        venteRef = { id: editId };
-        await updateStockOnSell({ client, articles });
         setSuccess("Vente modifiée avec succès !");
       } else {
         venteData.createdAt = Timestamp.now();
-        venteData.createdBy = user.email;
+        venteData.createdBy = user.email || user.uid;
         const added = await addDoc(collection(db, "societe", societeId, "ventes"), venteData);
-        venteRef = added;
-        await updateStockOnSell({ client, articles });
+
+        if (statutPaiement === "payé") {
+          await addDoc(collection(db, "societe", societeId, "paiements"), {
+            docId: added.id,
+            montant: montantTotal,
+            mode: modePaiement,
+            type: "ventes",
+            date: Timestamp.now(),
+            createdBy: user.email || user.uid,
+            // Métadonnées de stock pour les paiements aussi
+            stockSource: ventePrincipalStock,
+            stock: ventePrincipalStock,
+          });
+        }
         setSuccess("Vente enregistrée avec succès !");
       }
 
-      if (statutPaiement === "payé" && venteRef) {
-        await addDoc(collection(db, "societe", societeId, "paiements"), {
-          docId: venteRef.id,
-          montant: montantTotal,
-          mode: modePaiement,
-          type: "ventes",
-          date: Timestamp.now(),
-          createdBy: user.email,
-        });
-      }
       resetForm();
       setTimeout(() => {
         setShowForm(false);
         setSuccess("");
-      }, 1500);
+      }, 1200);
     } catch (err) {
-      console.error("Erreur lors de l'enregistrement:", err);
+      console.error("Erreur enregistrement vente:", err);
       setError("Erreur lors de l'enregistrement de la vente");
     } finally {
       setIsSaving(false);
@@ -628,32 +621,23 @@ export default function Ventes() {
     setStatutPaiement(vente.statutPaiement || "payé");
     setModePaiement(vente.modePaiement || "Espèces");
     setNotesVente(vente.notes || "");
-
-    const reconstructed = (vente.articles || []).map((a) => ({
-      produit: a.produit,
-      quantite: safeNumber(a.quantite),
-      prixUnitaire: safeNumber(a.prixUnitaire),
-      remise: safeNumber(a.remise || 0),
-      numeroArticle: a.numeroArticle || "",
-      numeroLot: a.numeroLot || null,
-      fournisseur: a.fournisseur || null,
-      datePeremption: a.datePeremption || null,
-      stockEntryId: a.stockEntryId || null,
-      stockSource: a.stockEntryId
-        ? { type: "lot", data: (stockEntries || []).find((e) => e.id === a.stockEntryId) || {} }
-        : { type: "traditional", data: (medicaments || []).find((m) => (m.nom || m.name) === a.produit) || {} },
-    }));
-    setArticles(reconstructed);
+    setArticles(vente.articles || []);
     setShowForm(true);
   };
 
   const handleDeleteVente = async (vente) => {
-    if (!window.confirm(`Supprimer la vente de ${vente.client} ?`)) return;
+    if (
+      !window.confirm(
+        `Supprimer la vente de ${vente.client} ? ATTENTION : Le stock ne sera PAS restauré automatiquement par cette action.`
+      )
+    )
+      return;
     try {
-      await updateStockOnCancel(vente);
       await deleteDoc(doc(db, "societe", societeId, "ventes", vente.id));
-      setSuccess("Vente supprimée avec succès");
-      setTimeout(() => setSuccess(""), 2000);
+      setSuccess(
+        "Vente supprimée avec succès. Pensez à ajuster le stock manuellement si nécessaire."
+      );
+      setTimeout(() => setSuccess(""), 2400);
     } catch (err) {
       console.error("Erreur suppression:", err);
       setError("Erreur lors de la suppression");
@@ -666,153 +650,82 @@ export default function Ventes() {
   };
 
   /* =====================
-  IMPRESSION
+     Impression
   ===================== */
   const generateCachetHtml = () => {
     if (!parametres.afficherCachet) return "";
     const taille = parametres.tailleCachet || 120;
     if (parametres.typeCachet === "image" && parametres.cachetImage) {
-      return `         <div style="text-align: center; flex: 1;">           <img src="${parametres.cachetImage}" alt="Cachet"
-               style="max-width: ${taille}px; max-height: ${taille}px; border-radius: 8px;" />         </div>`;
+      return `<div style="text-align: center; flex: 1;"><img src="${parametres.cachetImage}" alt="Cachet" style="max-width: ${taille}px; max-height: ${taille}px; border-radius: 8px;" /></div>`;
     }
-    return `       <div style="text-align: center; flex: 1;">         <div style="display: inline-block; border: 3px solid #1976d2; color: #1976d2;
-                    border-radius: 50%; padding: 25px 40px; font-size: 16px; font-weight: bold;
-                    text-transform: uppercase; letter-spacing: 1px; background: rgba(25,118,210,.05);
-                    box-shadow: 0 4px 8px rgba(25,118,210,.2); transform: rotate(-5deg); max-width: ${taille}px;">
-          ${parametres.cachetTexte || "Cachet Société"}         </div>       </div>`;
+    return `<div style="text-align: center; flex: 1;"><div style="display: inline-block; border: 3px solid #1976d2; color: #1976d2; border-radius: 50%; padding: 25px 40px; font-size: 16px; font-weight: bold; text-transform: uppercase; letter-spacing: 1px; background: rgba(25,118,210,.05); box-shadow: 0 4px 8px rgba(25,118,210,.2); transform: rotate(-5deg); max-width: ${taille}px;">${parametres.cachetTexte || "Cachet Société"}</div></div>`;
   };
 
   const handlePrintVente = (vente) => {
     const articlesV = Array.isArray(vente.articles) ? vente.articles : [];
-    const total = vente.montantTotal ||
-      articlesV.reduce((s, a) => s + ((safeNumber(a.prixUnitaire) * safeNumber(a.quantite)) - safeNumber(a.remise)), 0);
+    const total =
+      vente.montantTotal ||
+      articlesV.reduce(
+        (s, a) => s + (safeNumber(a.prixUnitaire) * safeNumber(a.quantite) - safeNumber(a.remise)),
+        0
+      );
     const cachetHtml = generateCachetHtml();
-    const hasLotInfo = articlesV.some((a) => a.numeroLot || a.fournisseur || a.numeroArticle);
-
     const w = window.open("", "_blank");
     w.document.write(`
-<html>
-  <head>
-    <title>Bon de Vente N°${(vente.id || "").slice(-6).toUpperCase()}</title>
-    <style>
-      * { margin: 0; padding: 0; box-sizing: border-box; }
-      body { font-family: Arial, sans-serif; padding: 20px; }
-      .header { text-align: center; margin-bottom: 30px; padding: 20px; border-bottom: 3px solid #2563eb; }
-      .header h1 { color: #2563eb; margin-bottom: 10px; font-size: 24px; }
-      .info-section { display: flex; justify-content: space-between; margin-bottom: 30px; }
-      table { width: 100%; border-collapse: collapse; margin: 20px 0; }
-      th { background: #2563eb; color: white; padding: 12px; text-align: left; }
-      td { padding: 10px; border-bottom: 1px solid #e5e7eb; }
-      .lot-info { font-size: 11px; color: #6b7280; margin-top: 4px; padding: 4px; background: #f3f4f6; }
-      .totals { margin-top: 20px; padding: 20px; background: #2563eb; color: white; text-align: right; }
-      .signature-section { margin-top: 50px; display: flex; justify-content: space-between; }
-      .signature-box { text-align: center; width: 200px; }
-      .signature-line { border-bottom: 2px solid #333; margin-bottom: 8px; height: 50px; }
-      .footer { text-align: center; margin-top: 30px; padding: 20px; border-top: 2px solid #2563eb; }
-      ${hasLotInfo ? ".multi-lot-indicator { background: #dcfce7; color: #16a34a; padding: 8px 16px; border-radius: 20px; font-size: 14px; margin-top: 10px; display: inline-block; }" : ""}
-    </style>
-  </head>
-  <body>
-    <div class="header">
-      <h1>${parametres.entete}</h1>
-      <h2>BON DE VENTE N°${(vente.id || "").slice(-6).toUpperCase()}</h2>
-      ${hasLotInfo ? '<div class="multi-lot-indicator">Vente avec traçabilité</div>' : ''}
-    </div>
-
-    <div class="info-section">
-      <div>
-        <p><strong>Client:</strong> ${vente.client || ""}</p>
-        <p><strong>Date:</strong> ${formatDateSafe(vente.date)}</p>
-      </div>
-      <div>
-        <p><strong>Statut:</strong> ${vente.statutPaiement || ""}</p>
-        <p><strong>Mode:</strong> ${vente.modePaiement || "Espèces"}</p>
-      </div>
-    </div>
-
-    <table>
-      <thead>
-        <tr>
-          <th>Produit / Traçabilité</th>
-          <th>Quantité</th>
-          <th>Prix Unit.</th>
-          <th>Remise</th>
-          <th>Total</th>
-        </tr>
-      </thead>
-      <tbody>
-        ${articlesV
-          .map((a) => {
-            const isExpired = a.datePeremption && safeParseDate(a.datePeremption) < new Date();
-            const isExpSoon =
-              a.datePeremption &&
-              !isExpired &&
-              safeParseDate(a.datePeremption) <= new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
-            return `
-            <tr>
-              <td>
-                <strong>${a.produit || ""}</strong>
-                ${a.numeroArticle || a.numeroLot || a.fournisseur || a.datePeremption ? `
-                  <div class="lot-info">
-                    ${a.numeroArticle ? `<span style="background:#e0e7ff;color:#4f46e5;padding:2px 6px;border-radius:8px;font-size:10px;margin-right:4px;">N° article: ${a.numeroArticle}</span>` : ""}
-                    ${a.numeroLot ? `<span style="background:#dcfce7;color:#16a34a;padding:2px 6px;border-radius:8px;font-size:10px;margin-right:4px;">Lot: ${a.numeroLot}</span>` : ""}
-                    ${a.fournisseur ? `<span style="background:#dbeafe;color:#2563eb;padding:2px 6px;border-radius:8px;font-size:10px;margin-right:4px;">Fournisseur: ${a.fournisseur}</span>` : ""}
-                    ${a.datePeremption ? `
-                      <div style="margin-top:4px;">
-                        Expiration:
-                        <span style="color:${isExpired ? "#dc2626" : isExpSoon ? "#d97706" : "#6b7280"};font-weight:600;">
-                          ${formatDateSafe(a.datePeremption)}
-                          ${isExpired ? " ⚠️ EXPIRÉ" : isExpSoon ? " ⏰ Expire bientôt" : ""}
-                        </span>
-                      </div>` : ""}
-                  </div>` : ""}
-              </td>
-              <td>${safeNumber(a.quantite)}</td>
-              <td>${safeToFixed(a.prixUnitaire)} DH</td>
-              <td>${safeToFixed(a.remise)} DH</td>
-              <td style="font-weight:600;">${safeToFixed(safeNumber(a.prixUnitaire) * safeNumber(a.quantite) - safeNumber(a.remise))} DH</td>
-            </tr>`;
-          })
-          .join("")}
-      </tbody>
-    </table>
-
-    <div class="totals">
-      ${vente.remiseTotal ? `
-        <div style="margin-bottom:10px;">Sous-total: ${safeToFixed(total + safeNumber(vente.remiseTotal))} DH</div>
-        <div style="margin-bottom:10px;">Remise totale: -${safeToFixed(vente.remiseTotal)} DH</div>` : ""}
-      <div style="font-size:20px;font-weight:bold;">TOTAL: ${safeToFixed(total)} DH</div>
-    </div>
-
+    <html><head><title>Bon de Vente N°${(vente.id || "").slice(-6).toUpperCase()}</title><style>
+    *{margin:0;padding:0;box-sizing:border-box}body{font-family:Arial,sans-serif;padding:20px}
+    .header{text-align:center;margin-bottom:30px;padding:20px;border-bottom:3px solid #2563eb}
+    .header h1{color:#2563eb;margin-bottom:10px;font-size:24px}
+    .info-section{display:flex;justify-content:space-between;margin-bottom:30px}
+    table{width:100%;border-collapse:collapse;margin:20px 0}
+    th{background:#2563eb;color:#fff;padding:12px;text-align:left}
+    td{padding:10px;border-bottom:1px solid #e5e7eb}
+    .lot-info{font-size:11px;color:#6b7280;margin-top:4px;padding:4px;background:#f3f4f6}
+    .totals{margin-top:20px;padding:20px;background:#2563eb;color:#fff;text-align:right}
+    .signature-section{margin-top:50px;display:flex;justify-content:space-between}
+    .signature-box{text-align:center;width:200px}.signature-line{border-bottom:2px solid #333;margin-bottom:8px;height:50px}
+    .footer{text-align:center;margin-top:30px;padding:20px;border-top:2px solid #2563eb}
+    </style></head><body>
+    <div class="header"><h1>${parametres.entete}</h1><h2>BON DE VENTE N°${(vente.id || "").slice(-6).toUpperCase()}</h2></div>
+    <div class="info-section"><div><p><strong>Client:</strong> ${vente.client || ""}</p><p><strong>Date:</strong> ${formatDateSafe(vente.date)}</p></div><div><p><strong>Statut:</strong> ${vente.statutPaiement || ""}</p><p><strong>Mode:</strong> ${vente.modePaiement || "Espèces"}</p></div></div>
+    <table><thead><tr><th>Produit / Traçabilité</th><th>Qté</th><th>Prix Unit.</th><th>Remise</th><th>Total</th></tr></thead><tbody>
+    ${articlesV
+      .map((a) => {
+        const isExpired = a.datePeremption && safeParseDate(a.datePeremption) < new Date();
+        const stockBadge = a.stockSource ? 
+          `<span style="background:${a.stockSource === 'stock1' ? '#3b82f6' : '#10b981'};color:#fff;padding:2px 6px;border-radius:8px;font-size:10px;margin-right:4px;">${a.stockSource === 'stock1' ? 'S1' : 'S2'}</span>` : '';
+        
+        return `<tr><td><strong>${a.produit || ""}</strong>
+        ${
+          a.numeroArticle || a.numeroLot || a.fournisseur || a.datePeremption || a.stockSource
+            ? `<div class="lot-info">
+          ${stockBadge}
+          ${a.numeroArticle ? `<span style="background:#e0e7ff;color:#4f46e5;padding:2px 6px;border-radius:8px;font-size:10px;margin-right:4px;">N° article: ${a.numeroArticle}</span>` : ""}
+          ${a.numeroLot ? `<span style="background:#dcfce7;color:#16a34a;padding:2px 6px;border-radius:8px;font-size:10px;margin-right:4px;">Lot: ${a.numeroLot}</span>` : ""}
+          ${a.fournisseur ? `<span style="background:#dbeafe;color:#2563eb;padding:2px 6px;border-radius:8px;font-size:10px;margin-right:4px;">Fournisseur: ${a.fournisseur}</span>` : ""}
+          ${a.datePeremption ? `<div style="margin-top:4px;">Expiration: <span style="color:${isExpired ? "#dc2626" : "#6b7280"};font-weight:600;">${formatDateSafe(a.datePeremption)}${isExpired ? " ⚠️ EXPIRÉ" : ""}</span></div>` : ""}
+          </div>`
+            : ""
+        }
+        </td><td>${safeNumber(a.quantite)}</td><td>${safeToFixed(a.prixUnitaire)} DH</td><td>${safeToFixed(a.remise)} DH</td><td style="font-weight:600;">${safeToFixed(
+          safeNumber(a.prixUnitaire) * safeNumber(a.quantite) - safeNumber(a.remise)
+        )} DH</td></tr>`;
+      })
+      .join("")}
+    </tbody></table>
+    <div class="totals"><div style="font-size:20px;font-weight:bold;">TOTAL: ${safeToFixed(total)} DH</div></div>
     ${vente.notes ? `<div style="margin-top:20px;padding:15px;background:#fef3c7;border-left:5px solid #f59e0b;"><strong>Notes:</strong> ${vente.notes}</div>` : ""}
-
-    <div class="signature-section">
-      <div class="signature-box">
-        <div class="signature-line"></div>
-        <p>Signature Client</p>
-      </div>
-      ${cachetHtml}
-      <div class="signature-box">
-        <div class="signature-line"></div>
-        <p>Signature Vendeur</p>
-      </div>
-    </div>
-
-    <div class="footer">
-      <p>${parametres.pied}</p>
-      ${hasLotInfo ? '<p style="margin-top:10px;color:#16a34a;">Vente avec traçabilité multi-lots • Qualité et sécurité garanties</p>' : ''}
-      <p style="font-size:12px;color:#6b7280;margin-top:10px;">
-        Document imprimé le ${new Date().toLocaleString("fr-FR")} par ${user?.email || "Utilisateur"}
-      </p>
-    </div>
-  </body>
-</html>`);
+    <div class="signature-section"><div class="signature-box"><div class="signature-line"></div><p>Signature Client</p></div>${cachetHtml}<div class="signature-box"><div class="signature-line"></div><p>Signature Vendeur</p></div></div>
+    <div class="footer"><p>${parametres.pied}</p><p style="font-size:12px;color:#6b7280;margin-top:10px;">Document imprimé le ${new Date().toLocaleString(
+      "fr-FR"
+    )} par ${user?.email || "Utilisateur"}</p></div>
+    </body></html>`);
     w.document.close();
     w.print();
   };
 
   /* =====================
-  UTILITAIRES
+     Utils
   ===================== */
   const resetForm = () => {
     setClient("(passant)");
@@ -833,52 +746,19 @@ export default function Ventes() {
     setError("");
   };
 
-  const totalVenteCourante = useMemo(
-    () =>
-      articles.reduce(
-        (t, a) => t + (safeNumber(a.prixUnitaire) * safeNumber(a.quantite) - safeNumber(a.remise)),
-        0
-      ),
-    [articles]
-  );
-
-  const ventesFiltrees = useMemo(() => {
-    return ventes.filter((v) => {
-      let keep = true;
-      if (filterStatut && v.statutPaiement !== filterStatut) keep = false;
-      if (searchTerm) {
-        const s = searchTerm.toLowerCase();
-        const clientMatch = v.client?.toLowerCase().includes(s);
-        const produitMatch = v.articles?.some(
-          (a) =>
-            a.produit?.toLowerCase().includes(s) ||
-            (a.numeroLot || "").toString().toLowerCase().includes(s) ||
-            (a.numeroArticle || "").toString().toLowerCase().includes(s)
-        );
-        keep = keep && (clientMatch || produitMatch);
-      }
-      return keep;
-    });
-  }, [ventes, filterStatut, searchTerm]);
-
-  useEffect(() => {
-    if (!isEditing) resetForm();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
   /* =====================
-  DÉTECTION CODE-BARRES (wedge + caméra)
+     Scan code-barres
   ===================== */
   const onBarcodeDetected = useCallback(
     (barcode) => {
       try {
-        const isMatch = (obj) => barcodeFields.some((f) => String(obj?.[f] || "") === String(barcode));
+        const isMatch = (obj) => BARCODE_FIELDS.some((f) => String(obj?.[f] || "") === String(barcode));
 
-        // Remplir le champ "N° article"
-        setNumeroArticle(String(barcode || ""));
+        setNumeroArticle(String(barcode || "")); // Remplit le champ
 
-        // Priorité lots (stock_entries), sinon stock "traditionnel"
-        const fromEntry = (Array.isArray(stockEntries) ? stockEntries : []).find((p) => isMatch(p)) || null;
+        // Priorité lots
+        const fromEntry =
+          (Array.isArray(stockEntries) ? stockEntries : []).find((p) => isMatch(p)) || null;
         const fromMed = !fromEntry
           ? (Array.isArray(medicaments) ? medicaments : []).find((m) => isMatch(m))
           : null;
@@ -897,11 +777,11 @@ export default function Ventes() {
         if (pV > 0) setPrixUnitaire(pV);
 
         const lotsForProduct = (Array.isArray(stockEntries) ? stockEntries : []).filter(
-          (e) => (e.nom || e.name) === nom
+          (e) => (e.nom || e.name) === nom && (safeNumber(e.stock1) + safeNumber(e.stock2)) > 0
         );
         setAvailableLots(lotsForProduct || []);
 
-        // S'il n'y a qu'un seul lot, on le sélectionne automatiquement
+        // auto-sélection si un seul lot
         if (lotsForProduct?.length === 1) {
           setSelectedLot(lotsForProduct[0]?.id || lotsForProduct[0]?.numeroLot || "");
           const code = findAnyBarcode(lotsForProduct[0]) || "";
@@ -919,7 +799,7 @@ export default function Ventes() {
             } catch {}
           }, 40);
         } else if (multipleLots) {
-          setError("Plusieurs lots disponibles. Choisissez un lot avant l’ajout.");
+          setError("Plusieurs lots disponibles. Choisissez un lot avant l'ajout.");
           beepError();
         }
       } catch (e) {
@@ -931,14 +811,13 @@ export default function Ventes() {
     [stockEntries, medicaments, selectedLot, handleAddArticle, beepSuccess, beepError]
   );
 
-  // "keyboard wedge" (douchette USB)
+  // douchette USB (wedge)
   useEffect(() => {
     const opts = { minChars: 6, endKey: "Enter", timeoutMs: 250 };
     const state = { buf: "", timer: null };
 
     const onKeyDown = (e) => {
       if (e.ctrlKey || e.altKey || e.metaKey) return;
-      // Fin de scan
       if (e.key === opts.endKey) {
         const code = state.buf;
         state.buf = "";
@@ -946,7 +825,6 @@ export default function Ventes() {
         if (code && code.length >= opts.minChars) onBarcodeDetected(code);
         return;
       }
-      // Caractère imprimable
       if (e.key && e.key.length === 1) {
         state.buf += e.key;
         clearTimeout(state.timer);
@@ -966,7 +844,7 @@ export default function Ventes() {
   }, [onBarcodeDetected]);
 
   /* =====================
-  RENDU
+     Rendu (hooks déjà tous déclarés ci-dessus)
   ===================== */
   if (waiting) {
     return (
@@ -1000,9 +878,13 @@ export default function Ventes() {
               animation: "spin 1s linear infinite",
               margin: "0 auto 20px",
             }}
-          ></div>
-          <h3 style={{ margin: 0, fontSize: 18 }}>Chargement en cours...</h3> <style>
-{`@keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }`} </style> </div> </div>
+          />
+          <h3 style={{ margin: 0, fontSize: 18 }}>Chargement en cours...</h3>
+          <style>
+            {`@keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }`}
+          </style>
+        </div>
+      </div>
     );
   }
 
@@ -1029,7 +911,11 @@ export default function Ventes() {
           }}
         >
           <h3 style={{ margin: "0 0 10px", fontSize: 18 }}>Accès non autorisé</h3>
-          <p style={{ margin: 0, opacity: 0.9 }}>Utilisateur non connecté ou société non sélectionnée.</p> </div> </div>
+          <p style={{ margin: 0, opacity: 0.9 }}>
+            Utilisateur non connecté ou société non sélectionnée.
+          </p>
+        </div>
+      </div>
     );
   }
 
@@ -1062,976 +948,999 @@ export default function Ventes() {
             flexWrap: "wrap",
             gap: 20,
           }}
-        > <div>
-          <h1
-            style={{
-              margin: 0,
-              fontSize: 32,
-              fontWeight: 800,
-              background: "linear-gradient(135deg, #667eea, #764ba2)",
-              WebkitBackgroundClip: "text",
-              WebkitTextFillColor: "transparent",
-              backgroundClip: "text",
-            }}
-          >
-            Gestion des Ventes </h1>
-          <p style={{ margin: "8px 0 0", color: "#6b7280", fontSize: 16 }}>
-            Système de vente multi-lots avec traçabilité complète </p> </div>
-
-        <button
-          onClick={() => {
-            setShowForm((v) => !v);
-            if (!showForm) resetForm();
-          }}
-          style={{
-            background: showForm
-              ? "linear-gradient(135deg, #ef4444, #dc2626)"
-              : "linear-gradient(135deg, #3b82f6, #2563eb)",
-            color: "white",
-            border: "none",
-            padding: "16px 32px",
-            borderRadius: 16,
-            fontSize: 16,
-            fontWeight: 600,
-            cursor: "pointer",
-            transition: "all 0.3s ease",
-            boxShadow: "0 8px 25px rgba(59, 130, 246, 0.3)",
-            transform: "translateY(0)",
-          }}
-          onMouseEnter={(e) => {
-            e.target.style.transform = "translateY(-2px)";
-            e.target.style.boxShadow = "0 12px 35px rgba(59, 130, 246, 0.4)";
-          }}
-          onMouseLeave={(e) => {
-            e.target.style.transform = "translateY(0)";
-            e.target.style.boxShadow = "0 8px 25px rgba(59, 130, 246, 0.3)";
-          }}
         >
-          {showForm ? "✕ Fermer" : "+ Nouvelle Vente"}
-        </button>
-      </div>
-    </div>
-
-    {/* Notifications */}
-    {error && (
-      <div
-        style={{
-          background: "rgba(254, 226, 226, 0.95)",
-          backdropFilter: "blur(10px)",
-          color: "#dc2626",
-          padding: 20,
-          borderRadius: 16,
-          marginBottom: 24,
-          border: "1px solid rgba(220, 38, 38, 0.2)",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          boxShadow: "0 8px 25px rgba(220, 38, 38, 0.1)",
-        }}
-      >
-        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-          <div
-            style={{
-              width: 24,
-              height: 24,
-              borderRadius: "50%",
-              background: "#dc2626",
-              color: "white",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              fontSize: 14,
-              fontWeight: 600,
-            }}
-          >
-            !
-          </div>
-          <span style={{ fontSize: 16, fontWeight: 500 }}>{error}</span>
-        </div>
-        <button
-          onClick={() => setError("")}
-          style={{
-            background: "none",
-            border: "none",
-            color: "#dc2626",
-            cursor: "pointer",
-            fontSize: 24,
-            padding: 4,
-            borderRadius: 8,
-            transition: "background 0.2s ease",
-          }}
-          onMouseEnter={(e) => (e.target.style.background = "rgba(220, 38, 38, 0.1)")}
-          onMouseLeave={(e) => (e.target.style.background = "none")}
-        >
-          ×
-        </button>
-      </div>
-    )}
-
-    {success && (
-      <div
-        style={{
-          background: "rgba(220, 252, 231, 0.95)",
-          backdropFilter: "blur(10px)",
-          color: "#16a34a",
-          padding: 20,
-          borderRadius: 16,
-          marginBottom: 24,
-          border: "1px solid rgba(22, 163, 74, 0.2)",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          boxShadow: "0 8px 25px rgba(22, 163, 74, 0.1)",
-        }}
-      >
-        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-          <div
-            style={{
-              width: 24,
-              height: 24,
-              borderRadius: "50%",
-              background: "#16a34a",
-              color: "white",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              fontSize: 14,
-              fontWeight: 600,
-            }}
-          >
-            ✓
-          </div>
-          <span style={{ fontSize: 16, fontWeight: 500 }}>{success}</span>
-        </div>
-        <button
-          onClick={() => setSuccess("")}
-          style={{
-            background: "none",
-            border: "none",
-            color: "#16a34a",
-            cursor: "pointer",
-            fontSize: 24,
-            padding: 4,
-            borderRadius: 8,
-            transition: "background 0.2s ease",
-          }}
-          onMouseEnter={(e) => (e.target.style.background = "rgba(22, 163, 74, 0.1)")}
-          onMouseLeave={(e) => (e.target.style.background = "none")}
-        >
-          ×
-        </button>
-      </div>
-    )}
-
-    {/* Formulaire */}
-    {showForm && (
-      <div
-        style={{
-          background: "rgba(255, 255, 255, 0.95)",
-          backdropFilter: "blur(20px)",
-          borderRadius: 24,
-          padding: 32,
-          marginBottom: 30,
-          border: "1px solid rgba(255, 255, 255, 0.2)",
-          boxShadow: "0 20px 40px rgba(0, 0, 0, 0.1)",
-        }}
-      >
-        <h2
-          style={{
-            margin: "0 0 32px",
-            fontSize: 28,
-            fontWeight: 700,
-            color: "#1f2937",
-            textAlign: "center",
-          }}
-        >
-          {isEditing ? "Modifier la vente" : "Nouvelle vente multi-lots"}
-        </h2>
-
-        {/* Zone scan */}
-        <div style={{ display: "flex", gap: 8, alignItems: "center", margin: "6px 0 18px" }}>
-          <button
-            type="button"
-            className="btn btn-secondary"
-            onClick={() => setShowScanner(true)}
-            style={{ borderRadius: 10, padding: "8px 12px", cursor: "pointer" }}
-          >
-            📷 Scanner avec caméra
-          </button>
-          <CameraBarcodeInlineModal
-            open={showScanner}
-            onClose={() => setShowScanner(false)}
-            onDetected={(code) => {
-              onBarcodeDetected(code);
-              setShowScanner(false);
-            }}
-          />
-          <span style={{ color: "#6b7280", fontSize: 13 }}>
-            (Ou scannez avec votre douchette : validation via <b>Entrée</b>)
-          </span>
-        </div>
-
-        {/* Section ajout d'articles */}
-        <div
-          style={{
-            background: "linear-gradient(135deg, #f0f9ff, #e0f2fe)",
-            borderRadius: 20,
-            padding: 24,
-            marginBottom: 24,
-            border: "2px solid #0ea5e9",
-          }}
-        >
-          <h3 style={{ margin: "0 0 24px", color: "#0c4a6e", fontSize: 20, fontWeight: 600 }}>
-            Ajouter des articles
-          </h3>
-
-          <form onSubmit={handleAddArticle}>
-            <div
+          <div>
+            <h1
               style={{
-                display: "grid",
-                gridTemplateColumns: "repeat(auto-fit, minmax(250px, 1fr))",
-                gap: 20,
-                marginBottom: 24,
+                margin: 0,
+                fontSize: 32,
+                fontWeight: 800,
+                background: "linear-gradient(135deg, #667eea, #764ba2)",
+                WebkitBackgroundClip: "text",
+                WebkitTextFillColor: "transparent",
+                backgroundClip: "text",
               }}
             >
-              <div>
-                <label
-                  style={{
-                    display: "block",
-                    fontSize: 14,
-                    fontWeight: 600,
-                    color: "#374151",
-                    marginBottom: 8,
-                  }}
-                >
-                  Médicament *
-                </label>
-                <select
-                  value={produit}
-                  onChange={(e) => handleProduitChange(e.target.value)}
-                  required
-                  style={{
-                    width: "100%",
-                    padding: "12px 16px",
-                    borderRadius: 12,
-                    border: "2px solid #e5e7eb",
-                    fontSize: 16,
-                    background: "white",
-                    transition: "all 0.2s ease",
-                    outline: "none",
-                  }}
-                  onFocus={(e) => (e.target.style.borderColor = "#3b82f6")}
-                  onBlur={(e) => (e.target.style.borderColor = "#e5e7eb")}
-                >
-                  <option value="">-- Sélectionner un médicament --</option>
-                  {getAllAvailableMedicaments.map((m) => (
-                    <option key={m.nom} value={m.nom}>
-                      {m.nom} ({m.hasLots ? "Lots" : "Stock"}: {m.quantiteTotal})
-                    </option>
-                  ))}
-                </select>
-              </div>
+              Gestion des Ventes
+            </h1>
+            <p style={{ margin: "8px 0 0", color: "#6b7280", fontSize: 16 }}>
+              Système de vente multi-lots.
+            </p>
+          </div>
 
-              <div>
-                <label
-                  style={{
-                    display: "block",
-                    fontSize: 14,
-                    fontWeight: 600,
-                    color: "#374151",
-                    marginBottom: 8,
-                  }}
-                >
-                  Quantité *
-                </label>
-                <input
-                  type="number"
-                  value={quantite}
-                  onChange={(e) => setQuantite(e.target.value)}
-                  required
-                  min={1}
-                  style={{
-                    width: "100%",
-                    padding: "12px 16px",
-                    borderRadius: 12,
-                    border: "2px solid #e5e7eb",
-                    fontSize: 16,
-                    background: "white",
-                    transition: "all 0.2s ease",
-                    outline: "none",
-                  }}
-                  onFocus={(e) => (e.target.style.borderColor = "#3b82f6")}
-                  onBlur={(e) => (e.target.style.borderColor = "#e5e7eb")}
-                />
-              </div>
-
-              <div>
-                <label
-                  style={{
-                    display: "block",
-                    fontSize: 14,
-                    fontWeight: 600,
-                    color: "#374151",
-                    marginBottom: 8,
-                  }}
-                >
-                  Prix unitaire (DH) *
-                </label>
-                <input
-                  type="number"
-                  value={prixUnitaire}
-                  onChange={(e) => setPrixUnitaire(e.target.value)}
-                  required
-                  min={0}
-                  step="0.01"
-                  style={{
-                    width: "100%",
-                    padding: "12px 16px",
-                    borderRadius: 12,
-                    border: "2px solid #e5e7eb",
-                    fontSize: 16,
-                    background: "white",
-                    transition: "all 0.2s ease",
-                    outline: "none",
-                  }}
-                  onFocus={(e) => (e.target.style.borderColor = "#3b82f6")}
-                  onBlur={(e) => (e.target.style.borderColor = "#e5e7eb")}
-                />
-              </div>
-
-              <div>
-                <label
-                  style={{
-                    display: "block",
-                    fontSize: 14,
-                    fontWeight: 600,
-                    color: "#374151",
-                    marginBottom: 8,
-                  }}
-                >
-                  Remise (DH)
-                </label>
-                <input
-                  type="number"
-                  value={remiseArticle}
-                  onChange={(e) => setRemiseArticle(e.target.value)}
-                  min={0}
-                  step="0.01"
-                  style={{
-                    width: "100%",
-                    padding: "12px 16px",
-                    borderRadius: 12,
-                    border: "2px solid #e5e7eb",
-                    fontSize: 16,
-                    background: "white",
-                    transition: "all 0.2s ease",
-                    outline: "none",
-                  }}
-                  onFocus={(e) => (e.target.style.borderColor = "#3b82f6")}
-                  onBlur={(e) => (e.target.style.borderColor = "#e5e7eb")}
-                />
-              </div>
-
-              {/* N° article (code-barres) */}
-              <div>
-                <label
-                  style={{
-                    display: "block",
-                    fontSize: 14,
-                    fontWeight: 600,
-                    color: "#374151",
-                    marginBottom: 8,
-                  }}
-                >
-                  N° article (code-barres) — optionnel
-                </label>
-                <input
-                  type="text"
-                  value={numeroArticle}
-                  onChange={(e) => setNumeroArticle(e.target.value)}
-                  placeholder="Scannez ou saisissez le code-barres"
-                  style={{
-                    width: "100%",
-                    padding: "12px 16px",
-                    borderRadius: 12,
-                    border: "2px solid #e5e7eb",
-                    fontSize: 16,
-                    background: "white",
-                    transition: "all 0.2s ease",
-                    outline: "none",
-                  }}
-                  onFocus={(e) => (e.target.style.borderColor = "#3b82f6")}
-                  onBlur={(e) => (e.target.style.borderColor = "#e5e7eb")}
-                />
-              </div>
-            </div>
-
-            {/* Sélection des lots */}
-            {availableLots.length > 0 && (
-              <div style={{ marginBottom: 24 }}>
-                <label
-                  style={{
-                    display: "block",
-                    fontSize: 16,
-                    fontWeight: 600,
-                    color: "#374151",
-                    marginBottom: 16,
-                  }}
-                >
-                  Sélectionner un lot spécifique (FIFO recommandé)
-                </label>
-                <div
-                  style={{
-                    display: "grid",
-                    gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))",
-                    gap: 16,
-                  }}
-                >
-                  {availableLots.map((lot) => {
-                    const lotDate = safeParseDate(lot.datePeremption);
-                    const isExpired = lotDate && lotDate < new Date();
-                    const isExpSoon = lotDate && !isExpired && lotDate <= new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
-                    return (
-                      <div
-                        key={lot.id}
-                        onClick={() => handleLotSelection(lot.id)}
-                        style={{
-                          padding: 16,
-                          borderRadius: 16,
-                          cursor: "pointer",
-                          transition: "all 0.3s ease",
-                          border: selectedLot === lot.id ? "3px solid #10b981" : "2px solid #e5e7eb",
-                          background:
-                            selectedLot === lot.id
-                              ? "linear-gradient(135deg, #dcfce7, #bbf7d0)"
-                              : isExpired
-                              ? "linear-gradient(135deg, #fee2e2, #fecaca)"
-                              : isExpSoon
-                              ? "linear-gradient(135deg, #fef3c7, #fed7aa)"
-                              : "linear-gradient(135deg, #f9fafb, #f3f4f6)",
-                          transform: selectedLot === lot.id ? "scale(1.02)" : "scale(1)",
-                          boxShadow:
-                            selectedLot === lot.id
-                              ? "0 12px 25px rgba(16, 185, 129, 0.2)"
-                              : "0 4px 12px rgba(0, 0, 0, 0.05)",
-                        }}
-                      >
-                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-                          <span style={{ fontWeight: 700, fontSize: 16, color: "#1f2937" }}>Lot: {lot.numeroLot}</span>
-                          <span
-                            style={{
-                              background: selectedLot === lot.id ? "#10b981" : "#6b7280",
-                              color: "white",
-                              padding: "4px 12px",
-                              borderRadius: 20,
-                              fontSize: 12,
-                              fontWeight: 600,
-                            }}
-                          >
-                            Qté: {lot.quantite}
-                          </span>
-                        </div>
-                        <div style={{ fontSize: 14, color: "#6b7280", marginBottom: 8 }}>
-                          <span
-                            style={{
-                              background: "#dbeafe",
-                              color: "#2563eb",
-                              padding: "2px 8px",
-                              borderRadius: 12,
-                              marginRight: 8,
-                              fontSize: 12,
-                              fontWeight: 500,
-                            }}
-                          >
-                            {lot.fournisseur}
-                          </span>
-                          <span
-                            style={{
-                              background: "#f3e8ff",
-                              color: "#7c3aed",
-                              padding: "2px 8px",
-                              borderRadius: 12,
-                              fontSize: 12,
-                              fontWeight: 600,
-                            }}
-                          >
-                            {safeToFixed(lot.prixVente)} DH
-                          </span>
-                        </div>
-                        <div
-                          style={{
-                            fontSize: 13,
-                            fontWeight: 600,
-                            color: isExpired ? "#dc2626" : isExpSoon ? "#d97706" : "#16a34a",
-                          }}
-                        >
-                          Exp: {formatDateSafe(lot.datePeremption)}
-                          {isExpired && " ⚠️ EXPIRÉ"}
-                          {isExpSoon && " ⏰ Expire bientôt"}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
-
-            <div style={{ display: "flex", justifyContent: "center" }}>
-              <button
-                type="submit"
-                disabled={isSaving}
-                style={{
-                  background: "linear-gradient(135deg, #10b981, #059669)",
-                  color: "white",
-                  border: "none",
-                  padding: "14px 32px",
-                  borderRadius: 16,
-                  fontSize: 16,
-                  fontWeight: 600,
-                  cursor: isSaving ? "not-allowed" : "pointer",
-                  opacity: isSaving ? 0.7 : 1,
-                  transition: "all 0.3s ease",
-                  boxShadow: "0 8px 25px rgba(16, 185, 129, 0.3)",
-                  transform: "translateY(0)",
-                }}
-                onMouseEnter={(e) => {
-                  if (!isSaving) {
-                    e.target.style.transform = "translateY(-2px)";
-                    e.target.style.boxShadow = "0 12px 35px rgba(16, 185, 129, 0.4)";
-                  }
-                }}
-                onMouseLeave={(e) => {
-                  e.target.style.transform = "translateY(0)";
-                  e.target.style.boxShadow = "0 8px 25px rgba(16, 185, 129, 0.3)";
-                }}
-              >
-                {isSaving ? "Ajout..." : "Ajouter l'article"}
-              </button>
-            </div>
-          </form>
+          <button
+            onClick={() => {
+              setShowForm((v) => !v);
+              if (!showForm) resetForm();
+            }}
+            style={{
+              background: showForm
+                ? "linear-gradient(135deg, #ef4444, #dc2626)"
+                : "linear-gradient(135deg, #3b82f6, #2563eb)",
+              color: "white",
+              border: "none",
+              padding: "16px 32px",
+              borderRadius: 16,
+              fontSize: 16,
+              fontWeight: 600,
+              cursor: "pointer",
+              transition: "all 0.3s ease",
+              boxShadow: "0 8px 25px rgba(59, 130, 246, 0.3)",
+              transform: "translateY(0)",
+            }}
+            onMouseEnter={(e) => {
+              e.target.style.transform = "translateY(-2px)";
+              e.target.style.boxShadow = "0 12px 35px rgba(59, 130, 246, 0.4)";
+            }}
+            onMouseLeave={(e) => {
+              e.target.style.transform = "translateY(0)";
+              e.target.style.boxShadow = "0 8px 25px rgba(59, 130, 246, 0.3)";
+            }}
+          >
+            {showForm ? "✕ Fermer" : "+ Nouvelle Vente"}
+          </button>
         </div>
+      </div>
 
-        {/* Liste des articles */}
-        {articles.length > 0 && (
+      {/* Notifications */}
+      {error && (
+        <div
+          style={{
+            background: "rgba(254, 226, 226, 0.95)",
+            backdropFilter: "blur(10px)",
+            color: "#dc2626",
+            padding: 20,
+            borderRadius: 16,
+            marginBottom: 24,
+            border: "1px solid rgba(220, 38, 38, 0.2)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            boxShadow: "0 8px 25px rgba(220, 38, 38, 0.1)",
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <div
+              style={{
+                width: 24,
+                height: 24,
+                borderRadius: "50%",
+                background: "#dc2626",
+                color: "white",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                fontSize: 14,
+                fontWeight: 600,
+              }}
+            >
+              !
+            </div>
+            <span style={{ fontSize: 16, fontWeight: 500 }}>{error}</span>
+          </div>
+          <button
+            onClick={() => setError("")}
+            style={{
+              background: "none",
+              border: "none",
+              color: "#dc2626",
+              cursor: "pointer",
+              fontSize: 24,
+              padding: 4,
+              borderRadius: 8,
+              transition: "background 0.2s ease",
+            }}
+            onMouseEnter={(e) => (e.target.style.background = "rgba(220, 38, 38, 0.1)")}
+            onMouseLeave={(e) => (e.target.style.background = "none")}
+          >
+            ×
+          </button>
+        </div>
+      )}
+
+      {success && (
+        <div
+          style={{
+            background: "rgba(220, 252, 231, 0.95)",
+            backdropFilter: "blur(10px)",
+            color: "#16a34a",
+            padding: 20,
+            borderRadius: 16,
+            marginBottom: 24,
+            border: "1px solid rgba(22, 163, 74, 0.2)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            boxShadow: "0 8px 25px rgba(22, 163, 74, 0.1)",
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <div
+              style={{
+                width: 24,
+                height: 24,
+                borderRadius: "50%",
+                background: "#16a34a",
+                color: "white",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                fontSize: 14,
+                fontWeight: 600,
+              }}
+            >
+              ✓
+            </div>
+            <span style={{ fontSize: 16, fontWeight: 500 }}>{success}</span>
+          </div>
+          <button
+            onClick={() => setSuccess("")}
+            style={{
+              background: "none",
+              border: "none",
+              color: "#16a34a",
+              cursor: "pointer",
+              fontSize: 24,
+              padding: 4,
+              borderRadius: 8,
+              transition: "background 0.2s ease",
+            }}
+            onMouseEnter={(e) => (e.target.style.background = "rgba(22, 163, 74, 0.1)")}
+            onMouseLeave={(e) => (e.target.style.background = "none")}
+          >
+            ×
+          </button>
+        </div>
+      )}
+
+      {/* Formulaire */}
+      {showForm && (
+        <div
+          style={{
+            background: "rgba(255, 255, 255, 0.95)",
+            backdropFilter: "blur(20px)",
+            borderRadius: 24,
+            padding: 32,
+            marginBottom: 30,
+            border: "1px solid rgba(255, 255, 255, 0.2)",
+            boxShadow: "0 20px 40px rgba(0, 0, 0, 0.1)",
+          }}
+        >
+          <h2
+            style={{
+              margin: "0 0 32px",
+              fontSize: 28,
+              fontWeight: 700,
+              color: "#1f2937",
+              textAlign: "center",
+            }}
+          >
+            {isEditing ? "Modifier la vente" : "Nouvelle vente"}
+          </h2>
+
+          {/* Zone scan */}
+          <div style={{ display: "flex", gap: 8, alignItems: "center", margin: "6px 0 18px" }}>
+            <button
+              type="button"
+              onClick={() => setShowScanner(true)}
+              style={{ borderRadius: 10, padding: "8px 12px", cursor: "pointer" }}
+            >
+              📷 Scanner avec caméra
+            </button>
+            <CameraBarcodeInlineModal
+              open={showScanner}
+              onClose={() => setShowScanner(false)}
+              onDetected={(code) => {
+                onBarcodeDetected(code);
+                setShowScanner(false);
+              }}
+            />
+            <span style={{ color: "#6b7280", fontSize: 13 }}>
+              (Ou scannez avec votre douchette : validation via <b>Entrée</b>)
+            </span>
+          </div>
+
+          {/* Ajout d'articles */}
           <div
             style={{
-              background: "linear-gradient(135deg, #fff7ed, #fed7aa)",
+              background: "linear-gradient(135deg, #f0f9ff, #e0f2fe)",
               borderRadius: 20,
               padding: 24,
               marginBottom: 24,
-              border: "2px solid #f97316",
+              border: "2px solid #0ea5e9",
             }}
           >
-            <h3
-              style={{
-                margin: "0 0 20px",
-                color: "#c2410c",
-                fontSize: 20,
-                fontWeight: 600,
-                display: "flex",
-                alignItems: "center",
-                gap: 8,
-              }}
-            >
-              Articles de la vente ({articles.length})
+            <h3 style={{ margin: "0 0 24px", color: "#0c4a6e", fontSize: 20, fontWeight: 600 }}>
+              Ajouter des articles (détection automatique du stock)
             </h3>
 
-            <div style={{ background: "white", borderRadius: 16, overflow: "hidden", boxShadow: "0 8px 25px rgba(0, 0, 0, 0.1)" }}>
-              <div style={{ overflowX: "auto" }}>
-                <table style={{ width: "100%", minWidth: 600, borderCollapse: "collapse" }}>
-                  <thead>
-                    <tr style={{ background: "linear-gradient(135deg, #f97316, #ea580c)", color: "white" }}>
-                      <th style={{ padding: 16, textAlign: "left", fontWeight: 600, fontSize: 14, letterSpacing: "0.5px" }}>
-                        Produit / Traçabilité
-                      </th>
-                      <th style={{ padding: 16, textAlign: "center", fontWeight: 600, fontSize: 14 }}>Qté</th>
-                      <th style={{ padding: 16, textAlign: "right", fontWeight: 600, fontSize: 14 }}>Prix unit.</th>
-                      <th style={{ padding: 16, textAlign: "right", fontWeight: 600, fontSize: 14 }}>Remise</th>
-                      <th style={{ padding: 16, textAlign: "right", fontWeight: 600, fontSize: 14 }}>Total</th>
-                      <th style={{ padding: 16, textAlign: "center", fontWeight: 600, fontSize: 14, width: 60 }}>Action</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {articles.map((a, i) => (
-                      <tr
-                        key={i}
-                        style={{ borderBottom: "1px solid #f3f4f6", transition: "background 0.2s ease" }}
-                        onMouseEnter={(e) => (e.target.closest("tr").style.background = "#fafafa")}
-                        onMouseLeave={(e) => (e.target.closest("tr").style.background = "white")}
-                      >
-                        <td style={{ padding: 16 }}>
-                          <div style={{ fontWeight: 600, color: "#1f2937", marginBottom: 4 }}>{a.produit}</div>
-                          {(a.numeroArticle || a.numeroLot || a.fournisseur || a.datePeremption) && (
-                            <div
-                              style={{
-                                fontSize: 12,
-                                color: "#6b7280",
-                                background: "#f8fafc",
-                                padding: 8,
-                                borderRadius: 8,
-                                border: "1px solid #e5e7eb",
-                              }}
-                            >
-                              {a.numeroArticle && (
-                                <span
-                                  style={{
-                                    background: "#e0e7ff",
-                                    color: "#4f46e5",
-                                    padding: "2px 6px",
-                                    borderRadius: 8,
-                                    fontSize: 11,
-                                    fontWeight: 600,
-                                    marginRight: 6,
-                                  }}
-                                >
-                                  N° article: {a.numeroArticle}
-                                </span>
-                              )}
-                              {a.numeroLot && (
-                                <span
-                                  style={{
-                                    background: "#dcfce7",
-                                    color: "#16a34a",
-                                    padding: "2px 6px",
-                                    borderRadius: 8,
-                                    fontSize: 11,
-                                    fontWeight: 500,
-                                    marginRight: 6,
-                                  }}
-                                >
-                                  Lot: {a.numeroLot}
-                                </span>
-                              )}
-                              {a.fournisseur && (
-                                <span
-                                  style={{
-                                    background: "#dbeafe",
-                                    color: "#2563eb",
-                                    padding: "2px 6px",
-                                    borderRadius: 8,
-                                    fontSize: 11,
-                                    fontWeight: 500,
-                                    marginRight: 6,
-                                  }}
-                                >
-                                  {a.fournisseur}
-                                </span>
-                              )}
-                              {a.datePeremption && (
-                                <div style={{ marginTop: 4, fontSize: 11 }}>Exp: {formatDateSafe(a.datePeremption)}</div>
-                              )}
-                            </div>
-                          )}
-                        </td>
-                        <td style={{ padding: 16, textAlign: "center", fontWeight: 600, fontSize: 16 }}>
-                          {safeNumber(a.quantite)}
-                        </td>
-                        <td style={{ padding: 16, textAlign: "right", fontWeight: 500, fontSize: 15 }}>
-                          {safeToFixed(a.prixUnitaire)} DH
-                        </td>
-                        <td
+            <form onSubmit={handleAddArticle}>
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(auto-fit, minmax(250px, 1fr))",
+                  gap: 20,
+                  marginBottom: 24,
+                }}
+              >
+                <div>
+                  <label style={{ display: "block", fontSize: 14, fontWeight: 600, color: "#374151", marginBottom: 8 }}>
+                    Médicament *
+                  </label>
+                  <select
+                    value={produit}
+                    onChange={(e) => handleProduitChange(e.target.value)}
+                    required
+                    style={{
+                      width: "100%",
+                      padding: "12px 16px",
+                      borderRadius: 12,
+                      border: "2px solid #e5e7eb",
+                      fontSize: 16,
+                      background: "white",
+                      transition: "all 0.2s ease",
+                      outline: "none",
+                    }}
+                    onFocus={(e) => (e.target.style.borderColor = "#3b82f6")}
+                    onBlur={(e) => (e.target.style.borderColor = "#e5e7eb")}
+                  >
+                    <option value="">-- Sélectionner un médicament --</option>
+                    {getAllAvailableMedicaments.map((m) => (
+                      <option key={m.nom} value={m.nom}>
+                        {m.nom} ({m.hasLots ? "Lots" : "Stock"}: {m.quantiteTotal})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label style={{ display: "block", fontSize: 14, fontWeight: 600, color: "#374151", marginBottom: 8 }}>
+                    Quantité *
+                  </label>
+                  <input
+                    type="number"
+                    value={quantite}
+                    onChange={(e) => setQuantite(e.target.value)}
+                    required
+                    min={1}
+                    style={{
+                      width: "100%",
+                      padding: "12px 16px",
+                      borderRadius: 12,
+                      border: "2px solid #e5e7eb",
+                      fontSize: 16,
+                      background: "white",
+                      transition: "all 0.2s ease",
+                      outline: "none",
+                    }}
+                    onFocus={(e) => (e.target.style.borderColor = "#3b82f6")}
+                    onBlur={(e) => (e.target.style.borderColor = "#e5e7eb")}
+                  />
+                </div>
+
+                <div>
+                  <label style={{ display: "block", fontSize: 14, fontWeight: 600, color: "#374151", marginBottom: 8 }}>
+                    Prix unitaire (DH) *
+                  </label>
+                  <input
+                    type="number"
+                    value={prixUnitaire}
+                    onChange={(e) => setPrixUnitaire(e.target.value)}
+                    required
+                    min={0}
+                    step="0.01"
+                    style={{
+                      width: "100%",
+                      padding: "12px 16px",
+                      borderRadius: 12,
+                      border: "2px solid #e5e7eb",
+                      fontSize: 16,
+                      background: "white",
+                      transition: "all 0.2s ease",
+                      outline: "none",
+                    }}
+                    onFocus={(e) => (e.target.style.borderColor = "#3b82f6")}
+                    onBlur={(e) => (e.target.style.borderColor = "#e5e7eb")}
+                  />
+                </div>
+
+                <div>
+                  <label style={{ display: "block", fontSize: 14, fontWeight: 600, color: "#374151", marginBottom: 8 }}>
+                    Remise (DH)
+                  </label>
+                  <input
+                    type="number"
+                    value={remiseArticle}
+                    onChange={(e) => setRemiseArticle(e.target.value)}
+                    min={0}
+                    step="0.01"
+                    style={{
+                      width: "100%",
+                      padding: "12px 16px",
+                      borderRadius: 12,
+                      border: "2px solid #e5e7eb",
+                      fontSize: 16,
+                      background: "white",
+                      transition: "all 0.2s ease",
+                      outline: "none",
+                    }}
+                    onFocus={(e) => (e.target.style.borderColor = "#3b82f6")}
+                    onBlur={(e) => (e.target.style.borderColor = "#e5e7eb")}
+                  />
+                </div>
+
+                <div>
+                  <label style={{ display: "block", fontSize: 14, fontWeight: 600, color: "#374151", marginBottom: 8 }}>
+                    N° article (code-barres) — optionnel
+                  </label>
+                  <input
+                    type="text"
+                    value={numeroArticle}
+                    onChange={(e) => setNumeroArticle(e.target.value)}
+                    placeholder="Scannez ou saisissez le code-barres"
+                    style={{
+                      width: "100%",
+                      padding: "12px 16px",
+                      borderRadius: 12,
+                      border: "2px solid #e5e7eb",
+                      fontSize: 16,
+                      background: "white",
+                      transition: "all 0.2s ease",
+                      outline: "none",
+                    }}
+                    onFocus={(e) => (e.target.style.borderColor = "#3b82f6")}
+                    onBlur={(e) => (e.target.style.borderColor = "#e5e7eb")}
+                  />
+                </div>
+              </div>
+
+              {/* Lots avec indication de stock */}
+              {availableLots.length > 0 && (
+                <div style={{ marginBottom: 24 }}>
+                  <label
+                    style={{
+                      display: "block",
+                      fontSize: 16,
+                      fontWeight: 600,
+                      color: "#374151",
+                      marginBottom: 16,
+                    }}
+                  >
+                    Sélectionner un lot spécifique (FIFO recommandé)
+                  </label>
+                  <div
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))",
+                      gap: 16,
+                    }}
+                  >
+                    {availableLots.map((lot) => {
+                      const lotDate = safeParseDate(lot.datePeremption);
+                      const isExpired = lotDate && lotDate < new Date();
+                      const isExpSoon =
+                        lotDate && !isExpired && lotDate <= new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+                      
+                      // Indication des stocks
+                      const s1 = safeNumber(lot.stock1);
+                      const s2 = safeNumber(lot.stock2);
+                      const stockInfo = `S1: ${s1} | S2: ${s2}`;
+                      const primaryStock = s1 > 0 ? "stock1" : s2 > 0 ? "stock2" : "stock1";
+                      
+                      return (
+                        <div
+                          key={lot.id}
+                          onClick={() => handleLotSelection(lot.id)}
                           style={{
                             padding: 16,
-                            textAlign: "right",
-                            fontWeight: 500,
-                            fontSize: 15,
-                            color: safeNumber(a.remise) > 0 ? "#dc2626" : "#6b7280",
+                            borderRadius: 16,
+                            cursor: "pointer",
+                            transition: "all 0.3s ease",
+                            border: selectedLot === lot.id ? "3px solid #10b981" : "2px solid #e5e7eb",
+                            background:
+                              selectedLot === lot.id
+                                ? "linear-gradient(135deg, #dcfce7, #bbf7d0)"
+                                : isExpired
+                                ? "linear-gradient(135deg, #fee2e2, #fecaca)"
+                                : isExpSoon
+                                ? "linear-gradient(135deg, #fef3c7, #fed7aa)"
+                                : "linear-gradient(135deg, #f9fafb, #f3f4f6)",
+                            transform: selectedLot === lot.id ? "scale(1.02)" : "scale(1)",
+                            boxShadow:
+                              selectedLot === lot.id
+                                ? "0 12px 25px rgba(16, 185, 129, 0.2)"
+                                : "0 4px 12px rgba(0, 0, 0, 0.05)",
                           }}
                         >
-                          {safeToFixed(a.remise)} DH
-                        </td>
-                        <td style={{ padding: 16, textAlign: "right", fontWeight: 700, fontSize: 16, color: "#16a34a" }}>
-                          {safeToFixed(safeNumber(a.prixUnitaire) * safeNumber(a.quantite) - safeNumber(a.remise))} DH
-                        </td>
-                        <td style={{ padding: 16, textAlign: "center" }}>
-                          <button
-                            onClick={() => handleRemoveArticle(i)}
+                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                            <span style={{ fontWeight: 700, fontSize: 16, color: "#1f2937" }}>
+                              Lot: {lot.numeroLot}
+                            </span>
+                            <span
+                              style={{
+                                background: primaryStock === "stock1" ? "#3b82f6" : "#10b981",
+                                color: "white",
+                                padding: "4px 12px",
+                                borderRadius: 20,
+                                fontSize: 12,
+                                fontWeight: 600,
+                              }}
+                            >
+                              {stockInfo}
+                            </span>
+                          </div>
+                          <div style={{ fontSize: 14, color: "#6b7280", marginBottom: 8 }}>
+                            <span
+                              style={{
+                                background: "#dbeafe",
+                                color: "#2563eb",
+                                padding: "2px 8px",
+                                borderRadius: 12,
+                                marginRight: 8,
+                                fontSize: 12,
+                                fontWeight: 500,
+                              }}
+                            >
+                              {lot.fournisseur}
+                            </span>
+                            <span
+                              style={{
+                                background: "#f3e8ff",
+                                color: "#7c3aed",
+                                padding: "2px 8px",
+                                borderRadius: 12,
+                                fontSize: 12,
+                                fontWeight: 600,
+                              }}
+                            >
+                              {safeToFixed(lot.prixVente)} DH
+                            </span>
+                            <span
+                              style={{
+                                background: primaryStock === "stock1" ? "#dbeafe" : "#dcfce7",
+                                color: primaryStock === "stock1" ? "#2563eb" : "#16a34a",
+                                padding: "2px 8px",
+                                borderRadius: 12,
+                                marginLeft: 8,
+                                fontSize: 12,
+                                fontWeight: 600,
+                              }}
+                            >
+                              → {primaryStock.toUpperCase()}
+                            </span>
+                          </div>
+                          <div
                             style={{
-                              background: "linear-gradient(135deg, #ef4444, #dc2626)",
-                              color: "white",
-                              border: "none",
-                              borderRadius: 8,
-                              padding: "6px 12px",
-                              cursor: "pointer",
-                              fontSize: 12,
+                              fontSize: 13,
                               fontWeight: 600,
-                              transition: "all 0.2s ease",
-                            }}
-                            onMouseEnter={(e) => {
-                              e.target.style.transform = "scale(1.05)";
-                              e.target.style.boxShadow = "0 4px 12px rgba(239, 68, 68, 0.3)";
-                            }}
-                            onMouseLeave={(e) => {
-                              e.target.style.transform = "scale(1)";
-                              e.target.style.boxShadow = "none";
+                              color: isExpired ? "#dc2626" : isExpSoon ? "#d97706" : "#16a34a",
                             }}
                           >
-                            Retirer
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                    <tr style={{ background: "linear-gradient(135deg, #f0fdf4, #dcfce7)", borderTop: "2px solid #16a34a" }}>
-                      <td
-                        colSpan={4}
-                        style={{ padding: 20, textAlign: "right", fontSize: 18, fontWeight: 700, color: "#15803d" }}
-                      >
-                        TOTAL DE LA VENTE
-                      </td>
-                      <td style={{ padding: 20, textAlign: "right", fontSize: 22, fontWeight: 800, color: "#16a34a" }}>
-                        {safeToFixed(totalVenteCourante)} DH
-                      </td>
-                      <td style={{ padding: 20 }}></td>
-                    </tr>
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          </div>
-        )}
+                            Exp: {formatDateSafe(lot.datePeremption)}
+                            {isExpired && " ⚠️ EXPIRÉ"}
+                            {isExpSoon && " ⏰ Expire bientôt"}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
 
-        {/* Finalisation */}
-        <div
-          style={{
-            background: "linear-gradient(135deg, #f3e8ff, #e9d5ff)",
-            borderRadius: 20,
-            padding: 24,
-            border: "2px solid #8b5cf6",
-          }}
-        >
-          <h3 style={{ margin: "0 0 24px", color: "#581c87", fontSize: 20, fontWeight: 600 }}>
-            Finaliser la vente
-          </h3>
-
-          <form onSubmit={handleAddVente}>
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: "repeat(auto-fit, minmax(250px, 1fr))",
-                gap: 20,
-                marginBottom: 24,
-              }}
-            >
-              <div>
-                <label style={{ display: "block", fontSize: 14, fontWeight: 600, color: "#374151", marginBottom: 8 }}>
-                  Client *
-                </label>
-                <input
-                  type="text"
-                  value={client}
-                  onChange={(e) => setClient(e.target.value)}
-                  required
-                  placeholder="Nom du client"
-                  list="clients-list"
-                  style={{
-                    width: "100%",
-                    padding: "12px 16px",
-                    borderRadius: 12,
-                    border: "2px solid #e5e7eb",
-                    fontSize: 16,
-                    background: "white",
-                    transition: "all 0.2s ease",
-                    outline: "none",
-                  }}
-                  onFocus={(e) => (e.target.style.borderColor = "#8b5cf6")}
-                  onBlur={(e) => (e.target.style.borderColor = "#e5e7eb")}
-                />
-                <datalist id="clients-list">{clients.map((c) => <option key={c} value={c} />)}</datalist>
-              </div>
-
-              <div>
-                <label style={{ display: "block", fontSize: 14, fontWeight: 600, color: "#374151", marginBottom: 8 }}>
-                  Date de vente *
-                </label>
-                <input
-                  type="date"
-                  value={dateVente}
-                  onChange={(e) => setDateVente(e.target.value)}
-                  required
-                  style={{
-                    width: "100%",
-                    padding: "12px 16px",
-                    borderRadius: 12,
-                    border: "2px solid #e5e7eb",
-                    fontSize: 16,
-                    background: "white",
-                    transition: "all 0.2s ease",
-                    outline: "none",
-                  }}
-                  onFocus={(e) => (e.target.style.borderColor = "#8b5cf6")}
-                  onBlur={(e) => (e.target.style.borderColor = "#e5e7eb")}
-                />
-              </div>
-
-              <div>
-                <label style={{ display: "block", fontSize: 14, fontWeight: 600, color: "#374151", marginBottom: 8 }}>
-                  Statut de paiement
-                </label>
-                <select
-                  value={statutPaiement}
-                  onChange={(e) => setStatutPaiement(e.target.value)}
-                  style={{
-                    width: "100%",
-                    padding: "12px 16px",
-                    borderRadius: 12,
-                    border: "2px solid #e5e7eb",
-                    fontSize: 16,
-                    background: "white",
-                    transition: "all 0.2s ease",
-                    outline: "none",
-                  }}
-                  onFocus={(e) => (e.target.style.borderColor = "#8b5cf6")}
-                  onBlur={(e) => (e.target.style.borderColor = "#e5e7eb")}
-                >
-                  <option value="payé">Payé</option>
-                  <option value="partiel">Partiel</option>
-                  <option value="impayé">Impayé</option>
-                </select>
-              </div>
-
-              <div>
-                <label style={{ display: "block", fontSize: 14, fontWeight: 600, color: "#374151", marginBottom: 8 }}>
-                  Mode de paiement
-                </label>
-                <select
-                  value={modePaiement}
-                  onChange={(e) => setModePaiement(e.target.value)}
-                  style={{
-                    width: "100%",
-                    padding: "12px 16px",
-                    borderRadius: 12,
-                    border: "2px solid #e5e7eb",
-                    fontSize: 16,
-                    background: "white",
-                    transition: "all 0.2s ease",
-                    outline: "none",
-                  }}
-                  onFocus={(e) => (e.target.style.borderColor = "#8b5cf6")}
-                  onBlur={(e) => (e.target.style.borderColor = "#e5e7eb")}
-                >
-                  <option value="Espèces">Espèces</option>
-                  <option value="Carte">Carte bancaire</option>
-                  <option value="Chèque">Chèque</option>
-                  <option value="Virement">Virement</option>
-                  <option value="Crédit">Crédit</option>
-                </select>
-              </div>
-            </div>
-
-            <div style={{ marginBottom: 24 }}>
-              <label style={{ display: "block", fontSize: 14, fontWeight: 600, color: "#374151", marginBottom: 8 }}>
-                Notes / Observations
-              </label>
-              <textarea
-                value={notesVente}
-                onChange={(e) => setNotesVente(e.target.value)}
-                rows={3}
-                placeholder="Notes optionnelles sur la vente..."
-                style={{
-                  width: "100%",
-                  padding: "12px 16px",
-                  borderRadius: 12,
-                  border: "2px solid #e5e7eb",
-                  fontSize: 16,
-                  background: "white",
-                  transition: "all 0.2s ease",
-                  outline: "none",
-                  resize: "vertical",
-                  fontFamily: "inherit",
-                }}
-                onFocus={(e) => (e.target.style.borderColor = "#8b5cf6")}
-                onBlur={(e) => (e.target.style.borderColor = "#e5e7eb")}
-              />
-            </div>
-
-            <div style={{ display: "flex", gap: 16, justifyContent: "center", flexWrap: "wrap" }}>
-              {isEditing && (
+              <div style={{ display: "flex", justifyContent: "center" }}>
                 <button
-                  type="button"
-                  onClick={resetForm}
+                  type="submit"
+                  disabled={isSaving}
                   style={{
-                    background: "linear-gradient(135deg, #6b7280, #4b5563)",
+                    background: "linear-gradient(135deg, #10b981, #059669)",
                     color: "white",
                     border: "none",
                     padding: "14px 32px",
                     borderRadius: 16,
                     fontSize: 16,
                     fontWeight: 600,
-                    cursor: "pointer",
+                    cursor: isSaving ? "not-allowed" : "pointer",
+                    opacity: isSaving ? 0.7 : 1,
                     transition: "all 0.3s ease",
-                    boxShadow: "0 8px 25px rgba(107, 114, 128, 0.3)",
+                    boxShadow: "0 8px 25px rgba(16, 185, 129, 0.3)",
                     transform: "translateY(0)",
                   }}
                   onMouseEnter={(e) => {
-                    e.target.style.transform = "translateY(-2px)";
-                    e.target.style.boxShadow = "0 12px 35px rgba(107, 114, 128, 0.4)";
+                    if (!isSaving) {
+                      e.target.style.transform = "translateY(-2px)";
+                      e.target.style.boxShadow = "0 12px 35px rgba(16, 185, 129, 0.4)";
+                    }
                   }}
                   onMouseLeave={(e) => {
                     e.target.style.transform = "translateY(0)";
-                    e.target.style.boxShadow = "0 8px 25px rgba(107, 114, 128, 0.3)";
+                    e.target.style.boxShadow = "0 8px 25px rgba(16, 185, 129, 0.3)";
                   }}
                 >
-                  Annuler
+                  {isSaving ? "Ajout..." : "Ajouter l'article"}
                 </button>
-              )}
+              </div>
+            </form>
+          </div>
 
-              <button
-                type="submit"
-                disabled={isSaving || articles.length === 0}
+          {/* Liste des articles avec indication du stock source */}
+          {articles.length > 0 && (
+            <div
+              style={{
+                background: "linear-gradient(135deg, #fff7ed, #fed7aa)",
+                borderRadius: 20,
+                padding: 24,
+                marginBottom: 24,
+                border: "2px solid #f97316",
+              }}
+            >
+              <h3
                 style={{
-                  background: isEditing ? "linear-gradient(135deg, #f59e0b, #d97706)" : "linear-gradient(135deg, #8b5cf6, #7c3aed)",
-                  color: "white",
-                  border: "none",
-                  padding: "16px 40px",
-                  borderRadius: 16,
-                  fontSize: 18,
-                  fontWeight: 700,
-                  cursor: isSaving || articles.length === 0 ? "not-allowed" : "pointer",
-                  opacity: isSaving || articles.length === 0 ? 0.6 : 1,
-                  transition: "all 0.3s ease",
-                  boxShadow: "0 12px 35px rgba(139, 92, 246, 0.4)",
-                  transform: "translateY(0)",
-                }}
-                onMouseEnter={(e) => {
-                  if (!isSaving && articles.length > 0) {
-                    e.target.style.transform = "translateY(-3px)";
-                    e.target.style.boxShadow = "0 16px 45px rgba(139, 92, 246, 0.5)";
-                  }
-                }}
-                onMouseLeave={(e) => {
-                  e.target.style.transform = "translateY(0)";
-                  e.target.style.boxShadow = "0 12px 35px rgba(139, 92, 246, 0.4)";
+                  margin: "0 0 20px",
+                  color: "#c2410c",
+                  fontSize: 20,
+                  fontWeight: 600,
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
                 }}
               >
-                {isSaving ? "Enregistrement..." : isEditing ? "Modifier la vente" : "Enregistrer la vente"}
-              </button>
-            </div>
-          </form>
-        </div>
-      </div>
-    )}
+                Articles de la vente ({articles.length})
+              </h3>
 
-    {/* Filtres */}
-    <div
-      style={{
-        background: "rgba(255, 255, 255, 0.95)",
-        backdropFilter: "blur(20px)",
-        borderRadius: 20,
-        padding: 24,
-        marginBottom: 24,
-        border: "1px solid rgba(255, 255, 255, 0.2)",
-        boxShadow: "0 12px 30px rgba(0, 0, 0, 0.08)",
-      }}
-    >
-      <div style={{ display: "flex", gap: 16, alignItems: "center", flexWrap: "wrap" }}>
-        <div style={{ flex: "1", minWidth: 250 }}>
-          <input
-            type="text"
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            placeholder="Rechercher client, produit, numéro de lot ou N° article..."
+              <div style={{ background: "white", borderRadius: 16, overflow: "hidden", boxShadow: "0 8px 25px rgba(0, 0, 0, 0.1)" }}>
+                <div style={{ overflowX: "auto" }}>
+                  <table style={{ width: "100%", minWidth: 600, borderCollapse: "collapse" }}>
+                    <thead>
+                      <tr style={{ background: "linear-gradient(135deg, #f97316, #ea580c)", color: "white" }}>
+                        <th style={{ padding: 16, textAlign: "left", fontWeight: 600, fontSize: 14, letterSpacing: "0.5px" }}>
+                          Produit / Traçabilité
+                        </th>
+                        <th style={{ padding: 16, textAlign: "center", fontWeight: 600, fontSize: 14 }}>Qté</th>
+                        <th style={{ padding: 16, textAlign: "right", fontWeight: 600, fontSize: 14 }}>Prix unit.</th>
+                        <th style={{ padding: 16, textAlign: "right", fontWeight: 600, fontSize: 14 }}>Remise</th>
+                        <th style={{ padding: 16, textAlign: "right", fontWeight: 600, fontSize: 14 }}>Total</th>
+                        <th style={{ padding: 16, textAlign: "center", fontWeight: 600, fontSize: 14, width: 60 }}>Action</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {articles.map((a, i) => (
+                        <tr
+                          key={i}
+                          style={{ borderBottom: "1px solid #f3f4f6", transition: "background 0.2s ease" }}
+                          onMouseEnter={(e) => (e.target.closest("tr").style.background = "#fafafa")}
+                          onMouseLeave={(e) => (e.target.closest("tr").style.background = "white")}
+                        >
+                          <td style={{ padding: 16 }}>
+                            <div style={{ fontWeight: 600, color: "#1f2937", marginBottom: 4 }}>{a.produit}</div>
+                            {(a.numeroArticle || a.numeroLot || a.fournisseur || a.datePeremption || a.stockSource) && (
+                              <div
+                                style={{
+                                  fontSize: 12,
+                                  color: "#6b7280",
+                                  background: "#f8fafc",
+                                  padding: 8,
+                                  borderRadius: 8,
+                                  border: "1px solid #e5e7eb",
+                                }}
+                              >
+                                {a.stockSource && (
+                                  <span
+                                    style={{
+                                      background: a.stockSource === "stock1" ? "#3b82f6" : "#10b981",
+                                      color: "white",
+                                      padding: "2px 6px",
+                                      borderRadius: 8,
+                                      fontSize: 11,
+                                      fontWeight: 600,
+                                      marginRight: 6,
+                                    }}
+                                  >
+                                    {a.stockSource === "stock1" ? "S1" : "S2"}
+                                  </span>
+                                )}
+                                {a.numeroArticle && (
+                                  <span
+                                    style={{
+                                      background: "#e0e7ff",
+                                      color: "#4f46e5",
+                                      padding: "2px 6px",
+                                      borderRadius: 8,
+                                      fontSize: 11,
+                                      fontWeight: 600,
+                                      marginRight: 6,
+                                    }}
+                                  >
+                                    N° article: {a.numeroArticle}
+                                  </span>
+                                )}
+                                {a.numeroLot && (
+                                  <span
+                                    style={{
+                                      background: "#dcfce7",
+                                      color: "#16a34a",
+                                      padding: "2px 6px",
+                                      borderRadius: 8,
+                                      fontSize: 11,
+                                      fontWeight: 500,
+                                      marginRight: 6,
+                                    }}
+                                  >
+                                    Lot: {a.numeroLot}
+                                  </span>
+                                )}
+                                {a.fournisseur && (
+                                  <span
+                                    style={{
+                                      background: "#dbeafe",
+                                      color: "#2563eb",
+                                      padding: "2px 6px",
+                                      borderRadius: 8,
+                                      fontSize: 11,
+                                      fontWeight: 500,
+                                      marginRight: 6,
+                                    }}
+                                  >
+                                    {a.fournisseur}
+                                  </span>
+                                )}
+                                {a.datePeremption && (
+                                  <div style={{ marginTop: 4, fontSize: 11 }}>Exp: {formatDateSafe(a.datePeremption)}</div>
+                                )}
+                              </div>
+                            )}
+                          </td>
+                          <td style={{ padding: 16, textAlign: "center", fontWeight: 600, fontSize: 16 }}>
+                            {safeNumber(a.quantite)}
+                          </td>
+                          <td style={{ padding: 16, textAlign: "right", fontWeight: 500, fontSize: 15 }}>
+                            {safeToFixed(a.prixUnitaire)} DH
+                          </td>
+                          <td
+                            style={{
+                              padding: 16,
+                              textAlign: "right",
+                              fontWeight: 500,
+                              fontSize: 15,
+                              color: safeNumber(a.remise) > 0 ? "#dc2626" : "#6b7280",
+                            }}
+                          >
+                            {safeToFixed(a.remise)} DH
+                          </td>
+                          <td style={{ padding: 16, textAlign: "right", fontWeight: 700, fontSize: 16, color: "#16a34a" }}>
+                            {safeToFixed(safeNumber(a.prixUnitaire) * safeNumber(a.quantite) - safeNumber(a.remise))} DH
+                          </td>
+                          <td style={{ padding: 16, textAlign: "center" }}>
+                            <button
+                              onClick={() => handleRemoveArticle(i)}
+                              style={{
+                                background: "linear-gradient(135deg, #ef4444, #dc2626)",
+                                color: "white",
+                                border: "none",
+                                borderRadius: 8,
+                                padding: "6px 12px",
+                                cursor: "pointer",
+                                fontSize: 12,
+                                fontWeight: 600,
+                                transition: "all 0.2s ease",
+                              }}
+                              onMouseEnter={(e) => {
+                                e.target.style.transform = "scale(1.05)";
+                                e.target.style.boxShadow = "0 4px 12px rgba(239, 68, 68, 0.3)";
+                              }}
+                              onMouseLeave={(e) => {
+                                e.target.style.transform = "scale(1)";
+                                e.target.style.boxShadow = "none";
+                              }}
+                            >
+                              Retirer
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                      <tr style={{ background: "linear-gradient(135deg, #f0fdf4, #dcfce7)", borderTop: "2px solid #16a34a" }}>
+                        <td
+                          colSpan={4}
+                          style={{ padding: 20, textAlign: "right", fontSize: 18, fontWeight: 700, color: "#15803d" }}
+                        >
+                          TOTAL DE LA VENTE
+                        </td>
+                        <td style={{ padding: 20, textAlign: "right", fontSize: 22, fontWeight: 800, color: "#16a34a" }}>
+                          {safeToFixed(totalVenteCourante)} DH
+                        </td>
+                        <td style={{ padding: 20 }}></td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Finalisation */}
+          <div
             style={{
-              width: "100%",
+              background: "linear-gradient(135deg, #f3e8ff, #e9d5ff)",
+              borderRadius: 20,
+              padding: 24,
+              border: "2px solid #8b5cf6",
+            }}
+          >
+            <h3 style={{ margin: "0 0 24px", color: "#581c87", fontSize: 20, fontWeight: 600 }}>
+              Finaliser la vente
+            </h3>
+
+            <form onSubmit={handleAddVente}>
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(auto-fit, minmax(250px, 1fr))",
+                  gap: 20,
+                  marginBottom: 24,
+                }}
+              >
+                <div>
+                  <label style={{ display: "block", fontSize: 14, fontWeight: 600, color: "#374151", marginBottom: 8 }}>
+                    Client *
+                  </label>
+                  <input
+                    type="text"
+                    value={client}
+                    onChange={(e) => setClient(e.target.value)}
+                    required
+                    placeholder="Nom du client"
+                    list="clients-list"
+                    style={{
+                      width: "100%",
+                      padding: "12px 16px",
+                      borderRadius: 12,
+                      border: "2px solid #e5e7eb",
+                      fontSize: 16,
+                      background: "white",
+                      transition: "all 0.2s ease",
+                      outline: "none",
+                    }}
+                    onFocus={(e) => (e.target.style.borderColor = "#8b5cf6")}
+                    onBlur={(e) => (e.target.style.borderColor = "#e5e7eb")}
+                  />
+                  <datalist id="clients-list">{clients.map((c) => <option key={c} value={c} />)}</datalist>
+                </div>
+
+                <div>
+                  <label style={{ display: "block", fontSize: 14, fontWeight: 600, color: "#374151", marginBottom: 8 }}>
+                    Date de vente *
+                  </label>
+                  <input
+                    type="date"
+                    value={dateVente}
+                    onChange={(e) => setDateVente(e.target.value)}
+                    required
+                    style={{
+                      width: "100%",
+                      padding: "12px 16px",
+                      borderRadius: 12,
+                      border: "2px solid #e5e7eb",
+                      fontSize: 16,
+                      background: "white",
+                      transition: "all 0.2s ease",
+                      outline: "none",
+                    }}
+                    onFocus={(e) => (e.target.style.borderColor = "#8b5cf6")}
+                    onBlur={(e) => (e.target.style.borderColor = "#e5e7eb")}
+                  />
+                </div>
+
+                <div>
+                  <label style={{ display: "block", fontSize: 14, fontWeight: 600, color: "#374151", marginBottom: 8 }}>
+                    Statut de paiement
+                  </label>
+                  <select
+                    value={statutPaiement}
+                    onChange={(e) => setStatutPaiement(e.target.value)}
+                    style={{
+                      width: "100%",
+                      padding: "12px 16px",
+                      borderRadius: 12,
+                      border: "2px solid #e5e7eb",
+                      fontSize: 16,
+                      background: "white",
+                      transition: "all 0.2s ease",
+                      outline: "none",
+                    }}
+                    onFocus={(e) => (e.target.style.borderColor = "#8b5cf6")}
+                    onBlur={(e) => (e.target.style.borderColor = "#e5e7eb")}
+                  >
+                    <option value="payé">Payé</option>
+                    <option value="partiel">Partiel</option>
+                    <option value="impayé">Impayé</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label style={{ display: "block", fontSize: 14, fontWeight: 600, color: "#374151", marginBottom: 8 }}>
+                    Mode de paiement
+                  </label>
+                  <select
+                    value={modePaiement}
+                    onChange={(e) => setModePaiement(e.target.value)}
+                    style={{
+                      width: "100%",
+                      padding: "12px 16px",
+                      borderRadius: 12,
+                      border: "2px solid #e5e7eb",
+                      fontSize: 16,
+                      background: "white",
+                      transition: "all 0.2s ease",
+                      outline: "none",
+                    }}
+                    onFocus={(e) => (e.target.style.borderColor = "#8b5cf6")}
+                    onBlur={(e) => (e.target.style.borderColor = "#e5e7eb")}
+                  >
+                    <option value="Espèces">Espèces</option>
+                    <option value="Carte">Carte bancaire</option>
+                    <option value="Chèque">Chèque</option>
+                    <option value="Virement">Virement</option>
+                    <option value="Crédit">Crédit</option>
+                  </select>
+                </div>
+              </div>
+
+              <div style={{ marginBottom: 24 }}>
+                <label style={{ display: "block", fontSize: 14, fontWeight: 600, color: "#374151", marginBottom: 8 }}>
+                  Notes / Observations
+                </label>
+                <textarea
+                  value={notesVente}
+                  onChange={(e) => setNotesVente(e.target.value)}
+                  rows={3}
+                  placeholder="Notes optionnelles sur la vente..."
+                  style={{
+                    width: "100%",
+                    padding: "12px 16px",
+                    borderRadius: 12,
+                    border: "2px solid #e5e7eb",
+                    fontSize: 16,
+                    background: "white",
+                    transition: "all 0.2s ease",
+                    outline: "none",
+                    resize: "vertical",
+                    fontFamily: "inherit",
+                  }}
+                  onFocus={(e) => (e.target.style.borderColor = "#8b5cf6")}
+                  onBlur={(e) => (e.target.style.borderColor = "#e5e7eb")}
+                />
+              </div>
+
+              <div style={{ display: "flex", gap: 16, justifyContent: "center", flexWrap: "wrap" }}>
+                {isEditing && (
+                  <button
+                    type="button"
+                    onClick={resetForm}
+                    style={{
+                      background: "linear-gradient(135deg, #6b7280, #4b5563)",
+                      color: "white",
+                      border: "none",
+                      padding: "14px 32px",
+                      borderRadius: 16,
+                      fontSize: 16,
+                      fontWeight: 600,
+                      cursor: "pointer",
+                      transition: "all 0.3s ease",
+                      boxShadow: "0 8px 25px rgba(107, 114, 128, 0.3)",
+                      transform: "translateY(0)",
+                    }}
+                    onMouseEnter={(e) => {
+                      e.target.style.transform = "translateY(-2px)";
+                      e.target.style.boxShadow = "0 12px 35px rgba(107, 114, 128, 0.4)";
+                    }}
+                    onMouseLeave={(e) => {
+                      e.target.style.transform = "translateY(0)";
+                      e.target.style.boxShadow = "0 8px 25px rgba(107, 114, 128, 0.3)";
+                    }}
+                  >
+                    Annuler
+                  </button>
+                )}
+
+                <button
+                  type="submit"
+                  disabled={isSaving || articles.length === 0}
+                  style={{
+                    background: isEditing ? "linear-gradient(135deg, #f59e0b, #d97706)" : "linear-gradient(135deg, #8b5cf6, #7c3aed)",
+                    color: "white",
+                    border: "none",
+                    padding: "16px 40px",
+                    borderRadius: 16,
+                    fontSize: 18,
+                    fontWeight: 700,
+                    cursor: isSaving || articles.length === 0 ? "not-allowed" : "pointer",
+                    opacity: isSaving || articles.length === 0 ? 0.6 : 1,
+                    transition: "all 0.3s ease",
+                    boxShadow: "0 12px 35px rgba(139, 92, 246, 0.4)",
+                    transform: "translateY(0)",
+                  }}
+                  onMouseEnter={(e) => {
+                    if (!isSaving && articles.length > 0) {
+                      e.target.style.transform = "translateY(-3px)";
+                      e.target.style.boxShadow = "0 16px 45px rgba(139, 92, 246, 0.5)";
+                    }
+                  }}
+                  onMouseLeave={(e) => {
+                    e.target.style.transform = "translateY(0)";
+                    e.target.style.boxShadow = "0 12px 35px rgba(139, 92, 246, 0.4)";
+                  }}
+                >
+                  {isSaving ? "Enregistrement..." : isEditing ? "Modifier la vente" : "Enregistrer la vente"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Filtres */}
+      <div
+        style={{
+          background: "rgba(255, 255, 255, 0.95)",
+          backdropFilter: "blur(20px)",
+          borderRadius: 20,
+          padding: 24,
+          marginBottom: 24,
+          border: "1px solid rgba(255, 255, 255, 0.2)",
+          boxShadow: "0 12px 30px rgba(0, 0, 0, 0.08)",
+        }}
+      >
+        <div style={{ display: "flex", gap: 16, alignItems: "center", flexWrap: "wrap" }}>
+          <div style={{ flex: "1", minWidth: 250 }}>
+            <input
+              type="text"
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              placeholder="Rechercher client, produit, numéro de lot ou N° article..."
+              style={{
+                width: "100%",
+                padding: "12px 20px",
+                borderRadius: 25,
+                border: "2px solid #e5e7eb",
+                fontSize: 16,
+                background: "white",
+                transition: "all 0.3s ease",
+                outline: "none",
+              }}
+              onFocus={(e) => {
+                e.target.style.borderColor = "#3b82f6";
+                e.target.style.boxShadow = "0 0 0 3px rgba(59, 130, 246, 0.1)";
+              }}
+              onBlur={(e) => {
+                e.target.style.borderColor = "#e5e7eb";
+                e.target.style.boxShadow = "none";
+              }}
+            />
+          </div>
+
+          <select
+            value={filterStatut}
+            onChange={(e) => setFilterStatut(e.target.value)}
+            style={{
               padding: "12px 20px",
               borderRadius: 25,
               border: "2px solid #e5e7eb",
@@ -2039,6 +1948,7 @@ export default function Ventes() {
               background: "white",
               transition: "all 0.3s ease",
               outline: "none",
+              minWidth: 180,
             }}
             onFocus={(e) => {
               e.target.style.borderColor = "#3b82f6";
@@ -2048,523 +1958,585 @@ export default function Ventes() {
               e.target.style.borderColor = "#e5e7eb";
               e.target.style.boxShadow = "none";
             }}
-          />
+          >
+            <option value="">Tous les statuts</option>
+            <option value="payé">Payé</option>
+            <option value="partiel">Partiel</option>
+            <option value="impayé">Impayé</option>
+          </select>
+
+          {(searchTerm || filterStatut) && (
+            <button
+              onClick={() => {
+                setSearchTerm("");
+                setFilterStatut("");
+              }}
+              style={{
+                background: "linear-gradient(135deg, #ef4444, #dc2626)",
+                color: "white",
+                border: "none",
+                padding: "12px 20px",
+                borderRadius: 25,
+                fontSize: 14,
+                fontWeight: 600,
+                cursor: "pointer",
+                transition: "all 0.3s ease",
+                boxShadow: "0 6px 20px rgba(239, 68, 68, 0.3)",
+              }}
+              onMouseEnter={(e) => {
+                e.target.style.transform = "translateY(-2px)";
+                e.target.style.boxShadow = "0 8px 25px rgba(239, 68, 68, 0.4)";
+              }}
+              onMouseLeave={(e) => {
+                e.target.style.transform = "translateY(0)";
+                e.target.style.boxShadow = "0 6px 20px rgba(239, 68, 68, 0.3)";
+              }}
+            >
+              Réinitialiser
+            </button>
+          )}
         </div>
-
-        <select
-          value={filterStatut}
-          onChange={(e) => setFilterStatut(e.target.value)}
-          style={{
-            padding: "12px 20px",
-            borderRadius: 25,
-            border: "2px solid #e5e7eb",
-            fontSize: 16,
-            background: "white",
-            transition: "all 0.3s ease",
-            outline: "none",
-            minWidth: 180,
-          }}
-          onFocus={(e) => {
-            e.target.style.borderColor = "#3b82f6";
-            e.target.style.boxShadow = "0 0 0 3px rgba(59, 130, 246, 0.1)";
-          }}
-          onBlur={(e) => {
-            e.target.style.borderColor = "#e5e7eb";
-            e.target.style.boxShadow = "none";
-          }}
-        >
-          <option value="">Tous les statuts</option>
-          <option value="payé">Payé</option>
-          <option value="partiel">Partiel</option>
-          <option value="impayé">Impayé</option>
-        </select>
-
-        {(searchTerm || filterStatut) && (
-          <button
-            onClick={() => {
-              setSearchTerm("");
-              setFilterStatut("");
-            }}
-            style={{
-              background: "linear-gradient(135deg, #ef4444, #dc2626)",
-              color: "white",
-              border: "none",
-              padding: "12px 20px",
-              borderRadius: 25,
-              fontSize: 14,
-              fontWeight: 600,
-              cursor: "pointer",
-              transition: "all 0.3s ease",
-              boxShadow: "0 6px 20px rgba(239, 68, 68, 0.3)",
-            }}
-            onMouseEnter={(e) => {
-              e.target.style.transform = "translateY(-2px)";
-              e.target.style.boxShadow = "0 8px 25px rgba(239, 68, 68, 0.4)";
-            }}
-            onMouseLeave={(e) => {
-              e.target.style.transform = "translateY(0)";
-              e.target.style.boxShadow = "0 6px 20px rgba(239, 68, 68, 0.3)";
-            }}
-          >
-            Réinitialiser
-          </button>
-        )}
       </div>
-    </div>
 
-    {/* Tableau des ventes */}
-    <div
-      style={{
-        background: "rgba(255, 255, 255, 0.95)",
-        backdropFilter: "blur(20px)",
-        borderRadius: 24,
-        overflow: "hidden",
-        border: "1px solid rgba(255, 255, 255, 0.2)",
-        boxShadow: "0 20px 40px rgba(0, 0, 0, 0.1)",
-      }}
-    >
-      <div style={{ overflowX: "auto", maxHeight: "70vh", overflowY: "auto" }}>
-        <table style={{ width: "100%", minWidth: 1000, borderCollapse: "collapse" }}>
-          <thead
-            style={{
-              position: "sticky",
-              top: 0,
-              background: "linear-gradient(135deg, #1e293b, #334155)",
-              color: "white",
-              zIndex: 10,
-            }}
-          >
-            <tr>
-              <th style={{ padding: 20, textAlign: "left", fontWeight: 700, fontSize: 14, letterSpacing: "0.5px", borderRight: "1px solid rgba(255,255,255,0.1)" }}>
-                N° VENTE
-              </th>
-              <th style={{ padding: 20, textAlign: "left", fontWeight: 700, fontSize: 14, letterSpacing: "0.5px", borderRight: "1px solid rgba(255,255,255,0.1)" }}>
-                CLIENT
-              </th>
-              <th style={{ padding: 20, textAlign: "center", fontWeight: 700, fontSize: 14, letterSpacing: "0.5px", borderRight: '1px solid #f1f5f9' }}>
-                DATE
-              </th>
-              <th style={{ padding: 20, textAlign: "center", fontWeight: 700, fontSize: 14, letterSpacing: "0.5px", borderRight: '1px solid #f1f5f9' }}>
-                ARTICLES
-              </th>
-              <th style={{ padding: 20, textAlign: "center", fontWeight: 700, fontSize: 14, letterSpacing: "0.5px", borderRight: '1px solid #f1f5f9' }}>
-                STATUT
-              </th>
-              <th style={{ padding: 20, textAlign: "right", fontWeight: 700, fontSize: 14, letterSpacing: "0.5px", borderRight: '1px solid #f1f5f9' }}>
-                TOTAL
-              </th>
-              <th style={{ padding: 20, textAlign: "center", fontWeight: 700, fontSize: 14, letterSpacing: "0.5px", width: 220 }}>
-                ACTIONS
-              </th>
-            </tr>
-          </thead>
-          <tbody>
-            {ventesFiltrees.length === 0 ? (
-              <tr>
-                <td colSpan={7} style={{ padding: "60px 20px", textAlign: "center", color: "#6b7280", fontSize: 18, fontWeight: 500 }}>
-                  <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 16 }}>
-                    <div style={{ width: 64, height: 64, borderRadius: "50%", background: "linear-gradient(135deg, #e5e7eb, #d1d5db)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 24 }}>
-                      📊
-                    </div>
-                    <div>
-                      <h3 style={{ margin: "0 0 8px", color: "#374151" }}>
-                        {ventes.length === 0 ? "Aucune vente enregistrée" : "Aucun résultat"}
-                      </h3>
-                      <p style={{ margin: 0, color: "#9ca3af" }}>
-                        {ventes.length === 0
-                          ? "Commencez par créer votre première vente"
-                          : "Aucune vente ne correspond aux critères de filtrage"}
-                      </p>
-                    </div>
-                  </div>
-                </td>
-              </tr>
-            ) : (
-              ventesFiltrees.map((v, index) => {
-                const total =
-                  v.montantTotal ||
-                  (Array.isArray(v.articles) ? v.articles : []).reduce(
-                    (sum, a) => sum + (safeNumber(a.prixUnitaire) * safeNumber(a.quantite) - safeNumber(a.remise || 0)),
-                    0
-                  );
-                const articlesAvecLots = (v.articles || []).filter((a) => a.numeroLot || a.numeroArticle).length;
-                const totalArticles = (v.articles || []).length;
-                return (
-                  <tr
-                    key={v.id}
-                    style={{
-                      borderBottom: '1px solid #f1f5f9',
-                      transition: "all 0.3s ease",
-                      background: index % 2 === 0 ? "rgba(248, 250, 252, 0.5)" : "white",
-                    }}
-                    onMouseEnter={(e) => {
-                      const tr = e.target.closest("tr");
-                      tr.style.background = "linear-gradient(135deg, #f0f9ff, #e0f2fe)";
-                      tr.style.transform = "scale(1.001)";
-                      tr.style.boxShadow = "0 4px 20px rgba(59, 130, 246, 0.1)";
-                    }}
-                    onMouseLeave={(e) => {
-                      const tr = e.target.closest("tr");
-                      tr.style.background = index % 2 === 0 ? "rgba(248, 250, 252, 0.5)" : "white";
-                      tr.style.transform = "scale(1)";
-                      tr.style.boxShadow = "none";
-                    }}
-                  >
-                    <td style={{ padding: 20, borderRight: '1px solid #f1f5f9' }}>
-                      <div
-                        style={{
-                          background: "linear-gradient(135deg, #3b82f6, #2563eb)",
-                          color: "white",
-                          padding: "6px 12px",
-                          borderRadius: 12,
-                          fontSize: 12,
-                          fontWeight: 700,
-                          letterSpacing: "0.5px",
-                          display: "inline-block",
-                        }}
-                      >
-                        #{(v.id || "").slice(-6).toUpperCase()}
-                      </div>
-                    </td>
-                    <td style={{ padding: 20, borderRight: '1px solid #f1f5f9' }}>
-                      <div style={{ fontWeight: 600, fontSize: 16, color: "#1f2937", marginBottom: 4 }}>{v.client}</div>
-                      <div style={{ fontSize: 12, color: "#6b7280", background: "#f8fafc", padding: "2px 8px", borderRadius: 8, display: "inline-block" }}>
-                        {v.modePaiement || "Espèces"}
-                      </div>
-                    </td>
-                    <td style={{ padding: 20, textAlign: "center", borderRight: '1px solid #f1f5f9' }}>
-                      <div style={{ fontSize: 14, fontWeight: 600, color: "#374151" }}>{formatDateSafe(v.date)}</div>
-                    </td>
-                    <td style={{ padding: 20, textAlign: "center", borderRight: '1px solid #f1f5f9' }}>
-                      <div style={{ display: "flex", gap: 8, justifyContent: "center", alignItems: "center" }}>
-                        <span
-                          style={{
-                            background: "linear-gradient(135deg, #8b5cf6, #7c3aed)",
-                            color: "white",
-                            padding: "6px 12px",
-                            borderRadius: 20,
-                            fontSize: 12,
-                            fontWeight: 600,
-                          }}
-                        >
-                          {totalArticles}
-                        </span>
-                        {articlesAvecLots > 0 && (
-                          <span
-                            style={{
-                              background: "linear-gradient(135deg, #10b981, #059669)",
-                              color: "white",
-                              padding: "4px 8px",
-                              borderRadius: 12,
-                              fontSize: 10,
-                              fontWeight: 600,
-                            }}
-                          >
-                            {articlesAvecLots} tracés
-                          </span>
-                        )}
-                      </div>
-                    </td>
-                    <td style={{ padding: 20, textAlign: "center", borderRight: '1px solid #f1f5f9' }}>
-                      <span
-                        style={{
-                          background:
-                            v.statutPaiement === "payé"
-                              ? "linear-gradient(135deg, #22c55e, #16a34a)"
-                              : v.statutPaiement === "partiel"
-                              ? "linear-gradient(135deg, #eab308, #ca8a04)"
-                              : "linear-gradient(135deg, #ef4444, #dc2626)",
-                          color: "white",
-                          padding: "6px 16px",
-                          borderRadius: 20,
-                          fontSize: 12,
-                          fontWeight: 600,
-                          textTransform: "capitalize",
-                        }}
-                      >
-                        {v.statutPaiement}
-                      </span>
-                    </td>
-                    <td style={{ padding: 20, textAlign: "right", borderRight: '1px solid #f1f5f9' }}>
-                      <div style={{ fontSize: 16, fontWeight: 700, color: "#16a34a" }}>{safeToFixed(total)} DH</div>
-                    </td>
-                    <td style={{ padding: 20, textAlign: "center" }}>
-                      <div style={{ display: "flex", gap: 8, justifyContent: "center" }}>
-                        <span
-                          onClick={() => handleViewDetails(v)}
-                          style={{ cursor: "pointer", fontSize: 18, transition: "transform 0.2s ease" }}
-                          onMouseEnter={(e) => (e.target.style.transform = "scale(1.2)")}
-                          onMouseLeave={(e) => (e.target.style.transform = "scale(1)")}
-                        >
-                          👁️
-                        </span>
-                        <span
-                          onClick={() => handleEditVente(v)}
-                          style={{ cursor: "pointer", fontSize: 18, marginRight: 10, transition: "transform 0.2s ease" }}
-                          onMouseEnter={(e) => (e.target.style.transform = "scale(1.2)")}
-                          onMouseLeave={(e) => (e.target.style.transform = "scale(1)")}
-                        >
-                          ✏️
-                        </span>
-                        <span
-                          onClick={() => handlePrintVente(v)}
-                          style={{ cursor: "pointer", fontSize: 18, marginRight: 10, transition: "transform 0.2s ease" }}
-                          onMouseEnter={(e) => (e.target.style.transform = "scale(1.2)")}
-                          onMouseLeave={(e) => (e.target.style.transform = "scale(1)")}
-                        >
-                          🖨️
-                        </span>
-                        <span
-                          onClick={() => handleDeleteVente(v)}
-                          style={{ cursor: "pointer", fontSize: 18, transition: "transform 0.2s ease" }}
-                          onMouseEnter={(e) => (e.target.style.transform = "scale(1.2)")}
-                          onMouseLeave={(e) => (e.target.style.transform = "scale(1)")}
-                        >
-                          🗑️
-                        </span>
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })
-            )}
-          </tbody>
-        </table>
-      </div>
-    </div>
-
-    {/* Modal de détails via Portal */}
-    {showDetails &&
-      selectedVente &&
-      createPortal(
-        <div
-          role="dialog"
-          aria-modal="true"
-          aria-label={`Détails de la vente ${(selectedVente?.id || "").slice(-6).toUpperCase()}`}
-          onClick={(e) => {
-            if (e.target === e.currentTarget) setShowDetails(false);
-          }}
-          style={{
-            position: "fixed",
-            inset: 0,
-            background: "rgba(0, 0, 0, 0.5)",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            zIndex: 20000,
-            backdropFilter: "blur(5px)",
-            padding: 16,
-          }}
-        >
-          <div
-            style={{
-              background: "linear-gradient(135deg, #ffffff, #f9fafb)",
-              borderRadius: 20,
-              padding: 16,
-              width: "min(100%, 980px)",
-              maxHeight: "90vh",
-              overflowY: "auto",
-              overflowX: "hidden",
-              boxShadow: "0 20px 50px rgba(0, 0, 0, 0.2)",
-              border: "1px solid rgba(0, 0, 0, 0.05)",
-              position: "relative",
-            }}
-            onKeyDown={(e) => {
-              if (e.key === "Escape") setShowDetails(false);
-            }}
-            tabIndex={-1}
-          >
-            <div
+      {/* Tableau des ventes */}
+      <div
+        style={{
+          background: "rgba(255, 255, 255, 0.95)",
+          backdropFilter: "blur(20px)",
+          borderRadius: 24,
+          overflow: "hidden",
+          border: "1px solid rgba(255, 255, 255, 0.2)",
+          boxShadow: "0 20px 40px rgba(0, 0, 0, 0.1)",
+        }}
+      >
+        <div style={{ overflowX: "auto", maxHeight: "70vh", overflowY: "auto" }}>
+          <table style={{ width: "100%", minWidth: 1000, borderCollapse: "collapse" }}>
+            <thead
               style={{
                 position: "sticky",
                 top: 0,
-                zIndex: 2,
-                background: "linear-gradient(135deg, #ffffff, #f9fafb)",
-                padding: "12px 40px 12px 12px",
-                margin: "-16px -16px 16px",
-                borderBottom: "1px solid rgba(0,0,0,0.06)",
-                display: "flex",
-                alignItems: "center",
-                minHeight: 48,
+                background: "linear-gradient(135deg, #1e293b, #334155)",
+                color: "white",
+                zIndex: 10,
               }}
             >
-              <h2
-                style={{
-                  margin: 0,
-                  fontSize: "clamp(18px, 2.5vw, 28px)",
-                  fontWeight: 700,
-                  color: "#1f2937",
-                  lineHeight: 1.2,
-                  flex: 1,
-                }}
-              >
-                Détails de la vente #{(selectedVente?.id || "").slice(-6).toUpperCase()}
-              </h2>
-              <button
-                onClick={() => setShowDetails(false)}
-                aria-label="Fermer"
-                style={{
-                  position: "absolute",
-                  right: 12,
-                  top: 12,
-                  width: 36,
-                  height: 36,
-                  display: "grid",
-                  placeItems: "center",
-                  background: "transparent",
-                  border: "none",
-                  borderRadius: 10,
-                  fontSize: 24,
-                  lineHeight: 1,
-                  color: "#111827",
-                  cursor: "pointer",
-                  transition: "background 0.2s ease, transform 0.1s ease",
-                  zIndex: 3,
-                }}
-                onMouseEnter={(e) => (e.currentTarget.style.background = "#f3f4f6")}
-                onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
-                onMouseDown={(e) => (e.currentTarget.style.transform = "scale(0.97)")}
-                onMouseUp={(e) => (e.currentTarget.style.transform = "scale(1)")}
-              >
-                ×
-              </button>
-            </div>
-
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
-                gap: 12,
-                marginBottom: 24,
-              }}
-            >
-              <div style={{ background: "linear-gradient(135deg, #dbeafe, #bfdbfe)", borderRadius: 14, padding: 16, boxShadow: "0 4px 15px rgba(59, 130, 246, 0.08)" }}>
-                <h4 style={{ margin: "0 0 6px", color: "#1d4ed8", fontSize: 14, fontWeight: 600 }}>Client</h4>
-                <p style={{ margin: 0, fontSize: 16, fontWeight: 700, color: "#1f2937", wordBreak: "break-word" }}>
-                  {selectedVente?.client || "-"}
-                </p>
-              </div>
-              <div style={{ background: "linear-gradient(135deg, #dcfce7, #bbf7d0)", borderRadius: 14, padding: 16, boxShadow: "0 4px 15px rgba(34, 197, 94, 0.08)" }}>
-                <h4 style={{ margin: "0 0 6px", color: "#15803d", fontSize: 14, fontWeight: 600 }}>Date</h4>
-                <p style={{ margin: 0, fontSize: 16, fontWeight: 700, color: "#1f2937" }}>{formatDateSafe(selectedVente?.date)}</p>
-              </div>
-              <div style={{ background: "linear-gradient(135deg, #fef3c7, #fde68a)", borderRadius: 14, padding: 16, boxShadow: "0 4px 15px rgba(245, 158, 11, 0.08)" }}>
-                <h4 style={{ margin: "0 0 6px", color: "#b45309", fontSize: 14, fontWeight: 600 }}>Statut</h4>
-                <p style={{ margin: 0, fontSize: 16, fontWeight: 700, color: "#1f2937" }}>{selectedVente?.statutPaiement || "-"}</p>
-              </div>
-              <div style={{ background: "linear-gradient(135deg, #f3e8ff, #e9d5ff)", borderRadius: 14, padding: 16, boxShadow: "0 4px 15px rgba(168, 85, 247, 0.08)" }}>
-                <h4 style={{ margin: "0 0 6px", color: "#7e22ce", fontSize: 14, fontWeight: 600 }}>Mode</h4>
-                <p style={{ margin: 0, fontSize: 16, fontWeight: 700, color: "#1f2937" }}>{selectedVente?.modePaiement || "Espèces"}</p>
-              </div>
-              <div style={{ background: "linear-gradient(135deg, #d1fae5, #a7f3d0)", borderRadius: 14, padding: 16, boxShadow: "0 4px 15px rgba(16, 185, 129, 0.08)" }}>
-                <h4 style={{ margin: "0 0 6px", color: "#065f46", fontSize: 14, fontWeight: 600 }}>Total</h4>
-                <p style={{ margin: 0, fontSize: 16, fontWeight: 800, color: "#1f2937" }}>
-                  {safeToFixed(selectedVente?.montantTotal)} DH
-                </p>
-              </div>
-            </div>
-
-            <h3 style={{ margin: "0 0 12px", fontSize: "clamp(16px, 2.2vw, 20px)", fontWeight: 600, color: "#374151" }}>
-              Articles ({selectedVente?.articles?.length || 0})
-            </h3>
-            <div style={{ background: "#fff", borderRadius: 14, boxShadow: "0 8px 25px rgba(0, 0, 0, 0.05)", marginBottom: 20, overflowX: "auto" }}>
-              <table style={{ width: "100%", minWidth: 640, borderCollapse: "collapse" }}>
-                <thead>
-                  <tr style={{ background: "linear-gradient(135deg, #6d28d9, #5b21b6)", color: "white" }}>
-                    <th style={{ padding: 12, textAlign: "left" }}>Produit / Traçabilité</th>
-                    <th style={{ padding: 12, textAlign: "center" }}>Qté</th>
-                    <th style={{ padding: 12, textAlign: "right" }}>Prix Unit.</th>
-                    <th style={{ padding: 12, textAlign: "right" }}>Remise</th>
-                    <th style={{ padding: 12, textAlign: "right" }}>Total</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {(selectedVente?.articles || []).map((a, i) => (
-                    <tr key={i} style={{ borderBottom: '1px solid #f1f5f9' }}>
-                      <td style={{ padding: 12, verticalAlign: "top" }}>
-                        <strong>{a?.produit || "-"}</strong>
-                        {(a?.numeroArticle || a?.numeroLot || a?.fournisseur || a?.datePeremption) && (
-                          <div style={{ fontSize: 12, color: "#6b7280", marginTop: 4 }}>
-                            {a?.numeroArticle ? `N° article: ${a.numeroArticle}` : ""}
-                            {a?.numeroLot ? `${a?.numeroArticle ? " | " : ""}Lot: ${a.numeroLot}` : ""}
-                            {a?.fournisseur ? `${(a?.numeroArticle || a?.numeroLot) ? " | " : ""}Fournisseur: ${a.fournisseur}` : ""}
-                            {a?.datePeremption ? `${(a?.numeroArticle || a?.numeroLot || a?.fournisseur) ? " | " : ""}Exp: ${formatDateSafe(a.datePeremption)}` : ""}
-                          </div>
-                        )}
+              <tr>
+                <th style={{ padding: 20, textAlign: "left", fontWeight: 700, fontSize: 14, letterSpacing: "0.5px", borderRight: "1px solid rgba(255,255,255,0.1)" }}>
+                  N° VENTE
+                </th>
+                <th style={{ padding: 20, textAlign: "left", fontWeight: 700, fontSize: 14, letterSpacing: "0.5px", borderRight: "1px solid rgba(255,255,255,0.1)" }}>
+                  CLIENT
+                </th>
+                <th style={{ padding: 20, textAlign: "center", fontWeight: 700, fontSize: 14, letterSpacing: "0.5px", borderRight: '1px solid #f1f5f9' }}>
+                  DATE
+                </th>
+                <th style={{ padding: 20, textAlign: "center", fontWeight: 700, fontSize: 14, letterSpacing: "0.5px", borderRight: '1px solid #f1f5f9' }}>
+                  ARTICLES / STOCK
+                </th>
+                <th style={{ padding: 20, textAlign: "center", fontWeight: 700, fontSize: 14, letterSpacing: "0.5px", borderRight: '1px solid #f1f5f9' }}>
+                  STATUT
+                </th>
+                <th style={{ padding: 20, textAlign: "right", fontWeight: 700, fontSize: 14, letterSpacing: "0.5px", borderRight: '1px solid #f1f5f9' }}>
+                  TOTAL
+                </th>
+                <th style={{ padding: 20, textAlign: "center", fontWeight: 700, fontSize: 14, letterSpacing: "0.5px", width: 220 }}>
+                  ACTIONS
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {ventesFiltrees.length === 0 ? (
+                <tr>
+                  <td colSpan={7} style={{ padding: "60px 20px", textAlign: "center", color: "#6b7280", fontSize: 18, fontWeight: 500 }}>
+                    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 16 }}>
+                      <div style={{ width: 64, height: 64, borderRadius: "50%", background: "linear-gradient(135deg, #e5e7eb, #d1d5db)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 24 }}>
+                        📊
+                      </div>
+                      <div>
+                        <h3 style={{ margin: "0 0 8px", color: "#374151" }}>
+                          {ventes.length === 0 ? "Aucune vente enregistrée" : "Aucun résultat"}
+                        </h3>
+                        <p style={{ margin: 0, color: "#9ca3af" }}>
+                          {ventes.length === 0
+                            ? "Commencez par créer votre première vente"
+                            : "Aucune vente ne correspond aux critères de filtrage"}
+                        </p>
+                      </div>
+                    </div>
+                  </td>
+                </tr>
+              ) : (
+                ventesFiltrees.map((v, index) => {
+                  const total =
+                    v.montantTotal ||
+                    (Array.isArray(v.articles) ? v.articles : []).reduce(
+                      (sum, a) => sum + (safeNumber(a.prixUnitaire) * safeNumber(a.quantite) - safeNumber(a.remise || 0)),
+                      0
+                    );
+                  const articlesAvecLots = (v.articles || []).filter((a) => a.numeroLot || a.numeroArticle).length;
+                  const totalArticles = (v.articles || []).length;
+                  
+                  // Comptage des articles par stock
+                  const stockCounts = { stock1: 0, stock2: 0, unknown: 0 };
+                  (v.articles || []).forEach(a => {
+                    const source = a.stockSource || "unknown";
+                    if (source === "stock1") stockCounts.stock1++;
+                    else if (source === "stock2") stockCounts.stock2++;
+                    else stockCounts.unknown++;
+                  });
+                  
+                  const principalStock = v.stockSource || v.stock || "stock1";
+                  
+                  return (
+                    <tr
+                      key={v.id}
+                      style={{
+                        borderBottom: '1px solid #f1f5f9',
+                        transition: "all 0.3s ease",
+                        background: index % 2 === 0 ? "rgba(248, 250, 252, 0.5)" : "white",
+                        borderLeft: principalStock === "stock2" ? "4px solid #10b981" : "4px solid #3b82f6",
+                      }}
+                      onMouseEnter={(e) => {
+                        const tr = e.target.closest("tr");
+                        tr.style.background = principalStock === "stock2" 
+                          ? "linear-gradient(135deg, #f0fdf4, #dcfce7)" 
+                          : "linear-gradient(135deg, #f0f9ff, #e0f2fe)";
+                        tr.style.transform = "scale(1.001)";
+                        tr.style.boxShadow = `0 4px 20px ${principalStock === "stock2" ? "rgba(16, 185, 129, 0.1)" : "rgba(59, 130, 246, 0.1)"}`;
+                      }}
+                      onMouseLeave={(e) => {
+                        const tr = e.target.closest("tr");
+                        tr.style.background = index % 2 === 0 ? "rgba(248, 250, 252, 0.5)" : "white";
+                        tr.style.transform = "scale(1)";
+                        tr.style.boxShadow = "none";
+                      }}
+                    >
+                      <td style={{ padding: 20, borderRight: '1px solid #f1f5f9' }}>
+                        <div
+                          style={{
+                            background: principalStock === "stock2" 
+                              ? "linear-gradient(135deg, #10b981, #059669)"
+                              : "linear-gradient(135deg, #3b82f6, #2563eb)",
+                            color: "white",
+                            padding: "6px 12px",
+                            borderRadius: 12,
+                            fontSize: 12,
+                            fontWeight: 700,
+                            letterSpacing: "0.5px",
+                            display: "inline-block",
+                          }}
+                        >
+                          #{(v.id || "").slice(-6).toUpperCase()}
+                        </div>
                       </td>
-                      <td style={{ padding: 12, textAlign: "center" }}>{safeNumber(a?.quantite)}</td>
-                      <td style={{ padding: 12, textAlign: "right" }}>{safeToFixed(a?.prixUnitaire)} DH</td>
-                      <td style={{ padding: 12, textAlign: "right" }}>{safeToFixed(a?.remise)} DH</td>
-                      <td style={{ padding: 12, textAlign: "right", fontWeight: 600 }}>
-                        {safeToFixed(safeNumber(a?.prixUnitaire) * safeNumber(a?.quantite) - safeNumber(a?.remise))} DH
+                      <td style={{ padding: 20, borderRight: '1px solid #f1f5f9' }}>
+                        <div style={{ fontWeight: 600, fontSize: 16, color: "#1f2937", marginBottom: 4 }}>{v.client}</div>
+                        <div style={{ fontSize: 12, color: "#6b7280", background: "#f8fafc", padding: "2px 8px", borderRadius: 8, display: "inline-block" }}>
+                          {v.modePaiement || "Espèces"}
+                        </div>
+                      </td>
+                      <td style={{ padding: 20, textAlign: "center", borderRight: '1px solid #f1f5f9' }}>
+                        <div style={{ fontSize: 14, fontWeight: 600, color: "#374151" }}>{formatDateSafe(v.date)}</div>
+                      </td>
+                      <td style={{ padding: 20, textAlign: "center", borderRight: '1px solid #f1f5f9' }}>
+                        <div style={{ display: "flex", gap: 4, justifyContent: "center", alignItems: "center", flexWrap: "wrap" }}>
+                          <span
+                            style={{
+                              background: "linear-gradient(135deg, #8b5cf6, #7c3aed)",
+                              color: "white",
+                              padding: "4px 8px",
+                              borderRadius: 12,
+                              fontSize: 11,
+                              fontWeight: 600,
+                            }}
+                          >
+                            {totalArticles} art.
+                          </span>
+                          {stockCounts.stock1 > 0 && (
+                            <span
+                              style={{
+                                background: "linear-gradient(135deg, #3b82f6, #2563eb)",
+                                color: "white",
+                                padding: "2px 6px",
+                                borderRadius: 8,
+                                fontSize: 10,
+                                fontWeight: 600,
+                              }}
+                              title={`${stockCounts.stock1} articles depuis Stock1`}
+                            >
+                              S1:{stockCounts.stock1}
+                            </span>
+                          )}
+                          {stockCounts.stock2 > 0 && (
+                            <span
+                              style={{
+                                background: "linear-gradient(135deg, #10b981, #059669)",
+                                color: "white",
+                                padding: "2px 6px",
+                                borderRadius: 8,
+                                fontSize: 10,
+                                fontWeight: 600,
+                              }}
+                              title={`${stockCounts.stock2} articles depuis Stock2`}
+                            >
+                              S2:{stockCounts.stock2}
+                            </span>
+                          )}
+                          {articlesAvecLots > 0 && (
+                            <span
+                              style={{
+                                background: "linear-gradient(135deg, #f59e0b, #d97706)",
+                                color: "white",
+                                padding: "2px 6px",
+                                borderRadius: 8,
+                                fontSize: 10,
+                                fontWeight: 600,
+                              }}
+                              title={`${articlesAvecLots} articles avec traçabilité`}
+                            >
+                              🏷️{articlesAvecLots}
+                            </span>
+                          )}
+                        </div>
+                      </td>
+                      <td style={{ padding: 20, textAlign: "center", borderRight: '1px solid #f1f5f9' }}>
+                        <span
+                          style={{
+                            background:
+                              v.statutPaiement === "payé"
+                                ? "linear-gradient(135deg, #22c55e, #16a34a)"
+                                : v.statutPaiement === "partiel"
+                                ? "linear-gradient(135deg, #eab308, #ca8a04)"
+                                : "linear-gradient(135deg, #ef4444, #dc2626)",
+                            color: "white",
+                            padding: "6px 16px",
+                            borderRadius: 20,
+                            fontSize: 12,
+                            fontWeight: 600,
+                            textTransform: "capitalize",
+                          }}
+                        >
+                          {v.statutPaiement}
+                        </span>
+                      </td>
+                      <td style={{ padding: 20, textAlign: "right", borderRight: '1px solid #f1f5f9' }}>
+                        <div style={{ fontSize: 16, fontWeight: 700, color: "#16a34a" }}>{safeToFixed(total)} DH</div>
+                      </td>
+                      <td style={{ padding: 20, textAlign: "center" }}>
+                        <div style={{ display: "flex", gap: 8, justifyContent: "center" }}>
+                          <span
+                            onClick={() => handleViewDetails(v)}
+                            style={{ cursor: "pointer", fontSize: 18, transition: "transform 0.2s ease" }}
+                            onMouseEnter={(e) => (e.target.style.transform = "scale(1.2)")}
+                            onMouseLeave={(e) => (e.target.style.transform = "scale(1)")}
+                            title="Voir les détails"
+                          >
+                            👁️
+                          </span>
+                          <span
+                            onClick={() => handleEditVente(v)}
+                            style={{ cursor: "pointer", fontSize: 18, marginRight: 10, transition: "transform 0.2s ease" }}
+                            onMouseEnter={(e) => (e.target.style.transform = "scale(1.2)")}
+                            onMouseLeave={(e) => (e.target.style.transform = "scale(1)")}
+                            title="Modifier"
+                          >
+                            ✏️
+                          </span>
+                          <span
+                            onClick={() => handlePrintVente(v)}
+                            style={{ cursor: "pointer", fontSize: 18, marginRight: 10, transition: "transform 0.2s ease" }}
+                            onMouseEnter={(e) => (e.target.style.transform = "scale(1.2)")}
+                            onMouseLeave={(e) => (e.target.style.transform = "scale(1)")}
+                            title="Imprimer"
+                          >
+                            🖨️
+                          </span>
+                          <span
+                            onClick={() => handleDeleteVente(v)}
+                            style={{ cursor: "pointer", fontSize: 18, transition: "transform 0.2s ease" }}
+                            onMouseEnter={(e) => (e.target.style.transform = "scale(1.2)")}
+                            onMouseLeave={(e) => (e.target.style.transform = "scale(1)")}
+                            title="Supprimer"
+                          >
+                            🗑️
+                          </span>
+                        </div>
                       </td>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                  );
+                })
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
 
-            <div style={{ display: "flex", gap: 12, justifyContent: "flex-end", flexWrap: "wrap" }}>
-              <button
-                onClick={() => {
-                  setShowDetails(false);
-                  handleEditVente?.(selectedVente);
-                }}
+      {/* Modal de détails via Portal */}
+      {showDetails &&
+        selectedVente &&
+        createPortal(
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label={`Détails de la vente ${(selectedVente?.id || "").slice(-6).toUpperCase()}`}
+            onClick={(e) => {
+              if (e.target === e.currentTarget) setShowDetails(false);
+            }}
+            style={{
+              position: "fixed",
+              inset: 0,
+              background: "rgba(0, 0, 0, 0.5)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              zIndex: 20000,
+              backdropFilter: "blur(5px)",
+              padding: 16,
+            }}
+          >
+            <div
+              style={{
+                background: "linear-gradient(135deg, #ffffff, #f9fafb)",
+                borderRadius: 20,
+                padding: 16,
+                width: "min(100%, 980px)",
+                maxHeight: "90vh",
+                overflowY: "auto",
+                overflowX: "hidden",
+                boxShadow: "0 20px 50px rgba(0, 0, 0, 0.2)",
+                border: "1px solid rgba(0, 0, 0, 0.05)",
+                position: "relative",
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Escape") setShowDetails(false);
+              }}
+              tabIndex={-1}
+            >
+              <div
                 style={{
-                  background: "linear-gradient(135deg, #f59e0b, #d97706)",
-                  color: "white",
-                  border: "none",
-                  padding: "10px 18px",
-                  borderRadius: 10,
-                  fontSize: 14,
-                  fontWeight: 600,
-                  cursor: "pointer",
-                  transition: "transform 0.2s ease, box-shadow 0.2s ease",
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.transform = "translateY(-2px)";
-                  e.currentTarget.style.boxShadow = "0 8px 20px rgba(245, 158, 11, 0.3)";
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.transform = "translateY(0)";
-                  e.currentTarget.style.boxShadow = "none";
+                  position: "sticky",
+                  top: 0,
+                  zIndex: 2,
+                  background: "linear-gradient(135deg, #ffffff, #f9fafb)",
+                  padding: "12px 40px 12px 12px",
+                  margin: "-16px -16px 16px",
+                  borderBottom: "1px solid rgba(0,0,0,0.06)",
+                  display: "flex",
+                  alignItems: "center",
+                  minHeight: 48,
                 }}
               >
-                Modifier
-              </button>
-              <button
-                onClick={() => {
-                  setShowDetails(false);
-                  handlePrintVente?.(selectedVente);
-                }}
+                <h2
+                  style={{
+                    margin: 0,
+                    fontSize: "clamp(18px, 2.5vw, 28px)",
+                    fontWeight: 700,
+                    color: "#1f2937",
+                    lineHeight: 1.2,
+                    flex: 1,
+                  }}
+                >
+                  Détails de la vente #{(selectedVente?.id || "").slice(-6).toUpperCase()}
+                  {selectedVente?.stockSource && (
+                    <span
+                      style={{
+                        marginLeft: 12,
+                        background: selectedVente.stockSource === "stock2" 
+                          ? "linear-gradient(135deg, #10b981, #059669)"
+                          : "linear-gradient(135deg, #3b82f6, #2563eb)",
+                        color: "white",
+                        padding: "4px 12px",
+                        borderRadius: 12,
+                        fontSize: "clamp(12px, 1.5vw, 16px)",
+                        fontWeight: 600,
+                      }}
+                    >
+                      {selectedVente.stockSource === "stock2" ? "STOCK 2" : "STOCK 1"}
+                    </span>
+                  )}
+                </h2>
+                <button
+                  onClick={() => setShowDetails(false)}
+                  aria-label="Fermer"
+                  style={{
+                    position: "absolute",
+                    right: 12,
+                    top: 12,
+                    width: 36,
+                    height: 36,
+                    display: "grid",
+                    placeItems: "center",
+                    background: "transparent",
+                    border: "none",
+                    borderRadius: 10,
+                    fontSize: 24,
+                    lineHeight: 1,
+                    color: "#111827",
+                    cursor: "pointer",
+                    transition: "background 0.2s ease, transform 0.1s ease",
+                    zIndex: 3,
+                  }}
+                  onMouseEnter={(e) => (e.currentTarget.style.background = "#f3f4f6")}
+                  onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+                  onMouseDown={(e) => (e.currentTarget.style.transform = "scale(0.97)")}
+                  onMouseUp={(e) => (e.currentTarget.style.transform = "scale(1)")}
+                >
+                  ×
+                </button>
+              </div>
+
+              <div
                 style={{
-                  background: "linear-gradient(135deg, #6d28d9, #5b21b6)",
-                  color: "white",
-                  border: "none",
-                  padding: "10px 18px",
-                  borderRadius: 10,
-                  fontSize: 14,
-                  fontWeight: 600,
-                  cursor: "pointer",
-                  transition: "transform 0.2s ease, box-shadow 0.2s ease",
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.transform = "translateY(-2px)";
-                  e.currentTarget.style.boxShadow = "0 8px 20px rgba(109, 40, 217, 0.3)";
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.transform = "translateY(0)";
-                  e.currentTarget.style.boxShadow = "none";
+                  display: "grid",
+                  gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+                  gap: 12,
+                  marginBottom: 24,
                 }}
               >
-                Imprimer
-              </button>
+                <div style={{ background: "linear-gradient(135deg, #dbeafe, #bfdbfe)", borderRadius: 14, padding: 16, boxShadow: "0 4px 15px rgba(59, 130, 246, 0.08)" }}>
+                  <h4 style={{ margin: "0 0 6px", color: "#1d4ed8", fontSize: 14, fontWeight: 600 }}>Client</h4>
+                  <p style={{ margin: 0, fontSize: 16, fontWeight: 700, color: "#1f2937", wordBreak: "break-word" }}>
+                    {selectedVente?.client || "-"}
+                  </p>
+                </div>
+                <div style={{ background: "linear-gradient(135deg, #dcfce7, #bbf7d0)", borderRadius: 14, padding: 16, boxShadow: "0 4px 15px rgba(34, 197, 94, 0.08)" }}>
+                  <h4 style={{ margin: "0 0 6px", color: "#15803d", fontSize: 14, fontWeight: 600 }}>Date</h4>
+                  <p style={{ margin: 0, fontSize: 16, fontWeight: 700, color: "#1f2937" }}>{formatDateSafe(selectedVente?.date)}</p>
+                </div>
+                <div style={{ background: "linear-gradient(135deg, #fef3c7, #fde68a)", borderRadius: 14, padding: 16, boxShadow: "0 4px 15px rgba(245, 158, 11, 0.08)" }}>
+                  <h4 style={{ margin: "0 0 6px", color: "#b45309", fontSize: 14, fontWeight: 600 }}>Statut</h4>
+                  <p style={{ margin: 0, fontSize: 16, fontWeight: 700, color: "#1f2937" }}>{selectedVente?.statutPaiement || "-"}</p>
+                </div>
+                <div style={{ background: "linear-gradient(135deg, #f3e8ff, #e9d5ff)", borderRadius: 14, padding: 16, boxShadow: "0 4px 15px rgba(168, 85, 247, 0.08)" }}>
+                  <h4 style={{ margin: "0 0 6px", color: "#7e22ce", fontSize: 14, fontWeight: 600 }}>Mode</h4>
+                  <p style={{ margin: 0, fontSize: 16, fontWeight: 700, color: "#1f2937" }}>{selectedVente?.modePaiement || "Espèces"}</p>
+                </div>
+                <div style={{ background: "linear-gradient(135deg, #d1fae5, #a7f3d0)", borderRadius: 14, padding: 16, boxShadow: "0 4px 15px rgba(16, 185, 129, 0.08)" }}>
+                  <h4 style={{ margin: "0 0 6px", color: "#065f46", fontSize: 14, fontWeight: 600 }}>Total</h4>
+                  <p style={{ margin: 0, fontSize: 16, fontWeight: 800, color: "#1f2937" }}>
+                    {safeToFixed(selectedVente?.montantTotal)} DH
+                  </p>
+                </div>
+              </div>
+
+              <h3 style={{ margin: "0 0 12px", fontSize: "clamp(16px, 2.2vw, 20px)", fontWeight: 600, color: "#374151" }}>
+                Articles ({selectedVente?.articles?.length || 0})
+              </h3>
+              <div style={{ background: "#fff", borderRadius: 14, boxShadow: "0 8px 25px rgba(0, 0, 0, 0.05)", marginBottom: 20, overflowX: "auto" }}>
+                <table style={{ width: "100%", minWidth: 640, borderCollapse: "collapse" }}>
+                  <thead>
+                    <tr style={{ background: "linear-gradient(135deg, #6d28d9, #5b21b6)", color: "white" }}>
+                      <th style={{ padding: 12, textAlign: "left" }}>Produit / Traçabilité</th>
+                      <th style={{ padding: 12, textAlign: "center" }}>Qté</th>
+                      <th style={{ padding: 12, textAlign: "right" }}>Prix Unit.</th>
+                      <th style={{ padding: 12, textAlign: "right" }}>Remise</th>
+                      <th style={{ padding: 12, textAlign: "right" }}>Total</th>
+                      <th style={{ padding: 12, textAlign: "center" }}>Stock</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(selectedVente?.articles || []).map((a, i) => (
+                      <tr key={i} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                        <td style={{ padding: 12, verticalAlign: "top" }}>
+                          <strong>{a?.produit || "-"}</strong>
+                          {(a?.numeroArticle || a?.numeroLot || a?.fournisseur || a?.datePeremption) && (
+                            <div style={{ fontSize: 12, color: "#6b7280", marginTop: 4 }}>
+                              {a?.numeroArticle ? `N° article: ${a.numeroArticle}` : ""}
+                              {a?.numeroLot ? `${a?.numeroArticle ? " | " : ""}Lot: ${a.numeroLot}` : ""}
+                              {a?.fournisseur ? `${(a?.numeroArticle || a?.numeroLot) ? " | " : ""}Fournisseur: ${a.fournisseur}` : ""}
+                              {a?.datePeremption ? `${(a?.numeroArticle || a?.numeroLot || a?.fournisseur) ? " | " : ""}Exp: ${formatDateSafe(a.datePeremption)}` : ""}
+                            </div>
+                          )}
+                        </td>
+                        <td style={{ padding: 12, textAlign: "center" }}>{safeNumber(a?.quantite)}</td>
+                        <td style={{ padding: 12, textAlign: "right" }}>{safeToFixed(a?.prixUnitaire)} DH</td>
+                        <td style={{ padding: 12, textAlign: "right" }}>{safeToFixed(a?.remise)} DH</td>
+                        <td style={{ padding: 12, textAlign: "right", fontWeight: 600 }}>
+                          {safeToFixed(safeNumber(a?.prixUnitaire) * safeNumber(a?.quantite) - safeNumber(a?.remise))} DH
+                        </td>
+                        <td style={{ padding: 12, textAlign: "center" }}>
+                          <span
+                            style={{
+                              background: (a?.stockSource === "stock2") 
+                                ? "linear-gradient(135deg, #10b981, #059669)"
+                                : "linear-gradient(135deg, #3b82f6, #2563eb)",
+                              color: "white",
+                              padding: "4px 8px",
+                              borderRadius: 12,
+                              fontSize: 11,
+                              fontWeight: 600,
+                            }}
+                          >
+                            {(a?.stockSource === "stock2") ? "S2" : "S1"}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              <div style={{ display: "flex", gap: 12, justifyContent: "flex-end", flexWrap: "wrap" }}>
+                <button
+                  onClick={() => {
+                    setShowDetails(false);
+                    handleEditVente?.(selectedVente);
+                  }}
+                  style={{
+                    background: "linear-gradient(135deg, #f59e0b, #d97706)",
+                    color: "white",
+                    border: "none",
+                    padding: "10px 18px",
+                    borderRadius: 10,
+                    fontSize: 14,
+                    fontWeight: 600,
+                    cursor: "pointer",
+                    transition: "transform 0.2s ease, box-shadow 0.2s ease",
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.transform = "translateY(-2px)";
+                    e.currentTarget.style.boxShadow = "0 8px 20px rgba(245, 158, 11, 0.3)";
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.transform = "translateY(0)";
+                    e.currentTarget.style.boxShadow = "none";
+                  }}
+                >
+                  Modifier
+                </button>
+                <button
+                  onClick={() => {
+                    setShowDetails(false);
+                    handlePrintVente?.(selectedVente);
+                  }}
+                  style={{
+                    background: "linear-gradient(135deg, #6d28d9, #5b21b6)",
+                    color: "white",
+                    border: "none",
+                    padding: "10px 18px",
+                    borderRadius: 10,
+                    fontSize: 14,
+                    fontWeight: 600,
+                    cursor: "pointer",
+                    transition: "transform 0.2s ease, box-shadow 0.2s ease",
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.transform = "translateY(-2px)";
+                    e.currentTarget.style.boxShadow = "0 8px 20px rgba(109, 40, 217, 0.3)";
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.transform = "translateY(0)";
+                    e.currentTarget.style.boxShadow = "none";
+                  }}
+                >
+                  Imprimer
+                </button>
+              </div>
             </div>
-          </div>
-        </div>,
-        document.body
-      )}
-  </div>
+          </div>,
+          document.body
+        )}
+    </div>
   );
 }
 
@@ -2693,7 +2665,9 @@ function CameraBarcodeInlineModal({ open, onClose, onDetected }) {
               cursor: "pointer",
             }}
           >
-            Fermer </button> </div>
+            Fermer
+          </button>
+        </div>
 
         <div
           style={{

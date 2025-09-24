@@ -26,7 +26,10 @@
     "eject": "react-scripts eject"
   },
   "eslintConfig": {
-    "extends": ["react-app", "react-app/jest"],
+    "extends": [
+      "react-app",
+      "react-app/jest"
+    ],
     "overrides": [
       {
         "files": [
@@ -43,14 +46,29 @@
         "rules": {
           "react-hooks/exhaustive-deps": "off",
           "no-loop-func": "off",
-          "no-unused-vars": ["warn", { "varsIgnorePattern": "^_", "argsIgnorePattern": "^_", "ignoreRestSiblings": true }]
+          "no-unused-vars": [
+            "warn",
+            {
+              "varsIgnorePattern": "^_",
+              "argsIgnorePattern": "^_",
+              "ignoreRestSiblings": true
+            }
+          ]
         }
       }
     ]
   },
   "browserslist": {
-    "production": [">0.2%", "not dead", "not op_mini all"],
-    "development": ["last 1 chrome version", "last 1 firefox version", "last 1 safari version"]
+    "production": [
+      ">0.2%",
+      "not dead",
+      "not op_mini all"
+    ],
+    "development": [
+      "last 1 chrome version",
+      "last 1 firefox version",
+      "last 1 safari version"
+    ]
   },
   "devDependencies": {
     "@craco/craco": "^7.1.0",

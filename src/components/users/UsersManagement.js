@@ -1,4 +1,4 @@
-// src/components/users/UsersManagement.js - Version responsive sans Test, sans Supprimer, et Invitations masquée si 0
+// src/components/users/UsersManagement.js - Version responsive avec gestion des permissions personnalisées
 import React, { useState, useEffect } from "react";
 import { db } from "../../firebase/config";
 import { useUserRole } from "../../contexts/UserRoleContext";
@@ -13,11 +13,14 @@ import {
   getDocs,
   limit
 } from "firebase/firestore";
+import CustomPermissionsManager from "../CustomPermissionsManager";
+import UserPermissionsDisplay from "../UserPermissionsDisplay";
+import permissions, { PERMISSION_LABELS } from "../../utils/permissions";
 
 export default function UsersManagement() {
-  const { user, societeId, role, loading, isOwner } = useUserRole();
+  const { user, societeId, role, loading, isOwner, canManageUsers, refreshCustomPermissions } = useUserRole();
 
-  // États
+  // États existants
   const [utilisateurs, setUtilisateurs] = useState([]);
   const [invitations, setInvitations] = useState([]);
   const [showInviteForm, setShowInviteForm] = useState(false);
@@ -28,6 +31,11 @@ export default function UsersManagement() {
   const [invitationCode, setInvitationCode] = useState(null);
   const [showInviteCode, setShowInviteCode] = useState(false);
   const [updatingUser, setUpdatingUser] = useState("");
+
+  // NOUVEAUX ÉTATS pour les permissions personnalisées
+  const [permissionDialogOpen, setPermissionDialogOpen] = useState(false);
+  const [viewPermissionsOpen, setViewPermissionsOpen] = useState(false);
+  const [selectedUser, setSelectedUser] = useState(null);
 
   // Responsive
   const [screenSize, setScreenSize] = useState({
@@ -52,7 +60,67 @@ export default function UsersManagement() {
   const hasAccess =
     isOwner || ["pharmacien", "admin", "ADMIN", "docteur"].includes((role || "").toLowerCase());
 
-  // Chargement initial
+  // NOUVELLE FONCTION : Obtenir les permissions supplémentaires d'un utilisateur
+  const getExtraPermissionsCount = (userData) => {
+    if (userData.role !== 'vendeuse' || !userData.customPermissions) return 0;
+    const defaultPermissions = permissions.vendeuse || [];
+    return userData.customPermissions.filter(p => !defaultPermissions.includes(p)).length;
+  };
+
+  // NOUVELLES FONCTIONS pour les dialogs permissions
+  const handleOpenPermissions = (userData) => {
+    setSelectedUser(userData);
+    setPermissionDialogOpen(true);
+  };
+
+  const handleViewPermissions = (userData) => {
+    setSelectedUser(userData);
+    setViewPermissionsOpen(true);
+  };
+
+  const handleClosePermissions = () => {
+    setPermissionDialogOpen(false);
+    setSelectedUser(null);
+  };
+
+  const handleCloseViewPermissions = () => {
+    setViewPermissionsOpen(false);
+    setSelectedUser(null);
+  };
+
+  const handlePermissionsUpdated = async () => {
+    // Rafraîchir les permissions dans le contexte si c'est l'utilisateur actuel
+    await refreshCustomPermissions();
+    
+    // Recharger la liste des utilisateurs pour mettre à jour les infos de permissions
+    if (user && societeId && hasAccess) {
+      try {
+        const qUsers = query(collection(db, "users"), where("societeId", "==", societeId));
+        const snapshot = await getDocs(qUsers);
+        const usersList = [];
+        snapshot.forEach((d) => {
+          const userData = d.data();
+          usersList.push({
+            id: d.id,
+            email: userData.email,
+            role: userData.role || "vendeuse",
+            nom: userData.nom || "",
+            prenom: userData.prenom || "",
+            actif: userData.actif !== false,
+            customPermissions: userData.customPermissions || [] // NOUVEAU
+          });
+        });
+        setUtilisateurs(usersList);
+      } catch (error) {
+        console.error("Erreur rechargement utilisateurs:", error);
+      }
+    }
+    
+    setNotification({ message: "Permissions mises à jour avec succès", type: "success" });
+    setTimeout(() => setNotification(null), 3000);
+  };
+
+  // Chargement initial MODIFIÉ pour inclure customPermissions
   useEffect(() => {
     if (!user || !societeId || !hasAccess) return;
 
@@ -69,7 +137,8 @@ export default function UsersManagement() {
             role: userData.role || "vendeuse",
             nom: userData.nom || "",
             prenom: userData.prenom || "",
-            actif: userData.actif !== false
+            actif: userData.actif !== false,
+            customPermissions: userData.customPermissions || [] // NOUVEAU
           });
         });
         setUtilisateurs(usersList);
@@ -107,7 +176,7 @@ export default function UsersManagement() {
     loadInvitations();
   }, [user?.uid, societeId, hasAccess]);
 
-  // Invitation
+  // Fonctions existantes inchangées...
   const sendInvitation = async (e) => {
     e.preventDefault();
     if (!inviteEmail.trim()) {
@@ -172,7 +241,6 @@ export default function UsersManagement() {
     }
   };
 
-  // Verrouiller / Déverrouiller
   const toggleUserLock = async (userId, currentStatus, userEmail) => {
     if (updatingUser === userId) return;
     setUpdatingUser(userId);
@@ -203,14 +271,13 @@ export default function UsersManagement() {
     }
   };
 
-  // Restrictions de gestion
   const canManageUser = (targetUser) => {
     if (targetUser.id === user?.uid) return false;
     if (["pharmacien", "docteur", "admin"].includes(targetUser.role?.toLowerCase())) return false;
     return ["pharmacien", "docteur", "admin"].includes(role?.toLowerCase()) || isOwner;
   };
 
-  // Styles
+  // Styles MODIFIÉS pour inclure les nouveaux boutons
   const getResponsiveStyles = () => {
     const { isMobile, isTablet, isDesktop } = screenSize;
 
@@ -290,9 +357,7 @@ export default function UsersManagement() {
         borderRadius: isMobile ? "10px" : "15px",
         border: "2px solid #e2e8f0",
         display: "flex",
-        flexDirection: isMobile ? "column" : "row",
-        justifyContent: "space-between",
-        alignItems: isMobile ? "stretch" : "center",
+        flexDirection: "column",
         gap: isMobile ? "15px" : "20px",
         position: "relative"
       },
@@ -309,19 +374,35 @@ export default function UsersManagement() {
         color: "#6b7280",
         wordBreak: "break-word"
       },
+      // NOUVEAU : Zone pour les informations de permissions
+      permissionsInfo: {
+        display: "flex",
+        flexWrap: "wrap",
+        gap: "5px",
+        marginTop: "8px"
+      },
+      permissionChip: {
+        background: "#e0f2fe",
+        color: "#0277bd",
+        fontSize: "0.75em",
+        padding: "3px 8px",
+        borderRadius: "12px",
+        fontWeight: 600
+      },
+      extraPermissionChip: {
+        background: "#e8f5e8",
+        color: "#2e7d2e",
+        fontSize: "0.75em",
+        padding: "3px 8px",
+        borderRadius: "12px",
+        fontWeight: 600
+      },
       userActions: {
         display: "flex",
         alignItems: "center",
+        justifyContent: "space-between",
         gap: "15px",
-        flexShrink: 0,
-        ...(isMobile && {
-          overflowX: "auto",
-          overflowY: "hidden",
-          WebkitOverflowScrolling: "touch",
-          scrollbarWidth: "none",
-          msOverflowStyle: "none",
-          paddingBottom: "5px"
-        })
+        flexWrap: isMobile ? "wrap" : "nowrap"
       },
       statusBadge: {
         padding: "6px 12px",
@@ -335,7 +416,7 @@ export default function UsersManagement() {
         display: "flex",
         gap: "8px",
         flexShrink: 0,
-        ...(isMobile && { minWidth: "max-content" })
+        flexWrap: "wrap"
       },
       actionButton: {
         border: "none",
@@ -349,6 +430,21 @@ export default function UsersManagement() {
         minWidth: isMobile ? "44px" : "auto",
         whiteSpace: "nowrap",
         transition: "all 0.3s ease"
+      },
+      // NOUVEAUX STYLES pour les boutons permissions
+      permissionButton: {
+        border: "none",
+        borderRadius: isMobile ? "6px" : "8px",
+        padding: isMobile ? "8px 12px" : "6px 10px",
+        fontSize: isMobile ? "0.8em" : "0.75em",
+        fontWeight: 600,
+        cursor: "pointer",
+        color: "white",
+        minHeight: isMobile ? "36px" : "auto",
+        transition: "all 0.3s ease",
+        display: "flex",
+        alignItems: "center",
+        gap: "4px"
       },
       input: {
         width: "100%",
@@ -412,7 +508,7 @@ export default function UsersManagement() {
 
   const styles = getResponsiveStyles();
 
-  // Guards
+  // Guards inchangés...
   if (loading) {
     return (
       <div style={styles.container}>
@@ -434,7 +530,7 @@ export default function UsersManagement() {
   }
 
   const pendingInvites = invitations.filter((i) => i.statut === "pending");
-  const showInvitationsSection = invitations.length > 0; // Masque totalement si 0
+  const showInvitationsSection = invitations.length > 0;
 
   return (
     <div style={styles.container}>
@@ -459,7 +555,7 @@ export default function UsersManagement() {
             </div>
           )}
 
-          {/* Section Utilisateurs */}
+          {/* Section Utilisateurs MODIFIÉE */}
           <div style={{ marginBottom: "40px" }}>
             <div style={styles.sectionHeader}>
               <h2 style={styles.sectionTitle}>
@@ -480,65 +576,115 @@ export default function UsersManagement() {
             </div>
 
             <div style={styles.usersContainer}>
-              {utilisateurs.map((u) => (
-                <div key={u.id} style={styles.userCard}>
-                  <div style={styles.userInfo}>
-                    <div style={styles.userName}>
-                      {u.prenom && u.nom ? `${u.prenom} ${u.nom}` : u.email}
-                      {u.id === user?.uid && (
-                        <span style={{ color: "#48bb78", fontSize: "0.8em", marginLeft: "10px" }}>
-                          (Vous)
-                        </span>
-                      )}
-                    </div>
-                    <div style={styles.userDetails}>
-                      {u.email} • {u.role}
-                    </div>
-                  </div>
+              {utilisateurs.map((u) => {
+                const extraCount = getExtraPermissionsCount(u);
+                
+                return (
+                  <div key={u.id} style={styles.userCard}>
+                    <div style={styles.userInfo}>
+                      <div style={styles.userName}>
+                        {u.prenom && u.nom ? `${u.prenom} ${u.nom}` : u.email}
+                        {u.id === user?.uid && (
+                          <span style={{ color: "#48bb78", fontSize: "0.8em", marginLeft: "10px" }}>
+                            (Vous)
+                          </span>
+                        )}
+                      </div>
+                      <div style={styles.userDetails}>
+                        {u.email} • {u.role === 'docteur' ? 'Pharmacien' : 'Vendeuse'}
+                      </div>
 
-                  <div style={styles.userActions}>
-                    <div
-                      style={{
-                        ...styles.statusBadge,
-                        background: u.actif ? "#c6f6d5" : "#fed7d7",
-                        color: u.actif ? "#22543d" : "#c53030"
-                      }}
-                    >
-                      {u.actif ? "Actif" : "Verrouillé"}
-                    </div>
-
-                    {canManageUser(u) && (
-                      <div style={styles.actionButtons}>
-                        {/* 🔒 / 🔓 uniquement (pas de bouton Supprimer) */}
-                        <button
-                          style={{
-                            ...styles.actionButton,
-                            background: u.actif
-                              ? "linear-gradient(135deg, #ed8936 0%, #dd6b20 100%)"
-                              : "linear-gradient(135deg, #48bb78 0%, #38a169 100%)",
-                            opacity: updatingUser === u.id ? 0.6 : 1,
-                            cursor: updatingUser === u.id ? "not-allowed" : "pointer"
-                          }}
-                          onClick={() => toggleUserLock(u.id, u.actif, u.email)}
-                          disabled={updatingUser === u.id}
-                          title={u.actif ? "Verrouiller" : "Déverrouiller"}
-                        >
-                          {updatingUser === u.id ? "..." : u.actif ? "🔒" : "🔓"}
-                          {!screenSize.isMobile && (
-                            <span style={{ marginLeft: 6 }}>
-                              {u.actif ? "Verrouiller" : "Déverrouiller"}
+                      {/* NOUVELLE SECTION : Informations sur les permissions */}
+                      {u.role === 'vendeuse' && (
+                        <div style={styles.permissionsInfo}>
+                          <span style={styles.permissionChip}>
+                            {permissions.vendeuse?.length || 0} permissions de base
+                          </span>
+                          {extraCount > 0 && (
+                            <span style={styles.extraPermissionChip}>
+                              +{extraCount} permissions supplémentaires ✨
                             </span>
                           )}
-                        </button>
+                        </div>
+                      )}
+                      {u.role === 'docteur' && (
+                        <div style={styles.permissionsInfo}>
+                          <span style={styles.permissionChip}>
+                            Accès administrateur complet
+                          </span>
+                        </div>
+                      )}
+                    </div>
+
+                    <div style={styles.userActions}>
+                      <div
+                        style={{
+                          ...styles.statusBadge,
+                          background: u.actif ? "#c6f6d5" : "#fed7d7",
+                          color: u.actif ? "#22543d" : "#c53030"
+                        }}
+                      >
+                        {u.actif ? "Actif" : "Verrouillé"}
                       </div>
-                    )}
+
+                      <div style={styles.actionButtons}>
+                        {/* NOUVEAUX BOUTONS : Gestion des permissions */}
+                        <button
+                          style={{
+                            ...styles.permissionButton,
+                            background: "linear-gradient(135deg, #4299e1 0%, #3182ce 100%)"
+                          }}
+                          onClick={() => handleViewPermissions(u)}
+                          title="Voir les permissions"
+                        >
+                          👁️ {screenSize.isMobile ? "" : "Voir"}
+                        </button>
+
+                        {u.role === 'vendeuse' && canManageUsers() && (
+                          <button
+                            style={{
+                              ...styles.permissionButton,
+                              background: "linear-gradient(135deg, #9f7aea 0%, #805ad5 100%)"
+                            }}
+                            onClick={() => handleOpenPermissions(u)}
+                            title="Gérer les permissions personnalisées"
+                          >
+                            ⚙️ {screenSize.isMobile ? "" : "Permissions"}
+                          </button>
+                        )}
+
+                        {/* Bouton existant de verrouillage */}
+                        {canManageUser(u) && (
+                          <button
+                            style={{
+                              ...styles.actionButton,
+                              background: u.actif
+                                ? "linear-gradient(135deg, #ed8936 0%, #dd6b20 100%)"
+                                : "linear-gradient(135deg, #48bb78 0%, #38a169 100%)",
+                              opacity: updatingUser === u.id ? 0.6 : 1,
+                              cursor: updatingUser === u.id ? "not-allowed" : "pointer"
+                            }}
+                            onClick={() => toggleUserLock(u.id, u.actif, u.email)}
+                            disabled={updatingUser === u.id}
+                            title={u.actif ? "Verrouiller" : "Déverrouiller"}
+                          >
+                            {updatingUser === u.id ? "..." : u.actif ? "🔒" : "🔓"}
+                            {!screenSize.isMobile && (
+                              <span style={{ marginLeft: 6 }}>
+                                {u.actif ? "Verrouiller" : "Déverrouiller"}
+                              </span>
+                            )}
+                          </button>
+                        )}
+                      </div>
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
 
-          {/* Section Invitations — masquée si 0 */}
+          {/* Section Invitations — inchangée */}
           {showInvitationsSection && (
             <div>
               <h2 style={styles.sectionTitle}>
@@ -576,6 +722,7 @@ export default function UsersManagement() {
         </div>
       </div>
 
+      {/* Modals existants inchangés... */}
       {/* Modal Invitation */}
       {showInviteForm && (
         <div style={styles.modalOverlay}>
@@ -641,7 +788,7 @@ export default function UsersManagement() {
         </div>
       )}
 
-      {/* Modal Code Invitation */}
+      {/* Modal Code Invitation - inchangé */}
       {showInviteCode && invitationCode && (
         <div style={styles.modalOverlay}>
           <div style={styles.modalContent}>
@@ -734,7 +881,56 @@ export default function UsersManagement() {
         </div>
       )}
 
-      {/* Styles additionnels */}
+      {/* NOUVEAUX MODALS : Gestion des permissions */}
+      {/* Dialog pour gérer les permissions */}
+      <CustomPermissionsManager
+        open={permissionDialogOpen}
+        onClose={handleClosePermissions}
+        userId={selectedUser?.id}
+        userName={selectedUser?.prenom && selectedUser?.nom 
+          ? `${selectedUser.prenom} ${selectedUser.nom}` 
+          : selectedUser?.email}
+        societeId={societeId}
+        onPermissionsUpdated={handlePermissionsUpdated}
+      />
+
+      {/* Dialog pour voir les permissions */}
+      {viewPermissionsOpen && selectedUser && (
+        <div style={styles.modalOverlay}>
+          <div style={{
+            ...styles.modalContent,
+            maxWidth: screenSize.isMobile ? "100%" : "600px",
+            maxHeight: "90vh"
+          }}>
+            <UserPermissionsDisplay 
+              user={{
+                ...selectedUser,
+                displayName: selectedUser.prenom && selectedUser.nom 
+                  ? `${selectedUser.prenom} ${selectedUser.nom}` 
+                  : selectedUser.email
+              }}
+              variant="dialog"
+              showDetails={true}
+            />
+            <div style={{ 
+              display: 'flex', 
+              justifyContent: 'flex-end', 
+              marginTop: '20px',
+              paddingTop: '15px',
+              borderTop: '1px solid #e2e8f0'
+            }}>
+              <button
+                style={styles.button}
+                onClick={handleCloseViewPermissions}
+              >
+                Fermer
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Styles additionnels - inchangés */}
       <style>
         {`
           .user-actions-scroll::-webkit-scrollbar { display: none; }

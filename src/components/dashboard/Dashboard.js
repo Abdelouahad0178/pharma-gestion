@@ -10,40 +10,33 @@ import {
   getDoc,
 } from "firebase/firestore";
 import { useUserRole } from "../../contexts/UserRoleContext";
+import { usePermissions } from "../hooks/usePermissions"; // NOUVEAU IMPORT
 import { Link } from "react-router-dom";
 
 /* =========================
    Constantes & Utils
 ========================= */
 
-const EXPIRY_THRESHOLD_DAYS = 180; // Afficher aussi si dluo <= 180 jours
-const DEFAULT_SEUIL = 10;          // 🔔 Seuil de stock par défaut = 10
+const EXPIRY_THRESHOLD_DAYS = 180; // Péremption proche en jours
+const DEFAULT_SEUIL = 10;          // Seuil de stock par défaut
 
-// Parse Firestore Timestamp, {seconds}, Date, ISO string, or number
-function parseDate(dateInput) {
-  if (!dateInput) return null;
+// Parse Timestamp / {seconds} / Date / string / number
+function toDate(v) {
+  if (!v) return null;
   try {
-    if (dateInput?.toDate && typeof dateInput.toDate === "function") {
-      return dateInput.toDate(); // Firestore Timestamp
-    }
-    if (dateInput?.seconds != null) {
-      return new Date(dateInput.seconds * 1000); // Firestore {seconds, nanoseconds}
-    }
-    if (dateInput instanceof Date) return isNaN(dateInput.getTime()) ? null : dateInput;
-    if (typeof dateInput === "string" || typeof dateInput === "number") {
-      const d = new Date(dateInput);
-      return isNaN(d.getTime()) ? null : d;
-    }
-    return null;
+    if (v?.toDate && typeof v.toDate === "function") return v.toDate();
+    if (typeof v?.seconds === "number") return new Date(v.seconds * 1000);
+    if (v instanceof Date) return isNaN(v) ? null : v;
+    const d = new Date(v);
+    return isNaN(d) ? null : d;
   } catch {
     return null;
   }
 }
 
-// Compare two dates by LOCAL day
-function isSameLocalDay(a, b = new Date()) {
-  const da = parseDate(a);
-  const dbb = parseDate(b);
+// Même jour (local)
+function sameLocalDay(a, b = new Date()) {
+  const da = toDate(a), dbb = toDate(b);
   if (!da || !dbb) return false;
   return (
     da.getFullYear() === dbb.getFullYear() &&
@@ -52,59 +45,40 @@ function isSameLocalDay(a, b = new Date()) {
   );
 }
 
-// Check if date is in period (dateMin/dateMax in YYYY-MM-DD) — LOCAL time
-function isDateInPeriod(dateInput, period, minDate = null, maxDate = null) {
-  const d = parseDate(dateInput);
+// Filtre période (local) + bornes
+function inPeriod(dateInput, period, minDate, maxDate) {
+  const d = toDate(dateInput);
   if (!d) return false;
 
-  try {
-    // Bounds first
-    if (minDate) {
-      const min = new Date(`${minDate}T00:00:00`);
-      if (d < min) return false;
-    }
-    if (maxDate) {
-      const max = new Date(`${maxDate}T23:59:59`);
-      if (d > max) return false;
-    }
+  if (minDate) {
+    const min = new Date(`${minDate}T00:00:00`);
+    if (d < min) return false;
+  }
+  if (maxDate) {
+    const max = new Date(`${maxDate}T23:59:59`);
+    if (d > max) return false;
+  }
+  if (minDate || maxDate) return true;
 
-    // If custom bounds given, inclusion already tested
-    if (minDate || maxDate) return true;
-
-    // Relative ranges (local)
-    const now = new Date();
-    switch (period) {
-      case "jour":
-        return isSameLocalDay(d, now);
-      case "semaine": {
-        const weekAgo = new Date(now);
-        weekAgo.setDate(now.getDate() - 7);
-        return d >= weekAgo;
-      }
-      case "mois":
-        return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth();
-      case "annee":
-        return d.getFullYear() === now.getFullYear();
-      case "toutes":
-      default:
-        return true;
-    }
-  } catch {
-    return false;
+  const now = new Date();
+  switch (period) {
+    case "jour":    return sameLocalDay(d, now);
+    case "semaine": return d >= new Date(now.getFullYear(), now.getMonth(), now.getDate() - 7);
+    case "mois":    return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth();
+    case "annee":   return d.getFullYear() === now.getFullYear();
+    default:        return true;
   }
 }
 
-// Get date for an achat
-function getAchatDate(a) {
+// Première date d'un achat
+function achatDate(a) {
   return a?.dateReception ?? a?.dateAchat ?? a?.date ?? a?.timestamp ?? a?.createdAt ?? null;
 }
 
-// Days until expiration, or null if no date
-function daysToExpiration(datePeremption) {
-  const d = parseDate(datePeremption);
+function daysToExp(per) {
+  const d = toDate(per);
   if (!d) return null;
-  const today = new Date();
-  return Math.ceil((d - today) / 86400000);
+  return Math.ceil((d - new Date()) / 86400000);
 }
 
 function formatDH(n) {
@@ -112,33 +86,80 @@ function formatDH(n) {
   return `${v.toFixed(2)} DH`;
 }
 
-// Normalize text (remove accents, trim, lowercase)
-function normalizeText(s) {
+function norm(s) {
   return String(s || "")
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .trim()
-    .toLowerCase();
+    .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+    .trim().toLowerCase();
 }
 
-// Check if payment mode is cash
-function isCashMode(mode) {
-  const m = normalizeText(mode);
+function isCash(mode) {
+  const m = norm(mode);
   return ["especes", "espece", "cash", "liquide"].includes(m);
 }
 
 /* =========================
-   Helpers affichage utilisateur
+   Détection du STOCK d'un document (S1/S2)
+   - 1) Doc-level: stockTag/stock/...
+   - 2) Lignes: articles/mouvements
+   - 3) Défaut = stock1 (back-compat)
+========================= */
+const STOCK_KEYS = [
+  "stockTag", "stock", "stockName", "stock_label", "depot", "magasin", "source",
+  "stockId", "sourceStock", "originStock", "stockSource",
+  "ligneStock", "store", "warehouse",
+];
+
+function normalizeStock(val) {
+  if (val === undefined || val === null) return "unknown";
+  if (typeof val === "number") return val === 1 ? "stock1" : val === 2 ? "stock2" : "unknown";
+  const raw = String(val).toLowerCase().replace(/[\s_\-]/g, "");
+  if (["stock1","s1","magasin1","depot1","principal","primary","p","m1","1"].includes(raw)) return "stock1";
+  if (["stock2","s2","magasin2","depot2","secondaire","secondary","s","m2","2"].includes(raw)) return "stock2";
+  return "unknown";
+}
+
+function getDocStockTag(doc) {
+  // 1) Doc-level
+  for (const k of STOCK_KEYS) {
+    if (doc?.[k] !== undefined) {
+      const tag = normalizeStock(doc[k]);
+      if (tag !== "unknown") return tag;
+    }
+  }
+  // 2) Lignes
+  const lines = Array.isArray(doc?.articles) ? doc.articles
+              : Array.isArray(doc?.mouvements) ? doc.mouvements
+              : [];
+  if (lines.length) {
+    let c1 = 0, c2 = 0;
+    for (const l of lines) {
+      for (const k of STOCK_KEYS) {
+        if (l?.[k] !== undefined) {
+          const tag = normalizeStock(l[k]);
+          if (tag === "stock1") c1++;
+          if (tag === "stock2") c2++;
+        }
+      }
+    }
+    if (c1 > c2 && c1 > 0) return "stock1";
+    if (c2 > c1 && c2 > 0) return "stock2";
+  }
+  // 3) Défaut
+  return "stock1";
+}
+const isStock1 = (doc) => getDocStockTag(doc) === "stock1";
+
+/* =========================
+   Affichage helpers
 ========================= */
 function roleDisplay(role) {
   const r = (role || "").toLowerCase();
   if (r === "docteur") return "Docteur";
   if (r === "vendeuse") return "Vendeuse";
-  if (r === "vendeur") return "Vendeur";
+  if (r === "vendeur")  return "Vendeur";
   if (!r) return "Utilisateur";
   return r.charAt(0).toUpperCase() + r.slice(1);
 }
-
 function userDisplayName(user) {
   if (!user) return "—";
   if (user.displayName && user.displayName.trim()) return user.displayName.trim();
@@ -147,37 +168,44 @@ function userDisplayName(user) {
 }
 
 /* =========================
-   Dashboard
+   Composant
 ========================= */
 
 export default function Dashboard() {
-  const { user, societeId, role, loading } = useUserRole();
+  const { user, societeId, role, loading, hasCustomPermissions, getExtraPermissions } = useUserRole();
+  
+  // NOUVEAU : Utiliser le hook permissions
+  const { can, isVendeuse } = usePermissions();
 
-  // Data states
+  // Société
   const [societeInfo, setSocieteInfo] = useState(null);
   const [societeLoading, setSocieteLoading] = useState(false);
 
+  // Collections
   const [ventes, setVentes] = useState([]);
   const [achats, setAchats] = useState([]);
-  const [stock, setStock] = useState([]); // stock traditionnel (si utilisé ailleurs)
-  const [stockEntries, setStockEntries] = useState([]); // multi-lots
+  const [stock, setStock] = useState([]);            // produits (si utilisés ailleurs)
+  const [stockEntries, setStockEntries] = useState([]); // lots multi-stocks (stock1/stock2)
   const [paiements, setPaiements] = useState([]);
 
-  const [dataLoading, setDataLoading] = useState(true);
+  // UI
   const [notification, setNotification] = useState(null);
-
-  // UI & responsive
   const [isMobile, setIsMobile] = useState(false);
   const [isTablet, setIsTablet] = useState(false);
 
-  // Filters
+  // Filtres période
   const [periode, setPeriode] = useState("mois");
   const [dateMin, setDateMin] = useState("");
   const [dateMax, setDateMax] = useState("");
 
-  /* =========================
-      Responsive (throttled)
-  ========================= */
+  // Bascule S1 ↔ TOUS (dblclick) — uniquement Ventes & Achats
+  const [showAllVentes, setShowAllVentes] = useState(false);
+  const [showAllAchats, setShowAllAchats] = useState(false);
+
+  // Caisse: pas de bascule — TOUS
+  // Paiements: pas de bascule — TOUS
+
+  /* Responsive */
   useEffect(() => {
     let rafId = null;
     const onResize = () => {
@@ -196,518 +224,331 @@ export default function Dashboard() {
     };
   }, []);
 
-  /* =========================
-      Helpers
-  ========================= */
-  const showNotification = useCallback((message, type = "success") => {
+  const toast = useCallback((message, type = "success") => {
     setNotification({ message, type });
-    setTimeout(() => setNotification(null), 3000);
+    setTimeout(() => setNotification(null), 2500);
   }, []);
 
-  // Compute achat amount if no pre-calculated total
-  const computeMontantAchat = useCallback((achat) => {
-    try {
-      if (achat?.montantTotal && !isNaN(achat.montantTotal)) {
-        return Number(achat.montantTotal);
-      }
-      const articles = Array.isArray(achat?.articles) ? achat.articles : [];
-      const totalArticles = articles.reduce((sum, a) => {
-        const base = (a && (a.recu || a.commandee)) ? (a.recu || a.commandee) : a || {};
-        const qte = Number(base?.quantite) || 0;
-        const pu = Number(base?.prixUnitaire ?? base?.prixAchat ?? 0) || 0;
-        const remise = Number(base?.remise) || 0;
-        return sum + (qte * pu - remise);
-      }, 0);
-      const remiseGlobale = Number(achat?.remiseGlobale) || 0;
-      return Math.max(0, totalArticles - remiseGlobale);
-    } catch {
-      return 0;
-    }
-  }, []);
-
-  // Compute vente amount if no pre-calculated total (non utilisé ici mais prêt)
-  const computeMontantVente = useCallback((vente) => {
-    try {
-      if (vente?.montantTotal && !isNaN(vente.montantTotal)) {
-        return Number(vente.montantTotal);
-      }
-      const articles = Array.isArray(vente?.articles) ? vente.articles : [];
-      const totalArticles = articles.reduce((sum, a) => {
-        const q = Number(a?.quantite) || 0;
-        const pu = Number(a?.prixUnitaire) || 0;
-        const r = Number(a?.remise) || 0;
-        return sum + (q * pu - r);
-      }, 0);
-      const remiseGlobale = Number(vente?.remiseGlobale) || 0;
-      return Math.max(0, totalArticles - remiseGlobale);
-    } catch {
-      return 0;
-    }
-  }, []);
-
-  /* =========================
-      Fetch Société & Données (temps réel)
-  ========================= */
+  /* Fetch temps réel */
   useEffect(() => {
     if (loading || !user || !societeId) return;
-
-    setDataLoading(true);
     const unsubs = [];
 
-    // Société (doc)
+    // Société
     (async () => {
-      try {
-        setSocieteLoading(true);
-        // onSnapshot doc -> temps réel (fallback getDoc si erreur)
-        const ref = doc(db, "societe", societeId);
-        const unsubSociete = onSnapshot(
-          ref,
-          (snap) => setSocieteInfo(snap.exists() ? snap.data() : { nom: "Société inconnue" }),
-          async () => {
-            const snap = await getDoc(ref).catch(() => null);
-            setSocieteInfo(snap?.exists() ? snap.data() : { nom: "Société inconnue" });
-          }
-        );
-        unsubs.push(unsubSociete);
-      } finally {
-        setSocieteLoading(false);
-      }
+      setSocieteLoading(true);
+      const ref = doc(db, "societe", societeId);
+      const unsub = onSnapshot(
+        ref,
+        (snap) => setSocieteInfo(snap.exists() ? snap.data() : { nom: "Société" }),
+        async () => {
+          const s = await getDoc(ref).catch(() => null);
+          setSocieteInfo(s?.exists() ? s.data() : { nom: "Société" });
+        }
+      );
+      unsubs.push(unsub);
+      setSocieteLoading(false);
     })();
 
-    // Collections (ordonnées pour confort)
+    // Collections
     const qVentes = query(collection(db, "societe", societeId, "ventes"), orderBy("date", "desc"));
     const qAchats = query(collection(db, "societe", societeId, "achats"), orderBy("timestamp", "desc"));
     const qStock = collection(db, "societe", societeId, "stock");
     const qStockEntries = query(collection(db, "societe", societeId, "stock_entries"), orderBy("nom"));
     const qPaiements = query(collection(db, "societe", societeId, "paiements"), orderBy("date", "desc"));
 
-    const unsubVentes = onSnapshot(
-      qVentes,
-      (snap) => {
-        const arr = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-        setVentes(arr);
-      },
-      () => setVentes([])
-    );
-    const unsubAchats = onSnapshot(
-      qAchats,
-      (snap) => {
-        const arr = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-        // tri supplémentaire par date d'achat/réception si besoin
-        arr.sort((a, b) => {
-          const da = parseDate(getAchatDate(a)) || new Date(0);
-          const dbb = parseDate(getAchatDate(b)) || new Date(0);
-          return dbb - da;
-        });
-        setAchats(arr);
-      },
-      () => setAchats([])
-    );
-    const unsubStock = onSnapshot(
-      qStock,
-      (snap) => setStock(snap.docs.map((d) => ({ id: d.id, ...d.data() }))),
-      () => setStock([])
-    );
-    const unsubStockEntries = onSnapshot(
-      qStockEntries,
-      (snap) => setStockEntries(snap.docs.map((d) => ({ id: d.id, ...d.data() }))),
-      () => setStockEntries([])
-    );
-    const unsubPaiements = onSnapshot(
-      qPaiements,
-      (snap) => setPaiements(snap.docs.map((d) => ({ id: d.id, ...d.data() }))),
-      () => setPaiements([])
-    );
+    unsubs.push(onSnapshot(qVentes,  s => setVentes(s.docs.map(d => ({ id:d.id, ...d.data() }))), () => setVentes([])));
+    unsubs.push(onSnapshot(qAchats,  s => {
+      const arr = s.docs.map(d => ({ id:d.id, ...d.data() }));
+      arr.sort((a,b) => (toDate(achatDate(b))||0) - (toDate(achatDate(a))||0));
+      setAchats(arr);
+    }, () => setAchats([])));
+    unsubs.push(onSnapshot(qStock,   s => setStock(s.docs.map(d => ({ id:d.id, ...d.data() }))), () => setStock([])));
+    unsubs.push(onSnapshot(qStockEntries, s => setStockEntries(s.docs.map(d => ({ id:d.id, ...d.data() }))), () => setStockEntries([])));
+    unsubs.push(onSnapshot(qPaiements, s => setPaiements(s.docs.map(d => ({ id:d.id, ...d.data() }))), () => setPaiements([])));
 
-    unsubs.push(unsubVentes, unsubAchats, unsubStock, unsubStockEntries, unsubPaiements);
+    toast("Données (temps réel) prêtes ✅");
 
-    setDataLoading(false);
-    showNotification("Données (temps réel) prêtes ✅", "success");
+    return () => { unsubs.forEach(u => { try { u && u(); } catch {} }); };
+  }, [loading, user, societeId, toast]);
 
-    return () => {
-      unsubs.forEach((u) => {
-        try { u && u(); } catch {}
-      });
-    };
-  }, [loading, user, societeId, showNotification]);
+  /* Calculs */
+  const computeMontantAchat = useCallback((achat) => {
+    const m = Number(achat?.montantTotal) || Number(achat?.montant) || 0;
+    if (m > 0) return m;
+    const arts = Array.isArray(achat?.articles) ? achat.articles : [];
+    const subtotal = arts.reduce((sum, a) => {
+      const base = (a && (a.recu || a.commandee)) ? (a.recu || a.commandee) : a || {};
+      const q = Number(base?.quantite) || 0;
+      const pu = Number(base?.prixUnitaire ?? base?.prixAchat ?? 0) || 0;
+      const r = Number(base?.remise) || 0;
+      return sum + (q * pu - r);
+    }, 0);
+    const rg = Number(achat?.remiseGlobale ?? achat?.remiseTotal ?? 0);
+    return Math.max(0, subtotal - rg);
+  }, []);
 
-  /* =========================
-      Calculs Statistiques (mémo)
-  ========================= */
-  const stats = useMemo(() => {
-    if (dataLoading) {
-      return {
-        totalVentes: 0,
-        totalAchats: 0,
-        totalPaiements: 0,
-        produitsStock: 0,
-        soldeCaisse: 0,
-        documentsImpayes: 0,
-        alertes: [],
-      };
-    }
+  const computeMontantVente = useCallback((vente) => {
+    const m = Number(vente?.montantTotal) || 0;
+    if (m > 0) return m;
+    const arts = Array.isArray(vente?.articles) ? vente.articles : [];
+    const subtotal = arts.reduce((sum, a) => {
+      const q = Number(a?.quantite) || 0;
+      const pu = Number(a?.prixUnitaire ?? a?.prix ?? 0) || 0;
+      const r = Number(a?.remise) || 0;
+      return sum + (q * pu - r);
+    }, 0);
+    const rTot = Number(vente?.remiseTotal ?? vente?.remiseGlobale ?? 0);
+    return Math.max(0, subtotal - rTot);
+  }, []);
 
-    const fVentes = ventes.filter((v) =>
-      isDateInPeriod(v.date || v.timestamp, periode, dateMin, dateMax)
-    );
-    const fAchats = achats.filter((a) =>
-      isDateInPeriod(getAchatDate(a), periode, dateMin, dateMax)
-    );
-    const fPaiements = paiements.filter((p) =>
-      isDateInPeriod(p.date || p.timestamp, periode, dateMin, dateMax)
-    );
+  const {
+    totalVentes,
+    totalAchats,
+    totalPaiements,
+    produitsStock,
+    soldeCaisse,
+    ruptures,
+  } = useMemo(() => {
+    // Filtrage période
+    const vPer = ventes.filter(v => inPeriod(v.date || v.timestamp, periode, dateMin, dateMax));
+    const aPer = achats.filter(a => inPeriod(achatDate(a),        periode, dateMin, dateMax));
+    const pPer = paiements.filter(p => inPeriod(p.date || p.timestamp, periode, dateMin, dateMax));
 
-    const stockTraditional = stock.length;
-    const stockLots = stockEntries.filter((e) => (Number(e.quantite) || 0) > 0).length;
-    const produitsStock = stockTraditional + stockLots;
+    // RÈGLE: Ventes/Achats = S1 par défaut, dbl-click ⇒ TOUS
+    const vUsed = showAllVentes ? vPer : vPer.filter(isStock1);
+    const aUsed = showAllAchats ? aPer : aPer.filter(isStock1);
 
-    const totalVentes = fVentes.reduce((sum, v) => {
-      if (v.montantTotal && !isNaN(v.montantTotal)) return sum + Number(v.montantTotal);
-      const arts = Array.isArray(v.articles) ? v.articles : [];
-      const t = arts.reduce((sum2, a) => {
-        const q = Number(a?.quantite) || 0;
-        const pu = Number(a?.prixUnitaire) || 0;
-        const r = Number(a?.remise) || 0;
-        return sum2 + (q * pu - r);
-      }, 0);
-      const rg = Number(v?.remiseGlobale) || 0;
-      return sum + Math.max(0, t - rg);
+    // Totaux
+    const totalVentes = vUsed.reduce((s,v) => s + computeMontantVente(v), 0);
+    const totalAchats = aUsed.reduce((s,a) => s + computeMontantAchat(a), 0);
+
+    // Paiements: TOUS (S1+S2)
+    const totalPaiements = pPer.reduce((s,p) => s + (Number(p?.montant) || 0), 0);
+
+    // Caisse (espèces aujourd'hui): TOUS (S1+S2)
+    const soldeCaisse = pPer.reduce((s,p) => {
+      if (!sameLocalDay(p?.date ?? p?.timestamp)) return s;
+      const typeRaw = String(p?.type || p?.relatedTo || p?.for || "").toLowerCase();
+      if (!["vente","ventes"].includes(typeRaw)) return s;
+      if (!isCash(p?.mode ?? p?.paymentMode ?? p?.moyen ?? p?.typePaiement)) return s;
+      return s + (Number(p?.montant) || 0);
     }, 0);
 
-    const totalAchats = fAchats.reduce((sum, a) => sum + computeMontantAchat(a), 0);
-    const totalPaiements = fPaiements.reduce((sum, p) => sum + (Number(p?.montant) || 0), 0);
+    // Produits (stock + lots) — total S1+S2
+    const produitsStock = stock.length + (Array.isArray(stockEntries) ? stockEntries.filter(e => (Number(e.quantite)||0) > 0).length : 0);
 
-    /* ======= Ventes espèces (aujourd'hui) ======= */
-    const soldeCaisse = paiements.reduce((sum, p) => {
-      const isToday = isSameLocalDay(p?.date ?? p?.timestamp);
-      if (!isToday) return sum;
-      const type = String(p?.type || p?.relatedTo || "").toLowerCase();
-      if (type !== "ventes") return sum;
-      const mode = p?.mode ?? p?.paymentMode ?? p?.moyen ?? p?.typePaiement ?? "";
-      if (!isCashMode(mode)) return sum;
-      return sum + (Number(p?.montant) || 0);
-    }, 0);
-
-    // Impayés (ventes + achats)
-    let documentsImpayes = 0;
-    [...ventes, ...achats].forEach((d) => {
-      if (d?.statutPaiement && (d.statutPaiement === "impayé" || d.statutPaiement === "partiel")) {
-        documentsImpayes++;
-      }
-    });
-
-    // Alertes (stock & lots)
-    const alertes = [];
-    const todayLocal = new Date();
-
-    // Produits (stock traditionnel)
-    stock.forEach((item) => {
-      const q = Number(item.quantite) || 0;
-      const rawSeuil = Number(item.seuil);
-      const seuil = rawSeuil > 0 ? rawSeuil : DEFAULT_SEUIL;
-      if (q <= seuil && q > 0) {
-        alertes.push({ type: "Stock bas", message: `${item.nom || "Produit"} (Qté: ${q} ≤ seuil ${seuil})`, severity: "warning", icon: "📦" });
-      }
-      if (item.datePeremption) {
-        const exp = parseDate(item.datePeremption);
-        if (exp) {
-          const diffDays = Math.ceil((exp - todayLocal) / 86400000);
-          if (diffDays <= 0) alertes.push({ type: "Produit périmé", message: `${item.nom || "Produit"} périmé !`, severity: "critical", icon: "🚫" });
-          else if (diffDays <= EXPIRY_THRESHOLD_DAYS) alertes.push({ type: "Péremption proche", message: `${item.nom || "Produit"} (${diffDays} j)`, severity: "danger", icon: "⚠️" });
-        }
-      }
-    });
-
-    // Lots (multi-lots)
-    stockEntries.forEach((lot) => {
-      const q = Number(lot.quantite) || 0;
-      if (q <= 0) return;
-      if (lot.datePeremption) {
-        const exp = parseDate(lot.datePeremption);
-        if (exp) {
-          const diffDays = Math.ceil((exp - todayLocal) / 86400000);
-          if (diffDays <= 0) alertes.push({ type: "Lot périmé", message: `${lot.nom || "Produit"} - Lot ${lot.numeroLot || "N/A"}`, severity: "critical", icon: "🚫" });
-          else if (diffDays <= EXPIRY_THRESHOLD_DAYS) alertes.push({ type: "Péremption proche", message: `${lot.nom || "Produit"} - Lot ${lot.numeroLot || "N/A"} (${diffDays} j)`, severity: "danger", icon: "⚠️" });
-        }
-      }
-    });
-
-    return {
-      totalVentes,
-      totalAchats,
-      totalPaiements,
-      produitsStock,
-      soldeCaisse,
-      documentsImpayes,
-      alertes,
-    };
-  }, [
-    dataLoading,
-    ventes, achats, stock, stockEntries, paiements,
-    periode, dateMin, dateMax,
-    computeMontantAchat
-  ]);
-
-  /* =========================
-     Ruptures & péremptions (<= 180 j)
-  ========================= */
-  const ruptures = useMemo(() => {
+    // Ruptures & péremptions (≤ 180 j)
     const rows = [];
-
-    // Produits (stock traditionnel)
-    (Array.isArray(stock) ? stock : []).forEach((p) => {
-      const q = Number(p.quantite) || 0;
-      const rawSeuil = Number(p.seuil);
-      const seuil = rawSeuil > 0 ? rawSeuil : DEFAULT_SEUIL; // 🔔 défaut = 10
-      const dluo = p.datePeremption ? daysToExpiration(p.datePeremption) : null;
-
-      // Inclure si: rupture/seuil atteint OU expiration <= 180 jours
-      const includeByQty = (q <= 0) || (q <= seuil);
-      const includeByExpiry = dluo !== null && dluo <= EXPIRY_THRESHOLD_DAYS;
-
-      if (includeByQty || includeByExpiry) {
-        rows.push({
-          type: "Produit",
-          nom: p.nom || "Produit",
-          lot: "—",
-          quantite: q,
-          seuil,
-          dluoJours: dluo
-        });
+    (Array.isArray(stock) ? stock : []).forEach((item) => {
+      const q = Number(item.quantite) || 0;
+      const seuil = Number(item.seuil) > 0 ? Number(item.seuil) : DEFAULT_SEUIL;
+      const dluo = item.datePeremption ? daysToExp(item.datePeremption) : null;
+      const byQty = (q <= 0) || (q <= seuil);
+      const byExp = dluo !== null && dluo <= EXPIRY_THRESHOLD_DAYS;
+      if (byQty || byExp) {
+        rows.push({ type:"Produit", nom:item.nom || "Produit", lot:"—", quantite:q, seuil, dluoJours:dluo });
       }
     });
-
-    // Lots (multi-lots)
     (Array.isArray(stockEntries) ? stockEntries : []).forEach((lot) => {
-      const q = Number(lot.quantite) || 0;
-      const rawSeuil = Number(lot.seuil);
-      const seuil = rawSeuil > 0 ? rawSeuil : DEFAULT_SEUIL; // 🔔 défaut = 10
-      const dluo = lot.datePeremption ? daysToExpiration(lot.datePeremption) : null;
-
-      // Inclure si: rupture/seuil atteint OU expiration <= 180 jours
-      const includeByQty = (q <= 0) || (q <= seuil);
-      const includeByExpiry = dluo !== null && dluo <= EXPIRY_THRESHOLD_DAYS;
-
-      if (includeByQty || includeByExpiry) {
-        rows.push({
-          type: "Lot",
-          nom: lot.nom || "Produit",
-          lot: lot.numeroLot || "N/A",
-          quantite: q,
-          seuil,
-          dluoJours: dluo
-        });
+      const q = Number(lot.stock1 || 0) + Number(lot.stock2 || 0); // total réel
+      const seuil = Number(lot.seuil) > 0 ? Number(lot.seuil) : DEFAULT_SEUIL;
+      const dluo = lot.datePeremption ? daysToExp(lot.datePeremption) : null;
+      const byQty = (q <= 0) || (q <= seuil);
+      const byExp = dluo !== null && dluo <= EXPIRY_THRESHOLD_DAYS;
+      if (byQty || byExp) {
+        rows.push({ type:"Lot", nom:lot.nom || "Produit", lot:lot.numeroLot || "N/A", quantite:q, seuil, dluoJours:dluo });
       }
     });
-
-    rows.sort((a, b) => {
-      // Priorité: périmé -> bientôt périmé -> faible quantité
-      const aExpired = (a.dluoJours ?? 999999) <= 0;
-      const bExpired = (b.dluoJours ?? 999999) <= 0;
-      if (aExpired !== bExpired) return aExpired ? -1 : 1;
-
-      const aSoon = (a.dluoJours ?? 999999);
-      const bSoon = (b.dluoJours ?? 999999);
-      if (aSoon !== bSoon) return aSoon - bSoon;
-
+    rows.sort((a,b) => {
+      const ax = (a.dluoJours ?? 999999) <= 0, bx = (b.dluoJours ?? 999999) <= 0;
+      if (ax !== bx) return ax ? -1 : 1;
+      const as = (a.dluoJours ?? 999999), bs = (b.dluoJours ?? 999999);
+      if (as !== bs) return as - bs;
       if (a.quantite !== b.quantite) return a.quantite - b.quantite;
       return (a.seuil ?? 0) - (b.seuil ?? 0);
     });
 
-    return rows;
-  }, [stock, stockEntries]);
+    return { totalVentes, totalAchats, totalPaiements, produitsStock, soldeCaisse, ruptures: rows };
+  }, [
+    ventes, achats, paiements, stock, stockEntries,
+    periode, dateMin, dateMax,
+    showAllVentes, showAllAchats,
+    computeMontantAchat, computeMontantVente
+  ]);
 
-  const getSocieteDisplayName = () =>
-    societeLoading ? "Chargement…" :
-    !societeInfo ? "Société inconnue" :
-    (societeInfo.nom || "Société");
-
-  /* =========================
-      Styles
-  ========================= */
+  /* Styles */
   const styles = useMemo(() => {
-    const actionBtnSize = isMobile ? 140 : isTablet ? 170 : 200; // même largeur & hauteur
+    const tile = isMobile ? 140 : isTablet ? 170 : 200;
     return {
-      container: { background: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)", minHeight: "100vh", padding: isMobile ? "10px" : isTablet ? "15px" : "20px", fontFamily: "'Inter', Arial, sans-serif" },
-      mainCard: { background: "white", borderRadius: isMobile ? "15px" : "25px", boxShadow: isMobile ? "0 15px 30px rgba(0,0,0,0.1)" : "0 30px 60px rgba(0,0,0,0.15)", overflow: "hidden", margin: "0 auto", maxWidth: isMobile ? "100%" : isTablet ? "95%" : "1500px" },
-      header: { background: "linear-gradient(135deg, #4a5568 0%, #2d3748 100%)", padding: isMobile ? "16px 12px" : isTablet ? "26px 22px" : "36px", color: "white" },
-
-      // ✅ Rangée dédiée au chip utilisateur
-      userChipRow: {
-        display: "flex",
-        justifyContent: "flex-end",
-        alignItems: "center",
-        gap: 10,
-        flexWrap: "wrap",
-        marginBottom: isMobile ? 10 : 14,
-      },
-      userChip: {
-        display: "flex",
-        alignItems: "center",
-        gap: 10,
-        background: "rgba(255, 255, 255, 0.08)",
-        border: "1px solid rgba(255, 255, 255, 0.18)",
-        padding: isMobile ? "8px 10px" : "10px 14px",
-        borderRadius: 999,
-        minWidth: 0,
-        maxWidth: isMobile ? "100%" : 420,
-      },
-      avatar: {
-        width: isMobile ? 30 : 36, height: isMobile ? 30 : 36, borderRadius: "50%",
-        background: "linear-gradient(135deg,#a78bfa,#60a5fa)", display: "grid", placeItems: "center",
-        fontWeight: 800, color: "white", boxShadow: "0 6px 14px rgba(0,0,0,0.2)", flex: "0 0 auto"
-      },
-      userTexts: { display: "flex", flexDirection: "column", minWidth: 0, flex: "1 1 auto" },
-      userName: { fontWeight: 800, fontSize: isMobile ? 12 : 14, color: "white", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" },
-      userRole: { fontWeight: 700, fontSize: isMobile ? 11 : 12, color: "#e2e8f0", background: "rgba(0,0,0,0.25)", padding: "2px 8px", borderRadius: 999, width: "fit-content" },
-
-      headerCenter: { textAlign: "center" },
-      title: { fontSize: isMobile ? "1.8em" : isTablet ? "2.3em" : "2.8em", fontWeight: 800, margin: 0, textShadow: "3px 3px 6px rgba(0,0,0,0.3)", letterSpacing: isMobile ? "1px" : "2px", lineHeight: 1.2 },
-      subtitle: { fontSize: isMobile ? "0.9em" : isTablet ? "1em" : "1.2em", opacity: 0.9, marginTop: "10px", letterSpacing: "1px", wordBreak: "break-word" },
-
-      content: { padding: isMobile ? "20px 15px" : isTablet ? "35px 25px" : "50px" },
-      actionBtn: {
-        width: actionBtnSize,
-        height: actionBtnSize,
-        boxSizing: "border-box",
-        background: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
-        border: "none",
-        borderRadius: isMobile ? "15px" : "20px",
-        padding: "14px",
-        color: "white",
-        fontWeight: 800,
-        fontSize: isMobile ? "1.05em" : "1.15em",
-        cursor: "pointer",
-        transition: "transform .15s ease, box-shadow .15s ease",
-        display: "flex",
-        flexDirection: "column",
-        alignItems: "center",
-        justifyContent: "center",
-        gap: "10px",
-        textDecoration: "none",
-        textAlign: "center",
-        lineHeight: 1.2,
-        overflow: "hidden",
-        boxShadow: "0 10px 25px rgba(0,0,0,0.2)",
-      },
-      statsGrid: { display: "grid", gridTemplateColumns: isMobile ? "1fr" : isTablet ? "1fr 1fr" : "repeat(5, minmax(0, 1fr))", gap: isMobile ? 15 : 25, marginBottom: isMobile ? 20 : 30 },
-      statCard: { background: "linear-gradient(135deg, #f8fafc 0%, #edf2f7 100%)", borderRadius: isMobile ? "15px" : "25px", padding: isMobile ? "20px 15px" : "30px 25px", textAlign: "center", border: "3px solid #e2e8f0", boxShadow: "0 15px 40px rgba(0,0,0,0.08)", transition: "all 0.3s ease", cursor: "pointer", position: "relative", overflow: "hidden" },
-      sectionTitle: { fontWeight: 800, fontSize: isMobile ? "1.2em" : "1.4em", margin: "20px 0 10px", color: "#2d3748" },
-      table: { width: "100%", borderCollapse: "collapse", borderRadius: 12, overflow: "hidden", fontSize: isMobile ? "0.9em" : "1em" },
-      th: { background: "linear-gradient(135deg, #2d3748 0%, #1a202c 100%)", color: "white", textAlign: "left", padding: isMobile ? "10px" : "12px 14px", fontWeight: 700 },
-      td: { background: "white", borderBottom: "1px solid #e2e8f0", padding: isMobile ? "10px" : "12px 14px", fontWeight: 600, color: "#1a202c" },
-      badge: (bg, color = "white") => ({ display: "inline-block", padding: "6px 10px", borderRadius: 999, fontWeight: 800, background: bg, color }),
-      notification: { position: "fixed", top: isMobile ? "15px" : "30px", right: isMobile ? "15px" : "30px", padding: isMobile ? "15px 20px" : "20px 30px", borderRadius: isMobile ? "10px" : "15px", color: "white", fontWeight: 700, zIndex: 1000, boxShadow: "0 15px 40px rgba(0,0,0,0.2)", backdropFilter: "blur(10px)", border: "1px solid rgba(255,255,255,0.25)" },
+      container: { background: "linear-gradient(135deg,#667eea,#764ba2)", minHeight: "100vh", padding: isMobile ? 10 : isTablet ? 15 : 20, fontFamily: "Inter,system-ui,Arial" },
+      card: { background: "#fff", borderRadius: isMobile ? 14 : 22, boxShadow: "0 24px 60px rgba(0,0,0,.15)", overflow: "hidden", margin: "0 auto", maxWidth: isMobile ? "100%" : isTablet ? "95%" : 1500 },
+      header: { background: "linear-gradient(135deg,#4a5568,#2d3748)", color: "#fff", padding: isMobile ? 14 : 28 },
+      chipRow: { display: "flex", justifyContent: "flex-end", gap: 10, marginBottom: 10, flexWrap: "wrap" },
+      chip: { display: "flex", alignItems: "center", gap: 10, background: "rgba(255,255,255,.08)", border: "1px solid rgba(255,255,255,.18)", padding: "8px 12px", borderRadius: 999 },
+      avatar: { width: 32, height: 32, borderRadius: "50%", background: "linear-gradient(135deg,#a78bfa,#60a5fa)", color: "#fff", fontWeight: 800, display: "grid", placeItems: "center" },
+      title: { textAlign: "center", fontSize: isMobile ? "1.8em" : "2.6em", fontWeight: 800, margin: "6px 0 0" },
+      subtitle: { textAlign: "center", opacity: .9, marginTop: 6 },
+      actions: { marginTop: 16, display: "flex", gap: 12, justifyContent: "center", flexWrap: "wrap" },
+      btn: { width: tile, height: tile, border: "none", borderRadius: isMobile ? 14 : 18, background: "linear-gradient(135deg,#667eea,#764ba2)", color:"#fff", fontWeight:800, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", gap:10, textDecoration:"none", boxShadow:"0 16px 40px rgba(0,0,0,.2)", position: "relative" }, // NOUVEAU: position relative
+      // NOUVEAU: Style pour badge permissions étendues
+      extendedBadge: { position: "absolute", top: 8, right: 8, background: "linear-gradient(90deg, #ffd700, #ffed4a)", color: "#1a2332", fontSize: "10px", fontWeight: "bold", padding: "2px 6px", borderRadius: "8px", boxShadow: "0 2px 4px rgba(0,0,0,0.2)" },
+      content: { padding: isMobile ? 18 : 34 },
+      grid: { display: "grid", gridTemplateColumns: isMobile ? "1fr" : isTablet ? "1fr 1fr" : "repeat(5,1fr)", gap: isMobile ? 14 : 22, marginBottom: isMobile ? 16 : 24 },
+      kpiCard: { background: "linear-gradient(135deg,#f8fafc,#edf2f7)", border: "3px solid #e2e8f0", borderRadius: isMobile ? 14 : 20, padding: isMobile ? 16 : 24, position: "relative", cursor: "pointer" },
+      badge: { position:"absolute", top:8, right:8, fontSize:12, fontWeight:800, padding:"4px 8px", borderRadius:999, background:"#e2e8f0", color:"#111827" },
+      kpiValue: (c)=>({ fontSize: isMobile ? "1.5em" : "2em", fontWeight: 800, color:c, marginBottom: 6 }),
+      table: { width:"100%", borderCollapse:"collapse", borderRadius:12, overflow:"hidden", fontSize: isMobile ? ".95em" : "1em" },
+      th: { background:"linear-gradient(135deg,#2d3748,#1a202c)", color:"#fff", textAlign:"left", padding:"10px 12px" },
+      td: { background:"#fff", borderBottom:"1px solid #e2e8f0", padding:"10px 12px", fontWeight:600, color:"#1a202c" },
+      pill: (bg)=>({ display:"inline-block", padding:"6px 10px", borderRadius:999, fontWeight:800, background:bg, color:"#fff" }),
+      notif: (ok)=>({ position:"fixed", top:isMobile?14:24, right:isMobile?14:24, background: ok?"linear-gradient(135deg,#22c55e,#16a34a)":"linear-gradient(135deg,#ef4444,#dc2626)", color:"#fff", padding:"14px 18px", borderRadius:12, boxShadow:"0 18px 40px rgba(0,0,0,.2)", zIndex:1000 }),
     };
   }, [isMobile, isTablet]);
 
-  // Données user affichage
+  // Affichage user
   const displayName = userDisplayName(user);
   const displayRole = roleDisplay(role);
-  const userInitials = (displayName || "U")
-    .split(" ")
-    .map((p) => p.trim()[0])
-    .filter(Boolean)
-    .slice(0, 2)
-    .join("")
-    .toUpperCase();
+  const initials = (displayName||"U").split(" ").map(p=>p.trim()[0]).filter(Boolean).slice(0,2).join("").toUpperCase();
 
+  // NOUVEAU : Déterminer quelles permissions sont étendues pour cette vendeuse
+  const extraPermissions = isVendeuse() && hasCustomPermissions() ? getExtraPermissions() : [];
+  const isAchatsExtended = extraPermissions.includes('voir_achats');
+  const isParametresExtended = extraPermissions.includes('parametres');
+
+  /* Render */
   return (
     <div style={styles.container}>
-      <div style={styles.mainCard}>
+      <div style={styles.card}>
         <div style={styles.header}>
-          {/* ✅ Chip utilisateur */}
-          <div style={styles.userChipRow}>
-            <div style={styles.userChip} title={`${displayRole} — ${displayName}`}>
-              <div style={styles.avatar}>{userInitials}</div>
-              <div style={styles.userTexts}>
-                <div style={styles.userName}>{displayName}</div>
-                <div style={styles.userRole}>{displayRole}</div>
+          {/* Chip utilisateur MODIFIÉ */}
+          <div style={styles.chipRow}>
+            <div style={styles.chip} title={`${displayRole} — ${displayName}`}>
+              <div style={styles.avatar}>{initials}</div>
+              <div style={{display:"flex",flexDirection:"column"}}>
+                <div style={{fontWeight:800, fontSize:13}}>{displayName}</div>
+                <div style={{fontWeight:700, fontSize:12, opacity:.9}}>
+                  {displayRole}
+                  {/* NOUVEAU : Indicateur permissions étendues */}
+                  {isVendeuse() && extraPermissions.length > 0 && (
+                    <span style={{
+                      marginLeft: 6,
+                      background: "linear-gradient(90deg, #ffd700, #ffed4a)",
+                      color: "#1a2332",
+                      fontSize: "9px",
+                      fontWeight: "bold",
+                      padding: "1px 4px",
+                      borderRadius: "4px"
+                    }}>
+                      +{extraPermissions.length}
+                    </span>
+                  )}
+                </div>
               </div>
             </div>
           </div>
 
-          {/* Titre et sous-titre */}
-          <div style={{ textAlign: "center" }}>
-            <h1 style={styles.title}>Tableau de Bord</h1>
-            <div style={styles.subtitle}>{getSocieteDisplayName()}</div>
-          </div>
+          <h1 style={styles.title}>Tableau de Bord</h1>
+          <div style={styles.subtitle}>{societeLoading ? "Chargement…" : (societeInfo?.nom || "Société")}</div>
 
-          {/* Boutons carrés */}
-          <div style={{ marginTop: 16, display: "flex", gap: 12, justifyContent: "center", flexWrap: "wrap" }}>
-            <Link
-              to="/ventes"
-              style={{ ...styles.actionBtn, background: "linear-gradient(135deg, #22c55e 0%, #16a34a 100%)" }}
-              title="Aller à la création de vente"
-            >
-              <div style={{ fontSize: isMobile ? "2.2em" : "2.6em" }}>🧾</div>
-              <div>Nouvelle vente</div>
-            </Link>
+          {/* SECTION ACTIONS MODIFIÉE */}
+          <div style={styles.actions}>
+            {/* Nouvelle vente - accessible à tous les rôles ayant voir_ventes */}
+            {can("voir_ventes") && (
+              <Link to="/ventes" style={{...styles.btn, background:"linear-gradient(135deg,#22c55e,#16a34a)"}} title="Nouvelle vente">
+                <div style={{fontSize:isMobile?"2.1em":"2.4em"}}>🧾</div><div>Nouvelle vente</div>
+              </Link>
+            )}
 
-            <Link
-              to="/stock"
-              style={{ ...styles.actionBtn, background: "linear-gradient(135deg, #06b6d4 0%, #0891b2 100%)" }}
-              title="Gérer stock & lots"
-            >
-              <div style={{ fontSize: isMobile ? "2.2em" : "2.6em" }}>📦</div>
-              <div>Gérer Stock & Lots</div>
-            </Link>
+            {/* Stock - accessible avec voir_stock */}
+            {can("voir_stock") && (
+              <Link to="/stock" style={{...styles.btn, background:"linear-gradient(135deg,#06b6d4,#0891b2)"}} title="Gérer Stock & Lots">
+                <div style={{fontSize:isMobile?"2.1em":"2.4em"}}>📦</div><div>Gérer Stock & Lots</div>
+              </Link>
+            )}
 
-            {role === "docteur" && (
-              <>
-                <Link
-                  to="/achats"
-                  style={{ ...styles.actionBtn, background: "linear-gradient(135deg, #4299e1 0%, #3182ce 100%)" }}
-                  title="Créer un nouvel achat"
-                >
-                  <div style={{ fontSize: isMobile ? "2.2em" : "2.6em" }}>🛒</div>
-                  <div>Nouvel Achat</div>
-                </Link>
+            {/* NOUVEAU : Achats - basé sur permission au lieu de rôle */}
+            {can("voir_achats") && (
+              <Link to="/achats" style={{...styles.btn, background:"linear-gradient(135deg,#4299e1,#3182ce)"}} title="Nouvel achat">
+                {/* NOUVEAU : Badge pour permissions étendues */}
+                {isAchatsExtended && (
+                  <div style={styles.extendedBadge}>✨ Étendue</div>
+                )}
+                <div style={{fontSize:isMobile?"2.1em":"2.4em"}}>🛒</div><div>Nouvel Achat</div>
+              </Link>
+            )}
 
-                <Link
-                  to="/parametres"
-                  style={{ ...styles.actionBtn, background: "linear-gradient(135deg, #718096 0%, #4a5568 100%)" }}
-                  title="Paramètres & sauvegarde"
-                >
-                  <div style={{ fontSize: isMobile ? "2.2em" : "2.6em" }}>⚙️</div>
-                  <div>Paramètres & Sauvegarde</div>
-                </Link>
-              </>
+            {/* NOUVEAU : Paramètres - basé sur permission au lieu de rôle */}
+            {can("parametres") && (
+              <Link to="/parametres" style={{...styles.btn, background:"linear-gradient(135deg,#718096,#4a5568)"}} title="Paramètres & sauvegarde">
+                {/* NOUVEAU : Badge pour permissions étendues */}
+                {isParametresExtended && (
+                  <div style={styles.extendedBadge}>✨ Étendue</div>
+                )}
+                <div style={{fontSize:isMobile?"2.1em":"2.4em"}}>⚙️</div>
+                <div style={{
+                  whiteSpace: "nowrap",
+                  textAlign: "center",
+                  fontSize: isMobile ? "0.85em" : "1em",
+                  lineHeight: "1.2"
+                }}>
+                  Paramètres/Sauve
+                </div>
+              </Link>
             )}
           </div>
         </div>
 
         <div style={styles.content}>
-          {/* Stats cards */}
-          <div style={styles.statsGrid}>
-            <div style={{ ...styles.statCard, borderLeft: "5px solid #667eea" }}>
-              <div style={{ fontSize: isMobile ? "2.2em" : "2.6em", marginBottom: 12 }}>💰</div>
-              <div style={{ fontSize: isMobile ? "1.6em" : "2.1em", fontWeight: 800, color: "#667eea", marginBottom: 6 }}>{formatDH(stats.totalVentes)}</div>
+          {/* KPI cards - inchangés */}
+          <div style={styles.grid}>
+            {/* VENTES: défaut S1, dbl-click => S1+S2 */}
+            <div
+              style={styles.kpiCard}
+              onDoubleClick={() => setShowAllVentes(v => !v)}
+              title="Double-clic: basculer S1 / S1+S2"
+            >
+              <div style={styles.badge}>{showAllVentes ? "TOUS" : "S1"}</div>
+              <div style={{fontSize:isMobile?"2.1em":"2.4em", marginBottom:10}}>💰</div>
+              <div style={styles.kpiValue("#667eea")}>{formatDH(totalVentes)}</div>
               <div>Ventes ({periode})</div>
             </div>
-            <div style={{ ...styles.statCard, borderLeft: "5px solid #4299e1" }}>
-              <div style={{ fontSize: isMobile ? "2.2em" : "2.6em", marginBottom: 12 }}>🛒</div>
-              <div style={{ fontSize: isMobile ? "1.6em" : "2.1em", fontWeight: 800, color: "#4299e1", marginBottom: 6 }}>{formatDH(stats.totalAchats)}</div>
+
+            {/* ACHATS: défaut S1, dbl-click => S1+S2 */}
+            <div
+              style={styles.kpiCard}
+              onDoubleClick={() => setShowAllAchats(v => !v)}
+              title="Double-clic: basculer S1 / S1+S2"
+            >
+              <div style={styles.badge}>{showAllAchats ? "TOUS" : "S1"}</div>
+              <div style={{fontSize:isMobile?"2.1em":"2.4em", marginBottom:10}}>🛒</div>
+              <div style={styles.kpiValue("#4299e1")}>{formatDH(totalAchats)}</div>
               <div>Achats ({periode})</div>
             </div>
-            <div style={{ ...styles.statCard, borderLeft: "5px solid #16a34a" }}>
-              <div style={{ fontSize: isMobile ? "2.2em" : "2.6em", marginBottom: 12 }}>💵</div>
-              <div style={{ fontSize: isMobile ? "1.6em" : "2.1em", fontWeight: 800, color: "#16a34a", marginBottom: 6 }}>{formatDH(stats.totalPaiements)}</div>
+
+            {/* PAIEMENTS: TOUS */}
+            <div style={{...styles.kpiCard, cursor:"default"}} title="Somme des paiements ">
+              <div style={{fontSize:isMobile?"2.1em":"2.4em", marginBottom:10}}>💵</div>
+              <div style={styles.kpiValue("#16a34a")}>{formatDH(totalPaiements)}</div>
               <div>Paiements ({periode})</div>
             </div>
-            <div style={{ ...styles.statCard, borderLeft: "5px solid #06b6d4" }}>
-              <div style={{ fontSize: isMobile ? "2.2em" : "2.6em", marginBottom: 12 }}>📚</div>
-              <div style={{ fontSize: isMobile ? "1.6em" : "2.1em", fontWeight: 800, color: "#06b6d4", marginBottom: 6 }}>{stats.produitsStock}</div>
-              <div>Produits (stock + lots)</div>
+
+            {/* PRODUITS: total S1+S2 */}
+            <div style={{...styles.kpiCard, cursor:"default"}} title="Produits (stock + lots)">
+              <div style={{fontSize:isMobile?"2.1em":"2.4em", marginBottom:10}}>📚</div>
+              <div style={styles.kpiValue("#06b6d4")}>{produitsStock}</div>
+              <div>Médicaments(Stock)</div>
             </div>
-            <div style={{ ...styles.statCard, borderLeft: "5px solid #f59e0b" }}>
-              <div style={{ fontSize: isMobile ? "2.2em" : "2.6em", marginBottom: 12 }}>💶</div>
-              <div style={{ fontSize: isMobile ? "1.6em" : "2.1em", fontWeight: 800, color: "#f59e0b", marginBottom: 6 }}>{formatDH(stats.soldeCaisse)}</div>
-              <div>Ventes espèces (aujourd'hui)</div>
+
+            {/* CAISSE (espèces aujourd'hui): TOUS */}
+            <div style={{...styles.kpiCard, cursor:"default"}} title="Caisse d'aujourd'hui">
+              <div style={{fontSize:isMobile?"2.1em":"2.4em", marginBottom:10}}>💶</div>
+              <div style={styles.kpiValue("#f59e0b")}>{formatDH(soldeCaisse)}</div>
+              <div>Caisse</div>
             </div>
           </div>
 
-          {/* Filtres période */}
+          {/* Filtres période - inchangés */}
           <div style={{ margin: "10px 0 20px", display: "flex", gap: 12, flexWrap: "wrap" }}>
             <select value={periode} onChange={(e) => setPeriode(e.target.value)} style={{ padding: '8px', borderRadius: '6px', border: '1px solid #ccc' }}>
               <option value="jour">Aujourd'hui</option>
@@ -720,7 +561,10 @@ export default function Dashboard() {
             <input type="date" value={dateMax} onChange={(e) => setDateMax(e.target.value)} style={{ padding: '8px', borderRadius: '6px', border: '1px solid #ccc' }} />
           </div>
 
-          <h3 style={styles.sectionTitle}>Ruptures & péremptions (≤ {EXPIRY_THRESHOLD_DAYS} jours)</h3>
+          {/* Ruptures & péremptions - inchangés */}
+          <h3 style={{fontWeight:800, fontSize:isMobile?"1.15em":"1.35em", margin:"16px 0 10px", color:"#2d3748"}}>
+            Ruptures & péremptions (≤ {EXPIRY_THRESHOLD_DAYS} jours)
+          </h3>
           <div style={{ overflowX: "auto" }}>
             <table style={styles.table}>
               <thead>
@@ -734,37 +578,33 @@ export default function Dashboard() {
                 </tr>
               </thead>
               <tbody>
-                {ruptures.map((r, idx) => {
-                  const qtyBadge =
-                    r.quantite <= 0
-                      ? { ...styles.badge("linear-gradient(135deg,#ef4444,#dc2626)") }
-                      : (r.quantite <= r.seuil)
-                      ? { ...styles.badge("linear-gradient(135deg,#f59e0b,#d97706)") }
-                      : (r.dluoJours !== null && r.dluoJours <= EXPIRY_THRESHOLD_DAYS)
-                      ? { ...styles.badge("linear-gradient(135deg,#fb7185,#f43f5e)") }
-                      : { ...styles.badge("linear-gradient(135deg,#94a3b8,#64748b)") };
-
-                  // ✅ Affichage "-" pour Seuil & Jours si quantité = 0
-                  const displaySeuil = r.quantite <= 0 ? "-" : (r.seuil ?? "-");
-                  const displayJours =
-                    r.quantite <= 0
-                      ? "-"
-                      : (r.dluoJours === null ? "-" : r.dluoJours <= 0 ? "Périmé" : `${r.dluoJours} j`);
-
-                  return (
-                    <tr key={idx}>
-                      <td style={styles.td}>{r.type}</td>
-                      <td style={styles.td}>{r.nom}</td>
-                      <td style={styles.td}>{r.lot}</td>
-                      <td style={styles.td}><span style={qtyBadge}>{r.quantite}</span></td>
-                      <td style={styles.td}>{displaySeuil}</td>
-                      <td style={styles.td}>{displayJours}</td>
-                    </tr>
-                  );
-                })}
                 {ruptures.length === 0 && (
                   <tr><td style={styles.td} colSpan={6}>Aucune rupture ni péremption proche 🎉</td></tr>
                 )}
+                {ruptures.map((r, i) => {
+                  const pill =
+                    r.quantite <= 0
+                      ? styles.pill("linear-gradient(135deg,#ef4444,#dc2626)")
+                      : r.quantite <= r.seuil
+                      ? styles.pill("linear-gradient(135deg,#f59e0b,#d97706)")
+                      : r.dluoJours !== null && r.dluoJours <= EXPIRY_THRESHOLD_DAYS
+                      ? styles.pill("linear-gradient(135deg,#fb7185,#f43f5e)")
+                      : styles.pill("linear-gradient(135deg,#94a3b8,#64748b)");
+
+                  const seuilDisp = r.quantite <= 0 ? "-" : (r.seuil ?? "-");
+                  const dluoDisp  = r.quantite <= 0 ? "-" : (r.dluoJours === null ? "-" : r.dluoJours <= 0 ? "Périmé" : `${r.dluoJours} j`);
+
+                  return (
+                    <tr key={i}>
+                      <td style={styles.td}>{r.type}</td>
+                      <td style={styles.td}>{r.nom}</td>
+                      <td style={styles.td}>{r.lot}</td>
+                      <td style={styles.td}><span style={pill}>{r.quantite}</span></td>
+                      <td style={styles.td}>{seuilDisp}</td>
+                      <td style={styles.td}>{dluoDisp}</td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -773,13 +613,7 @@ export default function Dashboard() {
 
       {notification && (
         <div
-          style={{
-            ...styles.notification,
-            background:
-              notification.type === "success"
-                ? "linear-gradient(135deg, #22c55e 0%, #16a34a 100%)"
-                : "linear-gradient(135deg, #ef4444 0%, #dc2626 100%)",
-          }}
+          style={styles.notif(notification.type === "success")}
         >
           {notification.message}
         </div>
@@ -787,4 +621,3 @@ export default function Dashboard() {
     </div>
   );
 }
-

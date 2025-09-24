@@ -1,4 +1,4 @@
-// src/components/Navbar.js - Version complète avec gestion rôles propriétaire, sauvegardes et affichage heure
+// src/components/Navbar.js - Version complète avec gestion permissions personnalisées
 
 import React, { useState, useEffect } from "react";
 import { Link, useNavigate, useLocation } from "react-router-dom";
@@ -32,15 +32,17 @@ import {
   People as PeopleIcon,
   SupervisorAccount as SupervisorAccountIcon,
   ManageAccounts as ManageAccountsIcon,
+  Star as StarIcon
 } from "@mui/icons-material";
 
 import { signOut } from "firebase/auth";
 import { auth } from "../firebase/config";
 import { useUserRole } from "../contexts/UserRoleContext";
+import { usePermissions } from "./hooks/usePermissions"; // NOUVEAU IMPORT
 
 export default function Navbar() {
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const [currentTime, setCurrentTime] = useState(""); // ⏰ Ajout heure
+  const [currentTime, setCurrentTime] = useState("");
   const navigate = useNavigate();
   const location = useLocation();
   
@@ -54,10 +56,15 @@ export default function Navbar() {
     isActive,
     isOwner,
     getUserRoleDisplay,
-    getOwnershipStatus 
+    getOwnershipStatus,
+    hasCustomPermissions, // NOUVEAU
+    getExtraPermissions   // NOUVEAU
   } = useUserRole();
 
-  // ⏰ Mise à jour de l'heure actuelle en temps réel
+  // NOUVEAU : Utiliser le hook permissions
+  const { can } = usePermissions();
+
+  // Mise à jour de l'heure actuelle en temps réel
   useEffect(() => {
     const updateClock = () => {
       const now = new Date();
@@ -74,18 +81,85 @@ export default function Navbar() {
     return () => clearInterval(interval);
   }, []);
 
-  // ================= MENU ==================
+  // ================= MENU MODIFIÉ ==================
+  // ANCIEN système : basé sur les rôles
+  // NOUVEAU système : basé sur les permissions avec can()
   const menuItems = [
-    { text: "Dashboard", icon: <DashboardIcon />, path: "/dashboard", allowed: ["docteur", "vendeuse"], description: "Tableau de bord principal" },
-    { text: "Achats", icon: <ShoppingCartIcon />, path: "/achats", allowed: ["docteur"], description: "Gestion des achats fournisseurs" },
-    { text: "Ventes", icon: <PointOfSaleIcon />, path: "/ventes", allowed: ["docteur", "vendeuse"], description: "Gestion des ventes clients" },
-    { text: "Stock", icon: <LocalPharmacyIcon />, path: "/stock", allowed: ["docteur", "vendeuse"], description: "Gestion du stock pharmacie" },
-    { text: "Devis & Factures", icon: <DescriptionIcon />, path: "/devis-factures", allowed: ["docteur", "vendeuse"], description: "Gestion devis et factures" },
-    { text: "Paiements", icon: <AttachMoneyIcon />, path: "/paiements", allowed: ["docteur", "vendeuse"], description: "Suivi des paiements" },
-    { text: "Sauvegardes", icon: <BackupIcon />, path: "/backup", allowed: ["docteur", "vendeuse"], description: "Sauvegarde des données", isNew: true, hasOwnerBonus: true },
-    { text: "Utilisateurs", icon: <PeopleIcon />, path: "/users", allowed: ["docteur"], description: "Gestion des invitations et utilisateurs", isAdmin: true },
-    { text: "👑 Gestion Rôles", icon: <ManageAccountsIcon />, path: "/gestion-utilisateurs", allowed: ["docteur"], ownerOnly: true, description: "Promotion/rétrogradation des utilisateurs", isOwnerSpecial: true },
-    { text: "Paramètres", icon: <SettingsIcon />, path: "/parametres", allowed: ["docteur"], description: "Configuration système" },
+    { 
+      text: "Dashboard", 
+      icon: <DashboardIcon />, 
+      path: "/dashboard", 
+      permission: "voir_dashboard", // NOUVEAU
+      description: "Tableau de bord principal" 
+    },
+    { 
+      text: "Achats", 
+      icon: <ShoppingCartIcon />, 
+      path: "/achats", 
+      permission: "voir_achats", // NOUVEAU
+      description: "Gestion des achats fournisseurs" 
+    },
+    { 
+      text: "Ventes", 
+      icon: <PointOfSaleIcon />, 
+      path: "/ventes", 
+      permission: "voir_ventes", // NOUVEAU
+      description: "Gestion des ventes clients" 
+    },
+    { 
+      text: "Stock", 
+      icon: <LocalPharmacyIcon />, 
+      path: "/stock", 
+      permission: "voir_stock", // NOUVEAU
+      description: "Gestion du stock pharmacie" 
+    },
+    { 
+      text: "Devis & Factures", 
+      icon: <DescriptionIcon />, 
+      path: "/devis-factures", 
+      permission: "voir_devis_factures", // NOUVEAU
+      description: "Gestion devis et factures" 
+    },
+    { 
+      text: "Paiements", 
+      icon: <AttachMoneyIcon />, 
+      path: "/paiements", 
+      permission: "voir_paiements", // NOUVEAU
+      description: "Suivi des paiements" 
+    },
+    { 
+      text: "Sauvegardes", 
+      icon: <BackupIcon />, 
+      path: "/backup", 
+      permission: "voir_dashboard", // Accessible à tous (utilise permission dashboard)
+      description: "Sauvegarde des données", 
+      isNew: true, 
+      hasOwnerBonus: true 
+    },
+    { 
+      text: "Utilisateurs", 
+      icon: <PeopleIcon />, 
+      path: "/users", 
+      permission: "gerer_utilisateurs", // NOUVEAU
+      description: "Gestion des invitations et utilisateurs", 
+      isAdmin: true 
+    },
+    { 
+      text: "👑 Gestion Rôles", 
+      icon: <ManageAccountsIcon />, 
+      path: "/gestion-utilisateurs", 
+      permission: "gerer_utilisateurs", // NOUVEAU
+      ownerOnly: true, 
+      description: "Promotion/rétrogradation des utilisateurs", 
+      isOwnerSpecial: true 
+    },
+    { 
+      text: "Paramètres", 
+      icon: <SettingsIcon />, 
+      path: "/parametres", 
+      permission: "parametres", // NOUVEAU
+      description: "Configuration système" 
+    },
   ];
 
   // Déconnexion
@@ -101,7 +175,10 @@ export default function Navbar() {
   if (loading || !authReady) return null;
   if (!canAccessApp()) return null;
 
-  // ================= DRAWER ==================
+  // Calculer les permissions supplémentaires pour l'affichage
+  const extraPermissions = hasCustomPermissions() ? getExtraPermissions() : [];
+
+  // ================= DRAWER MODIFIÉ ==================
   const drawer = (
     <Box
       sx={{
@@ -157,6 +234,25 @@ export default function Navbar() {
             }}
           />
         )}
+        
+        {/* NOUVEAU : Affichage permissions supplémentaires */}
+        {role === "vendeuse" && extraPermissions.length > 0 && (
+          <Box sx={{ mt: 1 }}>
+            <Chip
+              icon={<StarIcon />}
+              label={`+${extraPermissions.length} permissions étendues`}
+              size="small"
+              sx={{
+                background: "linear-gradient(90deg, #ff9800, #ffb74d)",
+                color: "white",
+                fontWeight: "600",
+                fontSize: "0.7rem",
+                height: "24px",
+                "& .MuiChip-icon": { color: "white", fontSize: "12px" }
+              }}
+            />
+          </Box>
+        )}
       </Box>
 
       {/* Indicateurs d'état */}
@@ -180,74 +276,123 @@ export default function Navbar() {
       
       <Divider sx={{ bgcolor: "#fff3", mb: 2 }} />
       
-      {/* Menu principal */}
+      {/* Menu principal MODIFIÉ */}
       <List>
         {menuItems
           .filter(item => {
-            if (!item.allowed.includes(role)) return false;
+            // NOUVELLE LOGIQUE : Utiliser can() au lieu de allowed
+            if (!can(item.permission)) return false;
             if (item.ownerOnly && !isOwner) return false;
             return true;
           })
-          .map((item) => (
-            <ListItemButton
-              key={item.text}
-              component={Link}
-              to={item.path}
-              selected={location.pathname === item.path}
-              sx={{
-                color: location.pathname === item.path ? "#1976d2" : "#fff",
-                background: location.pathname === item.path ? "#fff" : "transparent",
-                my: 0.5,
-                mx: 1,
-                borderRadius: 2,
-                position: 'relative',
-                "&:hover": {
-                  background: location.pathname === item.path ? "#fff" : "#fff3",
-                  color: location.pathname === item.path ? "#1976d2" : "#1c3db1"
-                }
-              }}
-            >
-              <ListItemIcon sx={{ color: "inherit" }}>
-                {item.isOwnerSpecial ? (
-                  <Badge
-                    badgeContent="👑"
-                    sx={{
-                      "& .MuiBadge-badge": {
-                        fontSize: "10px",
-                        height: "16px",
-                        minWidth: "16px",
-                        background: "transparent"
-                      }
-                    }}
-                  >
-                    {item.icon}
-                  </Badge>
-                ) : (
-                  item.icon
-                )}
-              </ListItemIcon>
-              
-              <ListItemText 
-                primary={item.text}
-                secondary={item.description}
-                sx={{ 
-                  "& .MuiTypography-root": { 
-                    fontSize: item.isOwnerSpecial ? "0.95rem" : "1rem",
-                    fontWeight: item.isOwnerSpecial ? "700" : "500"
-                  },
-                  "& .MuiListItemText-secondary": {
-                    color: "rgba(255,255,255,0.7)",
-                    fontSize: "0.7rem"
+          .map((item) => {
+            // NOUVEAU : Déterminer si c'est une permission supplémentaire pour cette vendeuse
+            const isExtraPermission = role === "vendeuse" && 
+              extraPermissions.some(p => 
+                // Vérifier si cette permission fait partie des permissions qui permettent d'accéder à cet item
+                p === item.permission
+              );
+
+            return (
+              <ListItemButton
+                key={item.text}
+                component={Link}
+                to={item.path}
+                selected={location.pathname === item.path}
+                sx={{
+                  color: location.pathname === item.path ? "#1976d2" : "#fff",
+                  background: location.pathname === item.path ? "#fff" : "transparent",
+                  my: 0.5,
+                  mx: 1,
+                  borderRadius: 2,
+                  position: 'relative',
+                  // NOUVEAU : Bordure dorée pour permissions supplémentaires
+                  ...(isExtraPermission && {
+                    border: "1px solid #ffd700",
+                    boxShadow: "0 0 8px rgba(255, 215, 0, 0.3)"
+                  }),
+                  "&:hover": {
+                    background: location.pathname === item.path ? "#fff" : "#fff3",
+                    color: location.pathname === item.path ? "#1976d2" : "#1c3db1"
                   }
                 }}
-              />
-            </ListItemButton>
-          ))}
+              >
+                <ListItemIcon sx={{ color: "inherit" }}>
+                  {item.isOwnerSpecial ? (
+                    <Badge
+                      badgeContent="👑"
+                      sx={{
+                        "& .MuiBadge-badge": {
+                          fontSize: "10px",
+                          height: "16px",
+                          minWidth: "16px",
+                          background: "transparent"
+                        }
+                      }}
+                    >
+                      {item.icon}
+                    </Badge>
+                  ) : isExtraPermission ? (
+                    // NOUVEAU : Badge étoile pour permissions supplémentaires
+                    <Badge
+                      badgeContent="✨"
+                      sx={{
+                        "& .MuiBadge-badge": {
+                          fontSize: "8px",
+                          height: "14px",
+                          minWidth: "14px",
+                          background: "transparent"
+                        }
+                      }}
+                    >
+                      {item.icon}
+                    </Badge>
+                  ) : (
+                    item.icon
+                  )}
+                </ListItemIcon>
+                
+                <ListItemText 
+                  primary={
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                      {item.text}
+                      {/* NOUVEAU : Indicateur pour permissions supplémentaires */}
+                      {isExtraPermission && (
+                        <Chip
+                          label="Étendue"
+                          size="small"
+                          sx={{
+                            background: "linear-gradient(90deg, #ffd700, #ffed4a)",
+                            color: "#1a2332",
+                            fontSize: "0.6rem",
+                            height: "16px",
+                            fontWeight: "bold",
+                            "& .MuiChip-label": { px: 0.5 }
+                          }}
+                        />
+                      )}
+                    </Box>
+                  }
+                  secondary={item.description}
+                  sx={{ 
+                    "& .MuiTypography-root": { 
+                      fontSize: item.isOwnerSpecial ? "0.95rem" : "1rem",
+                      fontWeight: item.isOwnerSpecial ? "700" : "500"
+                    },
+                    "& .MuiListItemText-secondary": {
+                      color: "rgba(255,255,255,0.7)",
+                      fontSize: "0.7rem"
+                    }
+                  }}
+                />
+              </ListItemButton>
+            );
+          })}
       </List>
       
       <Divider sx={{ bgcolor: "#fff3", mt: 3, mb: 2 }} />
       
-      {/* Infos utilisateur */}
+      {/* Infos utilisateur MODIFIÉE */}
       <Box sx={{ px: 2, mb: 2 }}>
         <Typography variant="caption" sx={{ color: "#b3c5d7", display: "block" }}>
           Statut: {getOwnershipStatus()}
@@ -255,6 +400,12 @@ export default function Navbar() {
         {isOwner && (
           <Typography variant="caption" sx={{ color: "#ffd700", display: "block", fontWeight: "bold" }}>
             ⚡ Droits étendus activés
+          </Typography>
+        )}
+        {/* NOUVEAU : Info permissions personnalisées */}
+        {role === "vendeuse" && extraPermissions.length > 0 && (
+          <Typography variant="caption" sx={{ color: "#ffd700", display: "block", fontWeight: "bold" }}>
+            ✨ {extraPermissions.length} permission(s) supplémentaire(s)
           </Typography>
         )}
       </Box>
@@ -331,6 +482,23 @@ export default function Navbar() {
                 }}
               />
             )}
+            {/* NOUVEAU : Chip permissions étendues dans la navbar */}
+            {role === "vendeuse" && extraPermissions.length > 0 && (
+              <Chip
+                icon={<StarIcon />}
+                label={`+${extraPermissions.length} étendues`}
+                size="small"
+                sx={{
+                  marginLeft: "12px",
+                  background: "linear-gradient(90deg, #ff9800, #ffb74d)",
+                  color: "white",
+                  fontSize: "0.7rem",
+                  fontWeight: "bold",
+                  height: "24px",
+                  "& .MuiChip-icon": { color: "white", fontSize: "12px" }
+                }}
+              />
+            )}
           </Typography>
 
           {/* Heure actuelle en haut à droite */}
@@ -348,20 +516,22 @@ export default function Navbar() {
             </Typography>
           </Box>
 
-          {/* Accès rapide Backup */}
-          <IconButton
-            color="inherit"
-            onClick={() => navigate('/backup')}
-            sx={{
-              bgcolor: "#fff2",
-              borderRadius: 2,
-              mr: 1,
-              "&:hover": { bgcolor: "#fff3" }
-            }}
-            title="Sauvegardes rapides"
-          >
-            <BackupIcon />
-          </IconButton>
+          {/* Accès rapide Backup - MODIFIÉ avec vérification permission */}
+          {can("voir_dashboard") && (
+            <IconButton
+              color="inherit"
+              onClick={() => navigate('/backup')}
+              sx={{
+                bgcolor: "#fff2",
+                borderRadius: 2,
+                mr: 1,
+                "&:hover": { bgcolor: "#fff3" }
+              }}
+              title="Sauvegardes rapides"
+            >
+              <BackupIcon />
+            </IconButton>
+          )}
           
           <Button
             color="inherit"
