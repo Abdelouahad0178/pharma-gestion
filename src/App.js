@@ -1,4 +1,4 @@
-// src/App.js - Version avec indicateur de chargement au démarrage
+// src/App.js - Version avec composants Stock séparés
 
 import React, { useState, useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate, useLocation } from 'react-router-dom';
@@ -7,7 +7,8 @@ import Register from './components/auth/Register';
 import AcceptInvitation from './components/auth/AcceptInvitation';
 import Dashboard from './components/dashboard/Dashboard';
 import Achats from './components/achats/Achats';
-import Stock from './components/stock/Stock';
+import StockManagement from './components/stock/StockManagement';
+import OrderManagement from './components/stock/OrderManagement';
 import Ventes from './components/ventes/Ventes';
 import Navbar from './components/Navbar';
 import Parametres from './components/parametres/Parametres';
@@ -216,6 +217,91 @@ const AppLoader = ({ onLoadingComplete, minLoadingTime = 2500 }) => {
   );
 };
 
+// Composant de navigation Stock avec onglets
+function StockPage() {
+  const [activeTab, setActiveTab] = useState('stock');
+
+  return (
+    <div style={{ minHeight: '100vh' }}>
+      {/* Navigation entre Stock et Commandes */}
+      <div
+        style={{
+          background: 'linear-gradient(135deg,#1f2937,#111827)',
+          padding: '16px 20px',
+          display: 'flex',
+          gap: 12,
+          boxShadow: '0 4px 6px rgba(0,0,0,.1)',
+          position: 'sticky',
+          top: 0,
+          zIndex: 100,
+        }}
+      >
+        <button
+          onClick={() => setActiveTab('stock')}
+          style={{
+            padding: '12px 24px',
+            borderRadius: 12,
+            border: '2px solid transparent',
+            background: activeTab === 'stock' 
+              ? 'linear-gradient(135deg,#6366f1,#a855f7)' 
+              : 'rgba(255,255,255,0.1)',
+            color: '#fff',
+            fontWeight: 700,
+            cursor: 'pointer',
+            transition: 'all 0.2s',
+            fontSize: window.innerWidth < 768 ? '14px' : '16px',
+          }}
+          onMouseEnter={(e) => {
+            if (activeTab !== 'stock') {
+              e.target.style.background = 'rgba(255,255,255,0.15)';
+            }
+          }}
+          onMouseLeave={(e) => {
+            if (activeTab !== 'stock') {
+              e.target.style.background = 'rgba(255,255,255,0.1)';
+            }
+          }}
+        >
+          Gestion du Stock
+        </button>
+        
+        <button
+          onClick={() => setActiveTab('orders')}
+          style={{
+            padding: '12px 24px',
+            borderRadius: 12,
+            border: '2px solid transparent',
+            background: activeTab === 'orders' 
+              ? 'linear-gradient(135deg,#6366f1,#a855f7)' 
+              : 'rgba(255,255,255,0.1)',
+            color: '#fff',
+            fontWeight: 700,
+            cursor: 'pointer',
+            transition: 'all 0.2s',
+            fontSize: window.innerWidth < 768 ? '14px' : '16px',
+          }}
+          onMouseEnter={(e) => {
+            if (activeTab !== 'orders') {
+              e.target.style.background = 'rgba(255,255,255,0.15)';
+            }
+          }}
+          onMouseLeave={(e) => {
+            if (activeTab !== 'orders') {
+              e.target.style.background = 'rgba(255,255,255,0.1)';
+            }
+          }}
+        >
+          Commandes à Passer
+        </button>
+      </div>
+
+      {/* Affichage du composant actif */}
+      {activeTab === 'stock' && <StockManagement />}
+      {activeTab === 'orders' && <OrderManagement />}
+    </div>
+  );
+}
+
 // Page dédiée aux sauvegardes
 function BackupPage() {
   const [currentTab, setCurrentTab] = useState('export');
@@ -277,16 +363,16 @@ function BackupPage() {
             <div style={{ color: '#99b2d4', lineHeight: 1.8 }}>
               <div style={{ display: 'grid', gap: 12 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                  <span style={{ fontSize: '1.2rem' }}>🔒</span>
-                  <span><strong>Sécurité :</strong> Seul le propriétaire peut créer des sauvegardes complètes.</span>
+                  <span style={{ fontSize: '1.2rem' }}>Sécurité :</span>
+                  <span>Seul le propriétaire peut créer des sauvegardes complètes.</span>
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                  <span style={{ fontSize: '1.2rem' }}>📁</span>
-                  <span><strong>Localisation :</strong> Fichiers JSON téléchargés dans "Téléchargements".</span>
+                  <span style={{ fontSize: '1.2rem' }}>Localisation :</span>
+                  <span>Fichiers JSON téléchargés dans "Téléchargements".</span>
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                  <span style={{ fontSize: '1.2rem' }}>📅</span>
-                  <span><strong>Fréquence :</strong> Sauvegarde complète hebdomadaire recommandée.</span>
+                  <span style={{ fontSize: '1.2rem' }}>Fréquence :</span>
+                  <span>Sauvegarde complète hebdomadaire recommandée.</span>
                 </div>
               </div>
             </div>
@@ -301,16 +387,16 @@ function BackupPage() {
             <div style={{ color: '#99b2d4', lineHeight: 1.8 }}>
               <div style={{ display: 'grid', gap: 12 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                  <span style={{ fontSize: '1.2rem' }}>⚠️</span>
-                  <span><strong>Attention :</strong> L'import modifie les données selon le mode choisi.</span>
+                  <span style={{ fontSize: '1.2rem' }}>Attention :</span>
+                  <span>L'import modifie les données selon le mode choisi.</span>
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                  <span style={{ fontSize: '1.2rem' }}>📄</span>
-                  <span><strong>Format :</strong> Fichiers JSON générés par cette application.</span>
+                  <span style={{ fontSize: '1.2rem' }}>Format :</span>
+                  <span>Fichiers JSON générés par cette application.</span>
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                  <span style={{ fontSize: '1.2rem' }}>💾</span>
-                  <span><strong>Recommandation :</strong> Sauvegarde avant import en mode remplacement.</span>
+                  <span style={{ fontSize: '1.2rem' }}>Recommandation :</span>
+                  <span>Sauvegarde avant import en mode remplacement.</span>
                 </div>
               </div>
             </div>
@@ -394,11 +480,13 @@ function AppWrapper() {
               </Protected>
             }
           />
+          
+          {/* Route Stock avec navigation entre Stock et Commandes */}
           <Route
             path="/stock"
             element={
               <Protected permission="ajouter_stock">
-                <Stock />
+                <StockPage />
               </Protected>
             }
           />

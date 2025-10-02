@@ -1295,73 +1295,7 @@ body{font-family:'Inter',Arial,sans-serif;margin:0;padding:${isMobileDevice ? "5
       {/* Notifications */}
       {notification && <div className={`notice ${notification.type || "success"}`}>{notification.message}</div>}
 
-      {/* ===== Transfert Stock1 → Stock2 (Nouveau Bon) ===== */}
-      <div className="card" style={{ borderColor: "#D1FAE5" }}>
-        <div className="section-title" style={{ justifyContent: "space-between" }}>
-          <span>Transfert mensuel — Stock1 → Stock2 (Nouveau Bon)</span>
-          <div className="controls-bar">
-            <button className="btn btn-outline" onClick={() => setShowTransfer((s) => !s)}>
-              {showTransfer ? "🔽 Fermer" : "🔄 Ouvrir le transfert"}
-            </button>
-          </div>
-        </div>
-
-        {showTransfer && (
-          <div className="form-panel form-shown">
-            <div className="form-panel-inner">
-              <div className="notice warning" style={{ marginBottom: 12 }}>
-                Le transfert créera un nouveau bon d'achat (Stock2) et diminuera les quantités du bon original.
-              </div>
-              
-              <div className="form-grid">
-                <select className="select" value={transferBonId} onChange={(e) => { setTransferBonId(e.target.value); setTransferArticleIndex(""); }}>
-                  <option value="">— Choisir un bon reçu —</option>
-                  {transferEligibleBons.map((bon) => (
-                    <option key={bon.id} value={bon.id}>
-                      {bon.fournisseur} - {formatDateDisplay(bon.date)} (#{bon.id.slice(0, 8)})
-                    </option>
-                  ))}
-                </select>
-
-                <select className="select" value={transferArticleIndex} onChange={(e) => setTransferArticleIndex(e.target.value)} disabled={!transferBonId} title="Choisir l'article à transférer">
-                  <option value="">— Choisir un article —</option>
-                  {transferArticles.map((article, index) => (
-                    <option key={index} value={index}>
-                      {article.produit} • Lot: {article.recu?.numeroLot || "N/A"} • Qté: {article.recu?.quantite || 0}
-                    </option>
-                  ))}
-                </select>
-
-                <input 
-                  className="field" 
-                  type="number" 
-                  min="1" 
-                  placeholder={`Quantité à transférer (≤ ${transferArticleIndex !== "" ? (transferArticles[Number(transferArticleIndex)]?.recu?.quantite || 0) : 0})`} 
-                  value={transferQty} 
-                  onChange={(e) => setTransferQty(e.target.value)} 
-                  disabled={transferArticleIndex === ""} 
-                />
-                
-                <input className="field" placeholder="Note du transfert (optionnel)" value={transferNote} onChange={(e) => setTransferNote(e.target.value)} />
-
-                <button className="btn btn-success" onClick={handleTransfer} disabled={!transferBonId || transferArticleIndex === "" || !transferQty || isLoading}>
-                  🔄 Créer bon transfert Stock2
-                </button>
-                
-                <button className="btn btn-outline" onClick={resetTransferForm} disabled={isLoading}>♻️ Réinitialiser</button>
-              </div>
-              
-              {transferBonId && transferArticleIndex !== "" && (
-                <div style={{ marginTop: 8, color: "#065F46" }}>
-                  Article sélectionné: <strong>{transferArticles[Number(transferArticleIndex)]?.produit}</strong> • 
-                  Lot: <strong>{transferArticles[Number(transferArticleIndex)]?.recu?.numeroLot || "N/A"}</strong> • 
-                  Qté disponible: <strong>{transferArticles[Number(transferArticleIndex)]?.recu?.quantite || 0}</strong>
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-      </div>
+     
 
       {/* Formulaire nouveau / modifier bon — REPLIABLE */}
       <div className="card">
@@ -1457,6 +1391,75 @@ body{font-family:'Inter',Arial,sans-serif;margin:0;padding:${isMobileDevice ? "5
           </div>
         </div>
       </div>
+
+ {/* ===== Transfert Stock1 → Stock2 (Nouveau Bon) ===== */}
+      <div className="card" style={{ borderColor: "#D1FAE5" }}>
+        <div className="section-title" style={{ justifyContent: "space-between" }}>
+          <span>Transfert mensuel — Stock1 → Stock2 (Nouveau Bon)</span>
+          <div className="controls-bar">
+            <button className="btn btn-outline" onClick={() => setShowTransfer((s) => !s)}>
+              {showTransfer ? "🔽 Fermer" : "🔄 Ouvrir le transfert"}
+            </button>
+          </div>
+        </div>
+
+        {showTransfer && (
+          <div className="form-panel form-shown">
+            <div className="form-panel-inner">
+              <div className="notice warning" style={{ marginBottom: 12 }}>
+                Le transfert créera un nouveau bon d'achat (Stock2) et diminuera les quantités du bon original.
+              </div>
+              
+              <div className="form-grid">
+                <select className="select" value={transferBonId} onChange={(e) => { setTransferBonId(e.target.value); setTransferArticleIndex(""); }}>
+                  <option value="">— Choisir un bon reçu —</option>
+                  {transferEligibleBons.map((bon) => (
+                    <option key={bon.id} value={bon.id}>
+                      {bon.fournisseur} - {formatDateDisplay(bon.date)} (#{bon.id.slice(0, 8)})
+                    </option>
+                  ))}
+                </select>
+
+                <select className="select" value={transferArticleIndex} onChange={(e) => setTransferArticleIndex(e.target.value)} disabled={!transferBonId} title="Choisir l'article à transférer">
+                  <option value="">— Choisir un article —</option>
+                  {transferArticles.map((article, index) => (
+                    <option key={index} value={index}>
+                      {article.produit} • Lot: {article.recu?.numeroLot || "N/A"} • Qté: {article.recu?.quantite || 0}
+                    </option>
+                  ))}
+                </select>
+
+                <input 
+                  className="field" 
+                  type="number" 
+                  min="1" 
+                  placeholder={`Quantité à transférer (≤ ${transferArticleIndex !== "" ? (transferArticles[Number(transferArticleIndex)]?.recu?.quantite || 0) : 0})`} 
+                  value={transferQty} 
+                  onChange={(e) => setTransferQty(e.target.value)} 
+                  disabled={transferArticleIndex === ""} 
+                />
+                
+                <input className="field" placeholder="Note du transfert (optionnel)" value={transferNote} onChange={(e) => setTransferNote(e.target.value)} />
+
+                <button className="btn btn-success" onClick={handleTransfer} disabled={!transferBonId || transferArticleIndex === "" || !transferQty || isLoading}>
+                  🔄 Créer bon transfert Stock2
+                </button>
+                
+                <button className="btn btn-outline" onClick={resetTransferForm} disabled={isLoading}>♻️ Réinitialiser</button>
+              </div>
+              
+              {transferBonId && transferArticleIndex !== "" && (
+                <div style={{ marginTop: 8, color: "#065F46" }}>
+                  Article sélectionné: <strong>{transferArticles[Number(transferArticleIndex)]?.produit}</strong> • 
+                  Lot: <strong>{transferArticles[Number(transferArticleIndex)]?.recu?.numeroLot || "N/A"}</strong> • 
+                  Qté disponible: <strong>{transferArticles[Number(transferArticleIndex)]?.recu?.quantite || 0}</strong>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+
 
       {/* ÉDITEUR DE RÉCEPTION */}
       {receptionId && (

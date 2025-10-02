@@ -42,24 +42,21 @@ const pickDocStock = (docData) => {
       if (tag !== "unknown") return tag;
     }
   }
-  return "stock1"; // défaut pour compatibilité
+  return "stock1";
 };
 
 const pickLotStock = (lot) => {
   if (!lot) return "stock1";
   
-  // Priorité aux quantités réelles : si stock1 > 0, alors c'est une vente stock1
   const s1 = Number(lot.stock1 || 0);
   const s2 = Number(lot.stock2 || 0);
   
   if (s1 > 0 && s2 <= 0) return "stock1";
   if (s2 > 0 && s1 <= 0) return "stock2";
   if (s1 > 0 && s2 > 0) {
-    // Si les deux stocks ont des quantités, on priorise stock1 (FIFO logique)
     return "stock1";
   }
   
-  // Fallback sur les métadonnées du lot
   return pickDocStock(lot);
 };
 
@@ -93,6 +90,10 @@ const getDateInputValue = (dateInput) => {
   } catch {
     return "";
   }
+};
+
+const getTodayDateString = () => {
+  return new Date().toISOString().split("T")[0];
 };
 
 const safeNumber = (v, def = 0) => {
@@ -173,7 +174,7 @@ export default function Ventes() {
 
   /* ===== Etats formulaire / page ===== */
   const [client, setClient] = useState("(passant)");
-  const [dateVente, setDateVente] = useState(new Date().toISOString().split("T")[0]);
+  const [dateVente, setDateVente] = useState(getTodayDateString());
   const [statutPaiement, setStatutPaiement] = useState("payé");
   const [modePaiement, setModePaiement] = useState("Espèces");
   const [notesVente, setNotesVente] = useState("");
@@ -216,7 +217,6 @@ export default function Ventes() {
   const [showDetails, setShowDetails] = useState(false);
   const [showScanner, setShowScanner] = useState(false);
 
-  // anti doublon d'ajout par scan/double clic (fenêtre 400ms)
   const lastAddTsRef = useRef(0);
 
   /* ===== CHARGEMENT ===== */
@@ -227,7 +227,6 @@ export default function Ventes() {
   useEffect(() => {
     if (!societeId) return;
 
-    // Paramètres
     const paramRef = doc(db, "societe", societeId, "parametres", "documents");
     const unsubParam = onSnapshot(
       paramRef,
@@ -237,7 +236,6 @@ export default function Ventes() {
       (e) => console.error("fetchParametres error:", e)
     );
 
-    // Ventes (liste)
     const qVentes = query(collection(db, "societe", societeId, "ventes"), orderBy("date", "desc"), limit(200));
     const unsubVentes = onSnapshot(
       qVentes,
@@ -253,14 +251,12 @@ export default function Ventes() {
       }
     );
 
-    // Lots (stock_entries)
     const qStockEntries = collection(db, "societe", societeId, "stock_entries");
     const unsubStockEntries = onSnapshot(
       qStockEntries,
       (snap) => {
         const arr = [];
         snap.forEach((d) => arr.push({ id: d.id, ...d.data() }));
-        // tri nom + exp
         arr.sort((a, b) => {
           const nameA = String(a.nom || a.name || "");
           const nameB = String(b.nom || b.name || "");
@@ -280,7 +276,6 @@ export default function Ventes() {
       }
     );
 
-    // Stock "traditionnel"
     const qMedic = collection(db, "societe", societeId, "stock");
     const unsubMedic = onSnapshot(
       qMedic,
@@ -324,7 +319,6 @@ export default function Ventes() {
     (Array.isArray(stockEntries) ? stockEntries : []).forEach((lot) => {
       const key = lot?.nom ?? lot?.name ?? "";
       if (!key) return;
-      // Quantité totale = stock1 + stock2
       const qLot = num(lot?.stock1 ?? 0) + num(lot?.stock2 ?? 0);
       const prixLot = num(lot?.prixVente ?? lot?.price ?? 0);
 
@@ -338,7 +332,7 @@ export default function Ventes() {
     return Array.from(map.values()).sort((a, b) => a.nom.localeCompare(b.nom));
   }, [medicaments, stockEntries]);
 
-  /* ===== Totaux / filtres (hooks au niveau supérieur !) ===== */
+  /* ===== Totaux / filtres ===== */
   const totalVenteCourante = useMemo(
     () =>
       articles.reduce(
@@ -379,7 +373,6 @@ export default function Ventes() {
       return;
     }
 
-    // Filtrer les lots disponibles (qui ont du stock1 ou stock2 > 0)
     const lotsForProduct = (stockEntries || []).filter((entry) => {
       const nomMatch = (entry.nom || entry.name) === value;
       const hasStock = (safeNumber(entry.stock1) + safeNumber(entry.stock2)) > 0;
@@ -418,7 +411,6 @@ export default function Ventes() {
     (e) => {
       e?.preventDefault?.();
 
-      // anti double clic/scan < 400ms
       const now = Date.now();
       if (now - lastAddTsRef.current < 400) return;
       lastAddTsRef.current = now;
@@ -429,20 +421,17 @@ export default function Ventes() {
       }
 
       let selectedLotData = null;
-      let stockSource = "stock1"; // défaut
+      let stockSource = "stock1";
 
       if (selectedLot) {
         selectedLotData = (availableLots || []).find((lot) => lot.id === selectedLot);
       } else if (availableLots.length > 0) {
-        // Si lots présents mais non sélectionné → premier lot (FIFO UI)
         selectedLotData = availableLots[0];
       }
 
-      // Détection automatique du stock source
       if (selectedLotData) {
         stockSource = pickLotStock(selectedLotData);
         
-        // Vérification de la disponibilité dans le bon stock
         const stockDisponible = stockSource === "stock1" 
           ? safeNumber(selectedLotData.stock1) 
           : safeNumber(selectedLotData.stock2);
@@ -453,7 +442,6 @@ export default function Ventes() {
           return;
         }
       } else {
-        // Pour les produits sans lots, on utilise le stock traditionnel
         const medStock = getAllAvailableMedicaments.find((m) => m.nom === produit);
         if (medStock && medStock.quantiteTotal < safeNumber(quantite)) {
           setError(`Stock insuffisant ! Disponible: ${medStock.quantiteTotal}`);
@@ -469,7 +457,7 @@ export default function Ventes() {
         remise: safeNumber(remiseArticle),
         numeroArticle: String(numeroArticle || ""),
         opKey: newOpKey(),
-        stockSource: stockSource, // IMPORTANT: stockSource pour différencier les ventes
+        stockSource: stockSource,
       };
 
       if (selectedLotData) {
@@ -534,13 +522,11 @@ export default function Ventes() {
       );
       const remiseTotal = articles.reduce((sum, a) => sum + safeNumber(a.remise), 0);
 
-      // Normaliser les articles avec opKey et garder stockSource
       const normalizedArticles = articles.map(a => ({
         ...a,
         opKey: a?.opKey || newOpKey(),
       }));
 
-      // Détermination du stock principal de la vente (majoritaire)
       const stockCounts = { stock1: 0, stock2: 0 };
       normalizedArticles.forEach(a => {
         const source = a.stockSource || "stock1";
@@ -550,7 +536,6 @@ export default function Ventes() {
       
       const ventePrincipalStock = stockCounts.stock1 >= stockCounts.stock2 ? "stock1" : "stock2";
 
-      // Sécuriser la date (accepte "YYYY-MM-DD")
       const parsedDate = (() => {
         const d = new Date(dateVente);
         return isNaN(d.getTime()) ? new Date() : d;
@@ -561,17 +546,15 @@ export default function Ventes() {
         date: Timestamp.fromDate(parsedDate),
         statutPaiement,
         modePaiement,
-        articles: normalizedArticles, // Garde stockSource dans chaque article
+        articles: normalizedArticles,
         montantTotal,
         remiseTotal,
         notes: notesVente,
         updatedAt: Timestamp.now(),
         updatedBy: user.email || user.uid,
-        // IMPORTANT: Métadonnées de stock pour le dashboard
         stockSource: ventePrincipalStock,
         stock: ventePrincipalStock,
         stockTag: ventePrincipalStock,
-        // Compteurs pour analytics
         articlesStock1: stockCounts.stock1,
         articlesStock2: stockCounts.stock2,
       };
@@ -592,7 +575,6 @@ export default function Ventes() {
             type: "ventes",
             date: Timestamp.now(),
             createdBy: user.email || user.uid,
-            // Métadonnées de stock pour les paiements aussi
             stockSource: ventePrincipalStock,
             stock: ventePrincipalStock,
           });
@@ -729,7 +711,7 @@ export default function Ventes() {
   ===================== */
   const resetForm = () => {
     setClient("(passant)");
-    setDateVente(new Date().toISOString().split("T")[0]);
+    setDateVente(getTodayDateString());
     setStatutPaiement("payé");
     setModePaiement("Espèces");
     setNotesVente("");
@@ -754,9 +736,8 @@ export default function Ventes() {
       try {
         const isMatch = (obj) => BARCODE_FIELDS.some((f) => String(obj?.[f] || "") === String(barcode));
 
-        setNumeroArticle(String(barcode || "")); // Remplit le champ
+        setNumeroArticle(String(barcode || ""));
 
-        // Priorité lots
         const fromEntry =
           (Array.isArray(stockEntries) ? stockEntries : []).find((p) => isMatch(p)) || null;
         const fromMed = !fromEntry
@@ -781,7 +762,6 @@ export default function Ventes() {
         );
         setAvailableLots(lotsForProduct || []);
 
-        // auto-sélection si un seul lot
         if (lotsForProduct?.length === 1) {
           setSelectedLot(lotsForProduct[0]?.id || lotsForProduct[0]?.numeroLot || "");
           const code = findAnyBarcode(lotsForProduct[0]) || "";
@@ -811,7 +791,6 @@ export default function Ventes() {
     [stockEntries, medicaments, selectedLot, handleAddArticle, beepSuccess, beepError]
   );
 
-  // douchette USB (wedge)
   useEffect(() => {
     const opts = { minChars: 6, endKey: "Enter", timeoutMs: 250 };
     const state = { buf: "", timer: null };
@@ -844,7 +823,7 @@ export default function Ventes() {
   }, [onBarcodeDetected]);
 
   /* =====================
-     Rendu (hooks déjà tous déclarés ci-dessus)
+     Rendu
   ===================== */
   if (waiting) {
     return (
@@ -934,8 +913,8 @@ export default function Ventes() {
           background: "rgba(255, 255, 255, 0.95)",
           backdropFilter: "blur(20px)",
           borderRadius: 24,
-          padding: 30,
-          marginBottom: 30,
+          padding: 24,
+          marginBottom: 16,
           border: "1px solid rgba(255, 255, 255, 0.2)",
           boxShadow: "0 20px 40px rgba(0, 0, 0, 0.1)",
         }}
@@ -946,7 +925,7 @@ export default function Ventes() {
             alignItems: "center",
             justifyContent: "space-between",
             flexWrap: "wrap",
-            gap: 20,
+            gap: 16,
           }}
         >
           <div>
@@ -963,7 +942,7 @@ export default function Ventes() {
             >
               Gestion des Ventes
             </h1>
-            <p style={{ margin: "8px 0 0", color: "#6b7280", fontSize: 16 }}>
+            <p style={{ margin: "6px 0 0", color: "#6b7280", fontSize: 16 }}>
               Système de vente multi-lots.
             </p>
           </div>
@@ -979,7 +958,7 @@ export default function Ventes() {
                 : "linear-gradient(135deg, #3b82f6, #2563eb)",
               color: "white",
               border: "none",
-              padding: "16px 32px",
+              padding: "14px 28px",
               borderRadius: 16,
               fontSize: 16,
               fontWeight: 600,
@@ -1009,9 +988,9 @@ export default function Ventes() {
             background: "rgba(254, 226, 226, 0.95)",
             backdropFilter: "blur(10px)",
             color: "#dc2626",
-            padding: 20,
+            padding: 16,
             borderRadius: 16,
-            marginBottom: 24,
+            marginBottom: 16,
             border: "1px solid rgba(220, 38, 38, 0.2)",
             display: "flex",
             alignItems: "center",
@@ -1019,24 +998,24 @@ export default function Ventes() {
             boxShadow: "0 8px 25px rgba(220, 38, 38, 0.1)",
           }}
         >
-          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
             <div
               style={{
-                width: 24,
-                height: 24,
+                width: 20,
+                height: 20,
                 borderRadius: "50%",
                 background: "#dc2626",
                 color: "white",
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",
-                fontSize: 14,
+                fontSize: 13,
                 fontWeight: 600,
               }}
             >
               !
             </div>
-            <span style={{ fontSize: 16, fontWeight: 500 }}>{error}</span>
+            <span style={{ fontSize: 15, fontWeight: 500 }}>{error}</span>
           </div>
           <button
             onClick={() => setError("")}
@@ -1045,7 +1024,7 @@ export default function Ventes() {
               border: "none",
               color: "#dc2626",
               cursor: "pointer",
-              fontSize: 24,
+              fontSize: 22,
               padding: 4,
               borderRadius: 8,
               transition: "background 0.2s ease",
@@ -1064,9 +1043,9 @@ export default function Ventes() {
             background: "rgba(220, 252, 231, 0.95)",
             backdropFilter: "blur(10px)",
             color: "#16a34a",
-            padding: 20,
+            padding: 16,
             borderRadius: 16,
-            marginBottom: 24,
+            marginBottom: 16,
             border: "1px solid rgba(22, 163, 74, 0.2)",
             display: "flex",
             alignItems: "center",
@@ -1074,24 +1053,24 @@ export default function Ventes() {
             boxShadow: "0 8px 25px rgba(22, 163, 74, 0.1)",
           }}
         >
-          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
             <div
               style={{
-                width: 24,
-                height: 24,
+                width: 20,
+                height: 20,
                 borderRadius: "50%",
                 background: "#16a34a",
                 color: "white",
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",
-                fontSize: 14,
+                fontSize: 13,
                 fontWeight: 600,
               }}
             >
               ✓
             </div>
-            <span style={{ fontSize: 16, fontWeight: 500 }}>{success}</span>
+            <span style={{ fontSize: 15, fontWeight: 500 }}>{success}</span>
           </div>
           <button
             onClick={() => setSuccess("")}
@@ -1100,7 +1079,7 @@ export default function Ventes() {
               border: "none",
               color: "#16a34a",
               cursor: "pointer",
-              fontSize: 24,
+              fontSize: 22,
               padding: 4,
               borderRadius: 8,
               transition: "background 0.2s ease",
@@ -1119,17 +1098,17 @@ export default function Ventes() {
           style={{
             background: "rgba(255, 255, 255, 0.95)",
             backdropFilter: "blur(20px)",
-            borderRadius: 24,
-            padding: 32,
-            marginBottom: 30,
+            borderRadius: 20,
+            padding: 24,
+            marginBottom: 16,
             border: "1px solid rgba(255, 255, 255, 0.2)",
             boxShadow: "0 20px 40px rgba(0, 0, 0, 0.1)",
           }}
         >
           <h2
             style={{
-              margin: "0 0 32px",
-              fontSize: 28,
+              margin: "0 0 20px",
+              fontSize: 24,
               fontWeight: 700,
               color: "#1f2937",
               textAlign: "center",
@@ -1139,11 +1118,11 @@ export default function Ventes() {
           </h2>
 
           {/* Zone scan */}
-          <div style={{ display: "flex", gap: 8, alignItems: "center", margin: "6px 0 18px" }}>
+          <div style={{ display: "flex", gap: 8, alignItems: "center", margin: "0 0 16px" }}>
             <button
               type="button"
               onClick={() => setShowScanner(true)}
-              style={{ borderRadius: 10, padding: "8px 12px", cursor: "pointer" }}
+              style={{ borderRadius: 10, padding: "8px 12px", cursor: "pointer", fontSize: 14 }}
             >
               📷 Scanner avec caméra
             </button>
@@ -1164,13 +1143,13 @@ export default function Ventes() {
           <div
             style={{
               background: "linear-gradient(135deg, #f0f9ff, #e0f2fe)",
-              borderRadius: 20,
-              padding: 24,
-              marginBottom: 24,
+              borderRadius: 16,
+              padding: 20,
+              marginBottom: 16,
               border: "2px solid #0ea5e9",
             }}
           >
-            <h3 style={{ margin: "0 0 24px", color: "#0c4a6e", fontSize: 20, fontWeight: 600 }}>
+           <h3 style={{ margin: "0 0 -15%", color: "#0c4a6e", fontSize: 18, fontWeight: 600 }}>
               Ajouter des articles (détection automatique du stock)
             </h3>
 
@@ -1178,13 +1157,13 @@ export default function Ventes() {
               <div
                 style={{
                   display: "grid",
-                  gridTemplateColumns: "repeat(auto-fit, minmax(250px, 1fr))",
-                  gap: 20,
-                  marginBottom: 24,
+                  gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+                  gap: 14,
+                  marginBottom: 16,
                 }}
               >
                 <div>
-                  <label style={{ display: "block", fontSize: 14, fontWeight: 600, color: "#374151", marginBottom: 8 }}>
+                  <label style={{ display: "block", fontSize: 13, fontWeight: 600, color: "#374151", marginBottom: 6 }}>
                     Médicament *
                   </label>
                   <select
@@ -1193,10 +1172,10 @@ export default function Ventes() {
                     required
                     style={{
                       width: "100%",
-                      padding: "12px 16px",
-                      borderRadius: 12,
+                      padding: "10px 14px",
+                      borderRadius: 10,
                       border: "2px solid #e5e7eb",
-                      fontSize: 16,
+                      fontSize: 15,
                       background: "white",
                       transition: "all 0.2s ease",
                       outline: "none",
@@ -1214,7 +1193,7 @@ export default function Ventes() {
                 </div>
 
                 <div>
-                  <label style={{ display: "block", fontSize: 14, fontWeight: 600, color: "#374151", marginBottom: 8 }}>
+                  <label style={{ display: "block", fontSize: 13, fontWeight: 600, color: "#374151", marginBottom: 6 }}>
                     Quantité *
                   </label>
                   <input
@@ -1225,10 +1204,10 @@ export default function Ventes() {
                     min={1}
                     style={{
                       width: "100%",
-                      padding: "12px 16px",
-                      borderRadius: 12,
+                      padding: "10px 14px",
+                      borderRadius: 10,
                       border: "2px solid #e5e7eb",
-                      fontSize: 16,
+                      fontSize: 15,
                       background: "white",
                       transition: "all 0.2s ease",
                       outline: "none",
@@ -1239,7 +1218,7 @@ export default function Ventes() {
                 </div>
 
                 <div>
-                  <label style={{ display: "block", fontSize: 14, fontWeight: 600, color: "#374151", marginBottom: 8 }}>
+                  <label style={{ display: "block", fontSize: 13, fontWeight: 600, color: "#374151", marginBottom: 6 }}>
                     Prix unitaire (DH) *
                   </label>
                   <input
@@ -1251,10 +1230,10 @@ export default function Ventes() {
                     step="0.01"
                     style={{
                       width: "100%",
-                      padding: "12px 16px",
-                      borderRadius: 12,
+                      padding: "10px 14px",
+                      borderRadius: 10,
                       border: "2px solid #e5e7eb",
-                      fontSize: 16,
+                      fontSize: 15,
                       background: "white",
                       transition: "all 0.2s ease",
                       outline: "none",
@@ -1265,7 +1244,7 @@ export default function Ventes() {
                 </div>
 
                 <div>
-                  <label style={{ display: "block", fontSize: 14, fontWeight: 600, color: "#374151", marginBottom: 8 }}>
+                  <label style={{ display: "block", fontSize: 13, fontWeight: 600, color: "#374151", marginBottom: 6 }}>
                     Remise (DH)
                   </label>
                   <input
@@ -1276,10 +1255,10 @@ export default function Ventes() {
                     step="0.01"
                     style={{
                       width: "100%",
-                      padding: "12px 16px",
-                      borderRadius: 12,
+                      padding: "10px 14px",
+                      borderRadius: 10,
                       border: "2px solid #e5e7eb",
-                      fontSize: 16,
+                      fontSize: 15,
                       background: "white",
                       transition: "all 0.2s ease",
                       outline: "none",
@@ -1290,20 +1269,20 @@ export default function Ventes() {
                 </div>
 
                 <div>
-                  <label style={{ display: "block", fontSize: 14, fontWeight: 600, color: "#374151", marginBottom: 8 }}>
-                    N° article (code-barres) — optionnel
+                  <label style={{ display: "block", fontSize: 13, fontWeight: 600, color: "#374151", marginBottom: 6 }}>
+                    N° article (code-barres)
                   </label>
                   <input
                     type="text"
                     value={numeroArticle}
                     onChange={(e) => setNumeroArticle(e.target.value)}
-                    placeholder="Scannez ou saisissez le code-barres"
+                    placeholder="Scannez ou saisissez"
                     style={{
                       width: "100%",
-                      padding: "12px 16px",
-                      borderRadius: 12,
+                      padding: "10px 14px",
+                      borderRadius: 10,
                       border: "2px solid #e5e7eb",
-                      fontSize: 16,
+                      fontSize: 15,
                       background: "white",
                       transition: "all 0.2s ease",
                       outline: "none",
@@ -1316,14 +1295,14 @@ export default function Ventes() {
 
               {/* Lots avec indication de stock */}
               {availableLots.length > 0 && (
-                <div style={{ marginBottom: 24 }}>
+                <div style={{ marginBottom: 16 }}>
                   <label
                     style={{
                       display: "block",
-                      fontSize: 16,
+                      fontSize: 15,
                       fontWeight: 600,
                       color: "#374151",
-                      marginBottom: 16,
+                      marginBottom: 12,
                     }}
                   >
                     Sélectionner un lot spécifique (FIFO recommandé)
@@ -1331,8 +1310,8 @@ export default function Ventes() {
                   <div
                     style={{
                       display: "grid",
-                      gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))",
-                      gap: 16,
+                      gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))",
+                      gap: 12,
                     }}
                   >
                     {availableLots.map((lot) => {
@@ -1341,7 +1320,6 @@ export default function Ventes() {
                       const isExpSoon =
                         lotDate && !isExpired && lotDate <= new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
                       
-                      // Indication des stocks
                       const s1 = safeNumber(lot.stock1);
                       const s2 = safeNumber(lot.stock2);
                       const stockInfo = `S1: ${s1} | S2: ${s2}`;
@@ -1352,8 +1330,8 @@ export default function Ventes() {
                           key={lot.id}
                           onClick={() => handleLotSelection(lot.id)}
                           style={{
-                            padding: 16,
-                            borderRadius: 16,
+                            padding: 14,
+                            borderRadius: 14,
                             cursor: "pointer",
                             transition: "all 0.3s ease",
                             border: selectedLot === lot.id ? "3px solid #10b981" : "2px solid #e5e7eb",
@@ -1368,36 +1346,36 @@ export default function Ventes() {
                             transform: selectedLot === lot.id ? "scale(1.02)" : "scale(1)",
                             boxShadow:
                               selectedLot === lot.id
-                                ? "0 12px 25px rgba(16, 185, 129, 0.2)"
-                                : "0 4px 12px rgba(0, 0, 0, 0.05)",
+                                ? "0 10px 20px rgba(16, 185, 129, 0.2)"
+                                : "0 3px 10px rgba(0, 0, 0, 0.05)",
                           }}
                         >
-                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-                            <span style={{ fontWeight: 700, fontSize: 16, color: "#1f2937" }}>
+                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                            <span style={{ fontWeight: 700, fontSize: 15, color: "#1f2937" }}>
                               Lot: {lot.numeroLot}
                             </span>
                             <span
                               style={{
                                 background: primaryStock === "stock1" ? "#3b82f6" : "#10b981",
                                 color: "white",
-                                padding: "4px 12px",
-                                borderRadius: 20,
-                                fontSize: 12,
+                                padding: "3px 10px",
+                                borderRadius: 16,
+                                fontSize: 11,
                                 fontWeight: 600,
                               }}
                             >
                               {stockInfo}
                             </span>
                           </div>
-                          <div style={{ fontSize: 14, color: "#6b7280", marginBottom: 8 }}>
+                          <div style={{ fontSize: 13, color: "#6b7280", marginBottom: 6 }}>
                             <span
                               style={{
                                 background: "#dbeafe",
                                 color: "#2563eb",
-                                padding: "2px 8px",
-                                borderRadius: 12,
-                                marginRight: 8,
-                                fontSize: 12,
+                                padding: "2px 7px",
+                                borderRadius: 10,
+                                marginRight: 6,
+                                fontSize: 11,
                                 fontWeight: 500,
                               }}
                             >
@@ -1407,9 +1385,9 @@ export default function Ventes() {
                               style={{
                                 background: "#f3e8ff",
                                 color: "#7c3aed",
-                                padding: "2px 8px",
-                                borderRadius: 12,
-                                fontSize: 12,
+                                padding: "2px 7px",
+                                borderRadius: 10,
+                                fontSize: 11,
                                 fontWeight: 600,
                               }}
                             >
@@ -1419,10 +1397,10 @@ export default function Ventes() {
                               style={{
                                 background: primaryStock === "stock1" ? "#dbeafe" : "#dcfce7",
                                 color: primaryStock === "stock1" ? "#2563eb" : "#16a34a",
-                                padding: "2px 8px",
-                                borderRadius: 12,
-                                marginLeft: 8,
-                                fontSize: 12,
+                                padding: "2px 7px",
+                                borderRadius: 10,
+                                marginLeft: 6,
+                                fontSize: 11,
                                 fontWeight: 600,
                               }}
                             >
@@ -1431,7 +1409,7 @@ export default function Ventes() {
                           </div>
                           <div
                             style={{
-                              fontSize: 13,
+                              fontSize: 12,
                               fontWeight: 600,
                               color: isExpired ? "#dc2626" : isExpSoon ? "#d97706" : "#16a34a",
                             }}
@@ -1455,25 +1433,25 @@ export default function Ventes() {
                     background: "linear-gradient(135deg, #10b981, #059669)",
                     color: "white",
                     border: "none",
-                    padding: "14px 32px",
-                    borderRadius: 16,
-                    fontSize: 16,
+                    padding: "12px 28px",
+                    borderRadius: 14,
+                    fontSize: 15,
                     fontWeight: 600,
                     cursor: isSaving ? "not-allowed" : "pointer",
                     opacity: isSaving ? 0.7 : 1,
                     transition: "all 0.3s ease",
-                    boxShadow: "0 8px 25px rgba(16, 185, 129, 0.3)",
+                    boxShadow: "0 8px 20px rgba(16, 185, 129, 0.3)",
                     transform: "translateY(0)",
                   }}
                   onMouseEnter={(e) => {
                     if (!isSaving) {
                       e.target.style.transform = "translateY(-2px)";
-                      e.target.style.boxShadow = "0 12px 35px rgba(16, 185, 129, 0.4)";
+                      e.target.style.boxShadow = "0 10px 25px rgba(16, 185, 129, 0.4)";
                     }
                   }}
                   onMouseLeave={(e) => {
                     e.target.style.transform = "translateY(0)";
-                    e.target.style.boxShadow = "0 8px 25px rgba(16, 185, 129, 0.3)";
+                    e.target.style.boxShadow = "0 8px 20px rgba(16, 185, 129, 0.3)";
                   }}
                 >
                   {isSaving ? "Ajout..." : "Ajouter l'article"}
@@ -1487,17 +1465,17 @@ export default function Ventes() {
             <div
               style={{
                 background: "linear-gradient(135deg, #fff7ed, #fed7aa)",
-                borderRadius: 20,
-                padding: 24,
-                marginBottom: 24,
+                borderRadius: 16,
+                padding: 20,
+                marginBottom: 16,
                 border: "2px solid #f97316",
               }}
             >
               <h3
                 style={{
-                  margin: "0 0 20px",
+                  margin: "0 0 14px",
                   color: "#c2410c",
-                  fontSize: 20,
+                  fontSize: 18,
                   fontWeight: 600,
                   display: "flex",
                   alignItems: "center",
@@ -1507,19 +1485,19 @@ export default function Ventes() {
                 Articles de la vente ({articles.length})
               </h3>
 
-              <div style={{ background: "white", borderRadius: 16, overflow: "hidden", boxShadow: "0 8px 25px rgba(0, 0, 0, 0.1)" }}>
+              <div style={{ background: "white", borderRadius: 14, overflow: "hidden", boxShadow: "0 8px 20px rgba(0, 0, 0, 0.1)" }}>
                 <div style={{ overflowX: "auto" }}>
                   <table style={{ width: "100%", minWidth: 600, borderCollapse: "collapse" }}>
                     <thead>
                       <tr style={{ background: "linear-gradient(135deg, #f97316, #ea580c)", color: "white" }}>
-                        <th style={{ padding: 16, textAlign: "left", fontWeight: 600, fontSize: 14, letterSpacing: "0.5px" }}>
+                        <th style={{ padding: 14, textAlign: "left", fontWeight: 600, fontSize: 13, letterSpacing: "0.3px" }}>
                           Produit / Traçabilité
                         </th>
-                        <th style={{ padding: 16, textAlign: "center", fontWeight: 600, fontSize: 14 }}>Qté</th>
-                        <th style={{ padding: 16, textAlign: "right", fontWeight: 600, fontSize: 14 }}>Prix unit.</th>
-                        <th style={{ padding: 16, textAlign: "right", fontWeight: 600, fontSize: 14 }}>Remise</th>
-                        <th style={{ padding: 16, textAlign: "right", fontWeight: 600, fontSize: 14 }}>Total</th>
-                        <th style={{ padding: 16, textAlign: "center", fontWeight: 600, fontSize: 14, width: 60 }}>Action</th>
+                        <th style={{ padding: 14, textAlign: "center", fontWeight: 600, fontSize: 13 }}>Qté</th>
+                        <th style={{ padding: 14, textAlign: "right", fontWeight: 600, fontSize: 13 }}>Prix unit.</th>
+                        <th style={{ padding: 14, textAlign: "right", fontWeight: 600, fontSize: 13 }}>Remise</th>
+                        <th style={{ padding: 14, textAlign: "right", fontWeight: 600, fontSize: 13 }}>Total</th>
+                        <th style={{ padding: 14, textAlign: "center", fontWeight: 600, fontSize: 13, width: 60 }}>Action</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -1530,15 +1508,15 @@ export default function Ventes() {
                           onMouseEnter={(e) => (e.target.closest("tr").style.background = "#fafafa")}
                           onMouseLeave={(e) => (e.target.closest("tr").style.background = "white")}
                         >
-                          <td style={{ padding: 16 }}>
-                            <div style={{ fontWeight: 600, color: "#1f2937", marginBottom: 4 }}>{a.produit}</div>
+                          <td style={{ padding: 14 }}>
+                            <div style={{ fontWeight: 600, color: "#1f2937", marginBottom: 3, fontSize: 14 }}>{a.produit}</div>
                             {(a.numeroArticle || a.numeroLot || a.fournisseur || a.datePeremption || a.stockSource) && (
                               <div
                                 style={{
-                                  fontSize: 12,
+                                  fontSize: 11,
                                   color: "#6b7280",
                                   background: "#f8fafc",
-                                  padding: 8,
+                                  padding: 6,
                                   borderRadius: 8,
                                   border: "1px solid #e5e7eb",
                                 }}
@@ -1549,10 +1527,10 @@ export default function Ventes() {
                                       background: a.stockSource === "stock1" ? "#3b82f6" : "#10b981",
                                       color: "white",
                                       padding: "2px 6px",
-                                      borderRadius: 8,
-                                      fontSize: 11,
+                                      borderRadius: 6,
+                                      fontSize: 10,
                                       fontWeight: 600,
-                                      marginRight: 6,
+                                      marginRight: 5,
                                     }}
                                   >
                                     {a.stockSource === "stock1" ? "S1" : "S2"}
@@ -1564,10 +1542,10 @@ export default function Ventes() {
                                       background: "#e0e7ff",
                                       color: "#4f46e5",
                                       padding: "2px 6px",
-                                      borderRadius: 8,
-                                      fontSize: 11,
+                                      borderRadius: 6,
+                                      fontSize: 10,
                                       fontWeight: 600,
-                                      marginRight: 6,
+                                      marginRight: 5,
                                     }}
                                   >
                                     N° article: {a.numeroArticle}
@@ -1579,10 +1557,10 @@ export default function Ventes() {
                                       background: "#dcfce7",
                                       color: "#16a34a",
                                       padding: "2px 6px",
-                                      borderRadius: 8,
-                                      fontSize: 11,
+                                      borderRadius: 6,
+                                      fontSize: 10,
                                       fontWeight: 500,
-                                      marginRight: 6,
+                                      marginRight: 5,
                                     }}
                                   >
                                     Lot: {a.numeroLot}
@@ -1594,42 +1572,42 @@ export default function Ventes() {
                                       background: "#dbeafe",
                                       color: "#2563eb",
                                       padding: "2px 6px",
-                                      borderRadius: 8,
-                                      fontSize: 11,
+                                      borderRadius: 6,
+                                      fontSize: 10,
                                       fontWeight: 500,
-                                      marginRight: 6,
+                                      marginRight: 5,
                                     }}
                                   >
                                     {a.fournisseur}
                                   </span>
                                 )}
                                 {a.datePeremption && (
-                                  <div style={{ marginTop: 4, fontSize: 11 }}>Exp: {formatDateSafe(a.datePeremption)}</div>
+                                  <div style={{ marginTop: 3, fontSize: 10 }}>Exp: {formatDateSafe(a.datePeremption)}</div>
                                 )}
                               </div>
                             )}
                           </td>
-                          <td style={{ padding: 16, textAlign: "center", fontWeight: 600, fontSize: 16 }}>
+                          <td style={{ padding: 14, textAlign: "center", fontWeight: 600, fontSize: 15 }}>
                             {safeNumber(a.quantite)}
                           </td>
-                          <td style={{ padding: 16, textAlign: "right", fontWeight: 500, fontSize: 15 }}>
+                          <td style={{ padding: 14, textAlign: "right", fontWeight: 500, fontSize: 14 }}>
                             {safeToFixed(a.prixUnitaire)} DH
                           </td>
                           <td
                             style={{
-                              padding: 16,
+                              padding: 14,
                               textAlign: "right",
                               fontWeight: 500,
-                              fontSize: 15,
+                              fontSize: 14,
                               color: safeNumber(a.remise) > 0 ? "#dc2626" : "#6b7280",
                             }}
                           >
                             {safeToFixed(a.remise)} DH
                           </td>
-                          <td style={{ padding: 16, textAlign: "right", fontWeight: 700, fontSize: 16, color: "#16a34a" }}>
+                          <td style={{ padding: 14, textAlign: "right", fontWeight: 700, fontSize: 15, color: "#16a34a" }}>
                             {safeToFixed(safeNumber(a.prixUnitaire) * safeNumber(a.quantite) - safeNumber(a.remise))} DH
                           </td>
-                          <td style={{ padding: 16, textAlign: "center" }}>
+                          <td style={{ padding: 14, textAlign: "center" }}>
                             <button
                               onClick={() => handleRemoveArticle(i)}
                               style={{
@@ -1637,9 +1615,9 @@ export default function Ventes() {
                                 color: "white",
                                 border: "none",
                                 borderRadius: 8,
-                                padding: "6px 12px",
+                                padding: "5px 10px",
                                 cursor: "pointer",
-                                fontSize: 12,
+                                fontSize: 11,
                                 fontWeight: 600,
                                 transition: "all 0.2s ease",
                               }}
@@ -1660,14 +1638,14 @@ export default function Ventes() {
                       <tr style={{ background: "linear-gradient(135deg, #f0fdf4, #dcfce7)", borderTop: "2px solid #16a34a" }}>
                         <td
                           colSpan={4}
-                          style={{ padding: 20, textAlign: "right", fontSize: 18, fontWeight: 700, color: "#15803d" }}
+                          style={{ padding: 16, textAlign: "right", fontSize: 17, fontWeight: 700, color: "#15803d" }}
                         >
                           TOTAL DE LA VENTE
                         </td>
-                        <td style={{ padding: 20, textAlign: "right", fontSize: 22, fontWeight: 800, color: "#16a34a" }}>
+                        <td style={{ padding: 16, textAlign: "right", fontSize: 20, fontWeight: 800, color: "#16a34a" }}>
                           {safeToFixed(totalVenteCourante)} DH
                         </td>
-                        <td style={{ padding: 20 }}></td>
+                        <td style={{ padding: 16 }}></td>
                       </tr>
                     </tbody>
                   </table>
@@ -1680,12 +1658,12 @@ export default function Ventes() {
           <div
             style={{
               background: "linear-gradient(135deg, #f3e8ff, #e9d5ff)",
-              borderRadius: 20,
-              padding: 24,
+              borderRadius: 16,
+              padding: 20,
               border: "2px solid #8b5cf6",
             }}
           >
-            <h3 style={{ margin: "0 0 24px", color: "#581c87", fontSize: 20, fontWeight: 600 }}>
+            <h3 style={{ margin: "0 0 -15%", color: "#581c87", fontSize: 18, fontWeight: 600 }}>
               Finaliser la vente
             </h3>
 
@@ -1693,13 +1671,13 @@ export default function Ventes() {
               <div
                 style={{
                   display: "grid",
-                  gridTemplateColumns: "repeat(auto-fit, minmax(250px, 1fr))",
-                  gap: 20,
-                  marginBottom: 24,
+                  gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+                  gap: 14,
+                  marginBottom: 16,
                 }}
               >
                 <div>
-                  <label style={{ display: "block", fontSize: 14, fontWeight: 600, color: "#374151", marginBottom: 8 }}>
+                  <label style={{ display: "block", fontSize: 13, fontWeight: 600, color: "#374151", marginBottom: 6 }}>
                     Client *
                   </label>
                   <input
@@ -1711,10 +1689,10 @@ export default function Ventes() {
                     list="clients-list"
                     style={{
                       width: "100%",
-                      padding: "12px 16px",
-                      borderRadius: 12,
+                      padding: "10px 14px",
+                      borderRadius: 10,
                       border: "2px solid #e5e7eb",
-                      fontSize: 16,
+                      fontSize: 15,
                       background: "white",
                       transition: "all 0.2s ease",
                       outline: "none",
@@ -1726,7 +1704,7 @@ export default function Ventes() {
                 </div>
 
                 <div>
-                  <label style={{ display: "block", fontSize: 14, fontWeight: 600, color: "#374151", marginBottom: 8 }}>
+                  <label style={{ display: "block", fontSize: 13, fontWeight: 600, color: "#374151", marginBottom: 6 }}>
                     Date de vente *
                   </label>
                   <input
@@ -1736,10 +1714,10 @@ export default function Ventes() {
                     required
                     style={{
                       width: "100%",
-                      padding: "12px 16px",
-                      borderRadius: 12,
+                      padding: "10px 14px",
+                      borderRadius: 10,
                       border: "2px solid #e5e7eb",
-                      fontSize: 16,
+                      fontSize: 15,
                       background: "white",
                       transition: "all 0.2s ease",
                       outline: "none",
@@ -1750,7 +1728,7 @@ export default function Ventes() {
                 </div>
 
                 <div>
-                  <label style={{ display: "block", fontSize: 14, fontWeight: 600, color: "#374151", marginBottom: 8 }}>
+                  <label style={{ display: "block", fontSize: 13, fontWeight: 600, color: "#374151", marginBottom: 6 }}>
                     Statut de paiement
                   </label>
                   <select
@@ -1758,10 +1736,10 @@ export default function Ventes() {
                     onChange={(e) => setStatutPaiement(e.target.value)}
                     style={{
                       width: "100%",
-                      padding: "12px 16px",
-                      borderRadius: 12,
+                      padding: "10px 14px",
+                      borderRadius: 10,
                       border: "2px solid #e5e7eb",
-                      fontSize: 16,
+                      fontSize: 15,
                       background: "white",
                       transition: "all 0.2s ease",
                       outline: "none",
@@ -1776,7 +1754,7 @@ export default function Ventes() {
                 </div>
 
                 <div>
-                  <label style={{ display: "block", fontSize: 14, fontWeight: 600, color: "#374151", marginBottom: 8 }}>
+                  <label style={{ display: "block", fontSize: 13, fontWeight: 600, color: "#374151", marginBottom: 6 }}>
                     Mode de paiement
                   </label>
                   <select
@@ -1784,10 +1762,10 @@ export default function Ventes() {
                     onChange={(e) => setModePaiement(e.target.value)}
                     style={{
                       width: "100%",
-                      padding: "12px 16px",
-                      borderRadius: 12,
+                      padding: "10px 14px",
+                      borderRadius: 10,
                       border: "2px solid #e5e7eb",
-                      fontSize: 16,
+                      fontSize: 15,
                       background: "white",
                       transition: "all 0.2s ease",
                       outline: "none",
@@ -1804,21 +1782,21 @@ export default function Ventes() {
                 </div>
               </div>
 
-              <div style={{ marginBottom: 24 }}>
-                <label style={{ display: "block", fontSize: 14, fontWeight: 600, color: "#374151", marginBottom: 8 }}>
+              <div style={{ marginBottom: 16 }}>
+                <label style={{ display: "block", fontSize: 13, fontWeight: 600, color: "#374151", marginBottom: 6 }}>
                   Notes / Observations
                 </label>
                 <textarea
                   value={notesVente}
                   onChange={(e) => setNotesVente(e.target.value)}
                   rows={3}
-                  placeholder="Notes optionnelles sur la vente..."
+                  placeholder="Notes optionnelles..."
                   style={{
                     width: "100%",
-                    padding: "12px 16px",
-                    borderRadius: 12,
+                    padding: "10px 14px",
+                    borderRadius: 10,
                     border: "2px solid #e5e7eb",
-                    fontSize: 16,
+                    fontSize: 15,
                     background: "white",
                     transition: "all 0.2s ease",
                     outline: "none",
@@ -1830,7 +1808,7 @@ export default function Ventes() {
                 />
               </div>
 
-              <div style={{ display: "flex", gap: 16, justifyContent: "center", flexWrap: "wrap" }}>
+              <div style={{ display: "flex", gap: 12, justifyContent: "center", flexWrap: "wrap" }}>
                 {isEditing && (
                   <button
                     type="button"
@@ -1839,22 +1817,22 @@ export default function Ventes() {
                       background: "linear-gradient(135deg, #6b7280, #4b5563)",
                       color: "white",
                       border: "none",
-                      padding: "14px 32px",
-                      borderRadius: 16,
-                      fontSize: 16,
+                      padding: "12px 28px",
+                      borderRadius: 14,
+                      fontSize: 15,
                       fontWeight: 600,
                       cursor: "pointer",
                       transition: "all 0.3s ease",
-                      boxShadow: "0 8px 25px rgba(107, 114, 128, 0.3)",
+                      boxShadow: "0 8px 20px rgba(107, 114, 128, 0.3)",
                       transform: "translateY(0)",
                     }}
                     onMouseEnter={(e) => {
                       e.target.style.transform = "translateY(-2px)";
-                      e.target.style.boxShadow = "0 12px 35px rgba(107, 114, 128, 0.4)";
+                      e.target.style.boxShadow = "0 10px 25px rgba(107, 114, 128, 0.4)";
                     }}
                     onMouseLeave={(e) => {
                       e.target.style.transform = "translateY(0)";
-                      e.target.style.boxShadow = "0 8px 25px rgba(107, 114, 128, 0.3)";
+                      e.target.style.boxShadow = "0 8px 20px rgba(107, 114, 128, 0.3)";
                     }}
                   >
                     Annuler
@@ -1868,25 +1846,25 @@ export default function Ventes() {
                     background: isEditing ? "linear-gradient(135deg, #f59e0b, #d97706)" : "linear-gradient(135deg, #8b5cf6, #7c3aed)",
                     color: "white",
                     border: "none",
-                    padding: "16px 40px",
-                    borderRadius: 16,
-                    fontSize: 18,
+                    padding: "14px 36px",
+                    borderRadius: 14,
+                    fontSize: 17,
                     fontWeight: 700,
                     cursor: isSaving || articles.length === 0 ? "not-allowed" : "pointer",
                     opacity: isSaving || articles.length === 0 ? 0.6 : 1,
                     transition: "all 0.3s ease",
-                    boxShadow: "0 12px 35px rgba(139, 92, 246, 0.4)",
+                    boxShadow: "0 10px 30px rgba(139, 92, 246, 0.4)",
                     transform: "translateY(0)",
                   }}
                   onMouseEnter={(e) => {
                     if (!isSaving && articles.length > 0) {
                       e.target.style.transform = "translateY(-3px)";
-                      e.target.style.boxShadow = "0 16px 45px rgba(139, 92, 246, 0.5)";
+                      e.target.style.boxShadow = "0 14px 38px rgba(139, 92, 246, 0.5)";
                     }
                   }}
                   onMouseLeave={(e) => {
                     e.target.style.transform = "translateY(0)";
-                    e.target.style.boxShadow = "0 12px 35px rgba(139, 92, 246, 0.4)";
+                    e.target.style.boxShadow = "0 10px 30px rgba(139, 92, 246, 0.4)";
                   }}
                 >
                   {isSaving ? "Enregistrement..." : isEditing ? "Modifier la vente" : "Enregistrer la vente"}
@@ -1902,26 +1880,26 @@ export default function Ventes() {
         style={{
           background: "rgba(255, 255, 255, 0.95)",
           backdropFilter: "blur(20px)",
-          borderRadius: 20,
-          padding: 24,
-          marginBottom: 24,
+          borderRadius: 16,
+          padding: 18,
+          marginBottom: 16,
           border: "1px solid rgba(255, 255, 255, 0.2)",
-          boxShadow: "0 12px 30px rgba(0, 0, 0, 0.08)",
+          boxShadow: "0 10px 25px rgba(0, 0, 0, 0.08)",
         }}
       >
-        <div style={{ display: "flex", gap: 16, alignItems: "center", flexWrap: "wrap" }}>
-          <div style={{ flex: "1", minWidth: 250 }}>
+        <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+          <div style={{ flex: "1", minWidth: 240 }}>
             <input
               type="text"
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              placeholder="Rechercher client, produit, numéro de lot ou N° article..."
+              placeholder="Rechercher client, produit, lot ou N° article..."
               style={{
                 width: "100%",
-                padding: "12px 20px",
-                borderRadius: 25,
+                padding: "11px 18px",
+                borderRadius: 20,
                 border: "2px solid #e5e7eb",
-                fontSize: 16,
+                fontSize: 15,
                 background: "white",
                 transition: "all 0.3s ease",
                 outline: "none",
@@ -1941,14 +1919,14 @@ export default function Ventes() {
             value={filterStatut}
             onChange={(e) => setFilterStatut(e.target.value)}
             style={{
-              padding: "12px 20px",
-              borderRadius: 25,
+              padding: "11px 18px",
+              borderRadius: 20,
               border: "2px solid #e5e7eb",
-              fontSize: 16,
+              fontSize: 15,
               background: "white",
               transition: "all 0.3s ease",
               outline: "none",
-              minWidth: 180,
+              minWidth: 170,
             }}
             onFocus={(e) => {
               e.target.style.borderColor = "#3b82f6";
@@ -1975,21 +1953,21 @@ export default function Ventes() {
                 background: "linear-gradient(135deg, #ef4444, #dc2626)",
                 color: "white",
                 border: "none",
-                padding: "12px 20px",
-                borderRadius: 25,
+                padding: "11px 18px",
+                borderRadius: 20,
                 fontSize: 14,
                 fontWeight: 600,
                 cursor: "pointer",
                 transition: "all 0.3s ease",
-                boxShadow: "0 6px 20px rgba(239, 68, 68, 0.3)",
+                boxShadow: "0 6px 18px rgba(239, 68, 68, 0.3)",
               }}
               onMouseEnter={(e) => {
                 e.target.style.transform = "translateY(-2px)";
-                e.target.style.boxShadow = "0 8px 25px rgba(239, 68, 68, 0.4)";
+                e.target.style.boxShadow = "0 8px 22px rgba(239, 68, 68, 0.4)";
               }}
               onMouseLeave={(e) => {
                 e.target.style.transform = "translateY(0)";
-                e.target.style.boxShadow = "0 6px 20px rgba(239, 68, 68, 0.3)";
+                e.target.style.boxShadow = "0 6px 18px rgba(239, 68, 68, 0.3)";
               }}
             >
               Réinitialiser
@@ -2003,7 +1981,7 @@ export default function Ventes() {
         style={{
           background: "rgba(255, 255, 255, 0.95)",
           backdropFilter: "blur(20px)",
-          borderRadius: 24,
+          borderRadius: 20,
           overflow: "hidden",
           border: "1px solid rgba(255, 255, 255, 0.2)",
           boxShadow: "0 20px 40px rgba(0, 0, 0, 0.1)",
@@ -2021,25 +1999,25 @@ export default function Ventes() {
               }}
             >
               <tr>
-                <th style={{ padding: 20, textAlign: "left", fontWeight: 700, fontSize: 14, letterSpacing: "0.5px", borderRight: "1px solid rgba(255,255,255,0.1)" }}>
+                <th style={{ padding: 16, textAlign: "left", fontWeight: 700, fontSize: 13, letterSpacing: "0.3px", borderRight: "1px solid rgba(255,255,255,0.1)" }}>
                   N° VENTE
                 </th>
-                <th style={{ padding: 20, textAlign: "left", fontWeight: 700, fontSize: 14, letterSpacing: "0.5px", borderRight: "1px solid rgba(255,255,255,0.1)" }}>
+                <th style={{ padding: 16, textAlign: "left", fontWeight: 700, fontSize: 13, letterSpacing: "0.3px", borderRight: "1px solid rgba(255,255,255,0.1)" }}>
                   CLIENT
                 </th>
-                <th style={{ padding: 20, textAlign: "center", fontWeight: 700, fontSize: 14, letterSpacing: "0.5px", borderRight: '1px solid #f1f5f9' }}>
+                <th style={{ padding: 16, textAlign: "center", fontWeight: 700, fontSize: 13, letterSpacing: "0.3px", borderRight: '1px solid rgba(255,255,255,0.1)' }}>
                   DATE
                 </th>
-                <th style={{ padding: 20, textAlign: "center", fontWeight: 700, fontSize: 14, letterSpacing: "0.5px", borderRight: '1px solid #f1f5f9' }}>
+                <th style={{ padding: 16, textAlign: "center", fontWeight: 700, fontSize: 13, letterSpacing: "0.3px", borderRight: '1px solid rgba(255,255,255,0.1)' }}>
                   ARTICLES / STOCK
                 </th>
-                <th style={{ padding: 20, textAlign: "center", fontWeight: 700, fontSize: 14, letterSpacing: "0.5px", borderRight: '1px solid #f1f5f9' }}>
+                <th style={{ padding: 16, textAlign: "center", fontWeight: 700, fontSize: 13, letterSpacing: "0.3px", borderRight: '1px solid rgba(255,255,255,0.1)' }}>
                   STATUT
                 </th>
-                <th style={{ padding: 20, textAlign: "right", fontWeight: 700, fontSize: 14, letterSpacing: "0.5px", borderRight: '1px solid #f1f5f9' }}>
+                <th style={{ padding: 16, textAlign: "right", fontWeight: 700, fontSize: 13, letterSpacing: "0.3px", borderRight: '1px solid rgba(255,255,255,0.1)' }}>
                   TOTAL
                 </th>
-                <th style={{ padding: 20, textAlign: "center", fontWeight: 700, fontSize: 14, letterSpacing: "0.5px", width: 220 }}>
+                <th style={{ padding: 16, textAlign: "center", fontWeight: 700, fontSize: 13, letterSpacing: "0.3px", width: 200 }}>
                   ACTIONS
                 </th>
               </tr>
@@ -2047,13 +2025,13 @@ export default function Ventes() {
             <tbody>
               {ventesFiltrees.length === 0 ? (
                 <tr>
-                  <td colSpan={7} style={{ padding: "60px 20px", textAlign: "center", color: "#6b7280", fontSize: 18, fontWeight: 500 }}>
-                    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 16 }}>
-                      <div style={{ width: 64, height: 64, borderRadius: "50%", background: "linear-gradient(135deg, #e5e7eb, #d1d5db)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 24 }}>
+                  <td colSpan={7} style={{ padding: "50px 20px", textAlign: "center", color: "#6b7280", fontSize: 17, fontWeight: 500 }}>
+                    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 14 }}>
+                      <div style={{ width: 56, height: 56, borderRadius: "50%", background: "linear-gradient(135deg, #e5e7eb, #d1d5db)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22 }}>
                         📊
                       </div>
                       <div>
-                        <h3 style={{ margin: "0 0 8px", color: "#374151" }}>
+                        <h3 style={{ margin: "0 0 6px", color: "#374151" }}>
                           {ventes.length === 0 ? "Aucune vente enregistrée" : "Aucun résultat"}
                         </h3>
                         <p style={{ margin: 0, color: "#9ca3af" }}>
@@ -2064,8 +2042,7 @@ export default function Ventes() {
                       </div>
                     </div>
                   </td>
-                </tr>
-              ) : (
+                </tr>) : (
                 ventesFiltrees.map((v, index) => {
                   const total =
                     v.montantTotal ||
@@ -2076,7 +2053,6 @@ export default function Ventes() {
                   const articlesAvecLots = (v.articles || []).filter((a) => a.numeroLot || a.numeroArticle).length;
                   const totalArticles = (v.articles || []).length;
                   
-                  // Comptage des articles par stock
                   const stockCounts = { stock1: 0, stock2: 0, unknown: 0 };
                   (v.articles || []).forEach(a => {
                     const source = a.stockSource || "unknown";
@@ -2085,7 +2061,7 @@ export default function Ventes() {
                     else stockCounts.unknown++;
                   });
                   
-                  const principalStock = v.stockSource || v.stock || "stock1";
+                  const principalStock = v.stockSource|| v.stock || "stock1";
                   
                   return (
                     <tr
@@ -2102,7 +2078,7 @@ export default function Ventes() {
                           ? "linear-gradient(135deg, #f0fdf4, #dcfce7)" 
                           : "linear-gradient(135deg, #f0f9ff, #e0f2fe)";
                         tr.style.transform = "scale(1.001)";
-                        tr.style.boxShadow = `0 4px 20px ${principalStock === "stock2" ? "rgba(16, 185, 129, 0.1)" : "rgba(59, 130, 246, 0.1)"}`;
+                        tr.style.boxShadow = `0 4px 16px ${principalStock === "stock2" ? "rgba(16, 185, 129, 0.1)" : "rgba(59, 130, 246, 0.1)"}`;
                       }}
                       onMouseLeave={(e) => {
                         const tr = e.target.closest("tr");
@@ -2111,42 +2087,42 @@ export default function Ventes() {
                         tr.style.boxShadow = "none";
                       }}
                     >
-                      <td style={{ padding: 20, borderRight: '1px solid #f1f5f9' }}>
+                      <td style={{ padding: 16, borderRight: '1px solid #f1f5f9' }}>
                         <div
                           style={{
                             background: principalStock === "stock2" 
                               ? "linear-gradient(135deg, #10b981, #059669)"
                               : "linear-gradient(135deg, #3b82f6, #2563eb)",
                             color: "white",
-                            padding: "6px 12px",
-                            borderRadius: 12,
-                            fontSize: 12,
+                            padding: "5px 10px",
+                            borderRadius: 10,
+                            fontSize: 11,
                             fontWeight: 700,
-                            letterSpacing: "0.5px",
+                            letterSpacing: "0.3px",
                             display: "inline-block",
                           }}
                         >
                           #{(v.id || "").slice(-6).toUpperCase()}
                         </div>
                       </td>
-                      <td style={{ padding: 20, borderRight: '1px solid #f1f5f9' }}>
-                        <div style={{ fontWeight: 600, fontSize: 16, color: "#1f2937", marginBottom: 4 }}>{v.client}</div>
-                        <div style={{ fontSize: 12, color: "#6b7280", background: "#f8fafc", padding: "2px 8px", borderRadius: 8, display: "inline-block" }}>
+                      <td style={{ padding: 16, borderRight: '1px solid #f1f5f9' }}>
+                        <div style={{ fontWeight: 600, fontSize: 15, color: "#1f2937", marginBottom: 3 }}>{v.client}</div>
+                        <div style={{ fontSize: 11, color: "#6b7280", background: "#f8fafc", padding: "2px 7px", borderRadius: 8, display: "inline-block" }}>
                           {v.modePaiement || "Espèces"}
                         </div>
                       </td>
-                      <td style={{ padding: 20, textAlign: "center", borderRight: '1px solid #f1f5f9' }}>
-                        <div style={{ fontSize: 14, fontWeight: 600, color: "#374151" }}>{formatDateSafe(v.date)}</div>
+                      <td style={{ padding: 16, textAlign: "center", borderRight: '1px solid #f1f5f9' }}>
+                        <div style={{ fontSize: 13, fontWeight: 600, color: "#374151" }}>{formatDateSafe(v.date)}</div>
                       </td>
-                      <td style={{ padding: 20, textAlign: "center", borderRight: '1px solid #f1f5f9' }}>
+                      <td style={{ padding: 16, textAlign: "center", borderRight: '1px solid #f1f5f9' }}>
                         <div style={{ display: "flex", gap: 4, justifyContent: "center", alignItems: "center", flexWrap: "wrap" }}>
                           <span
                             style={{
                               background: "linear-gradient(135deg, #8b5cf6, #7c3aed)",
                               color: "white",
-                              padding: "4px 8px",
-                              borderRadius: 12,
-                              fontSize: 11,
+                              padding: "3px 7px",
+                              borderRadius: 10,
+                              fontSize: 10,
                               fontWeight: 600,
                             }}
                           >
@@ -2157,9 +2133,9 @@ export default function Ventes() {
                               style={{
                                 background: "linear-gradient(135deg, #3b82f6, #2563eb)",
                                 color: "white",
-                                padding: "2px 6px",
+                                padding: "2px 5px",
                                 borderRadius: 8,
-                                fontSize: 10,
+                                fontSize: 9,
                                 fontWeight: 600,
                               }}
                               title={`${stockCounts.stock1} articles depuis Stock1`}
@@ -2172,9 +2148,9 @@ export default function Ventes() {
                               style={{
                                 background: "linear-gradient(135deg, #10b981, #059669)",
                                 color: "white",
-                                padding: "2px 6px",
+                                padding: "2px 5px",
                                 borderRadius: 8,
-                                fontSize: 10,
+                                fontSize: 9,
                                 fontWeight: 600,
                               }}
                               title={`${stockCounts.stock2} articles depuis Stock2`}
@@ -2187,9 +2163,9 @@ export default function Ventes() {
                               style={{
                                 background: "linear-gradient(135deg, #f59e0b, #d97706)",
                                 color: "white",
-                                padding: "2px 6px",
+                                padding: "2px 5px",
                                 borderRadius: 8,
-                                fontSize: 10,
+                                fontSize: 9,
                                 fontWeight: 600,
                               }}
                               title={`${articlesAvecLots} articles avec traçabilité`}
@@ -2199,7 +2175,7 @@ export default function Ventes() {
                           )}
                         </div>
                       </td>
-                      <td style={{ padding: 20, textAlign: "center", borderRight: '1px solid #f1f5f9' }}>
+                      <td style={{ padding: 16, textAlign: "center", borderRight: '1px solid #f1f5f9' }}>
                         <span
                           style={{
                             background:
@@ -2209,9 +2185,9 @@ export default function Ventes() {
                                 ? "linear-gradient(135deg, #eab308, #ca8a04)"
                                 : "linear-gradient(135deg, #ef4444, #dc2626)",
                             color: "white",
-                            padding: "6px 16px",
-                            borderRadius: 20,
-                            fontSize: 12,
+                            padding: "5px 14px",
+                            borderRadius: 16,
+                            fontSize: 11,
                             fontWeight: 600,
                             textTransform: "capitalize",
                           }}
@@ -2219,14 +2195,14 @@ export default function Ventes() {
                           {v.statutPaiement}
                         </span>
                       </td>
-                      <td style={{ padding: 20, textAlign: "right", borderRight: '1px solid #f1f5f9' }}>
-                        <div style={{ fontSize: 16, fontWeight: 700, color: "#16a34a" }}>{safeToFixed(total)} DH</div>
+                      <td style={{ padding: 16, textAlign: "right", borderRight: '1px solid #f1f5f9' }}>
+                        <div style={{ fontSize: 15, fontWeight: 700, color: "#16a34a" }}>{safeToFixed(total)} DH</div>
                       </td>
-                      <td style={{ padding: 20, textAlign: "center" }}>
+                      <td style={{ padding: 16, textAlign: "center" }}>
                         <div style={{ display: "flex", gap: 8, justifyContent: "center" }}>
                           <span
                             onClick={() => handleViewDetails(v)}
-                            style={{ cursor: "pointer", fontSize: 18, transition: "transform 0.2s ease" }}
+                            style={{ cursor: "pointer", fontSize: 17, transition: "transform 0.2s ease" }}
                             onMouseEnter={(e) => (e.target.style.transform = "scale(1.2)")}
                             onMouseLeave={(e) => (e.target.style.transform = "scale(1)")}
                             title="Voir les détails"
@@ -2235,7 +2211,7 @@ export default function Ventes() {
                           </span>
                           <span
                             onClick={() => handleEditVente(v)}
-                            style={{ cursor: "pointer", fontSize: 18, marginRight: 10, transition: "transform 0.2s ease" }}
+                            style={{ cursor: "pointer", fontSize: 17, transition: "transform 0.2s ease" }}
                             onMouseEnter={(e) => (e.target.style.transform = "scale(1.2)")}
                             onMouseLeave={(e) => (e.target.style.transform = "scale(1)")}
                             title="Modifier"
@@ -2244,7 +2220,7 @@ export default function Ventes() {
                           </span>
                           <span
                             onClick={() => handlePrintVente(v)}
-                            style={{ cursor: "pointer", fontSize: 18, marginRight: 10, transition: "transform 0.2s ease" }}
+                            style={{ cursor: "pointer", fontSize: 17, transition: "transform 0.2s ease" }}
                             onMouseEnter={(e) => (e.target.style.transform = "scale(1.2)")}
                             onMouseLeave={(e) => (e.target.style.transform = "scale(1)")}
                             title="Imprimer"
@@ -2253,7 +2229,7 @@ export default function Ventes() {
                           </span>
                           <span
                             onClick={() => handleDeleteVente(v)}
-                            style={{ cursor: "pointer", fontSize: 18, transition: "transform 0.2s ease" }}
+                            style={{ cursor: "pointer", fontSize: 17, transition: "transform 0.2s ease" }}
                             onMouseEnter={(e) => (e.target.style.transform = "scale(1.2)")}
                             onMouseLeave={(e) => (e.target.style.transform = "scale(1)")}
                             title="Supprimer"
@@ -2297,9 +2273,9 @@ export default function Ventes() {
             <div
               style={{
                 background: "linear-gradient(135deg, #ffffff, #f9fafb)",
-                borderRadius: 20,
-                padding: 16,
-                width: "min(100%, 980px)",
+                borderRadius: 18,
+                padding: 20,
+                width: "min(100%, 900px)",
                 maxHeight: "90vh",
                 overflowY: "auto",
                 overflowX: "hidden",
@@ -2318,18 +2294,18 @@ export default function Ventes() {
                   top: 0,
                   zIndex: 2,
                   background: "linear-gradient(135deg, #ffffff, #f9fafb)",
-                  padding: "12px 40px 12px 12px",
-                  margin: "-16px -16px 16px",
+                  padding: "10px 36px 10px 0",
+                  margin: "-20px -20px 16px",
                   borderBottom: "1px solid rgba(0,0,0,0.06)",
                   display: "flex",
                   alignItems: "center",
-                  minHeight: 48,
+                  minHeight: 44,
                 }}
               >
                 <h2
                   style={{
                     margin: 0,
-                    fontSize: "clamp(18px, 2.5vw, 28px)",
+                    fontSize: "clamp(17px, 2.5vw, 24px)",
                     fontWeight: 700,
                     color: "#1f2937",
                     lineHeight: 1.2,
@@ -2340,14 +2316,14 @@ export default function Ventes() {
                   {selectedVente?.stockSource && (
                     <span
                       style={{
-                        marginLeft: 12,
+                        marginLeft: 10,
                         background: selectedVente.stockSource === "stock2" 
                           ? "linear-gradient(135deg, #10b981, #059669)"
                           : "linear-gradient(135deg, #3b82f6, #2563eb)",
                         color: "white",
-                        padding: "4px 12px",
-                        borderRadius: 12,
-                        fontSize: "clamp(12px, 1.5vw, 16px)",
+                        padding: "3px 10px",
+                        borderRadius: 10,
+                        fontSize: "clamp(11px, 1.5vw, 14px)",
                         fontWeight: 600,
                       }}
                     >
@@ -2360,26 +2336,24 @@ export default function Ventes() {
                   aria-label="Fermer"
                   style={{
                     position: "absolute",
-                    right: 12,
-                    top: 12,
-                    width: 36,
-                    height: 36,
+                    right: 10,
+                    top: 10,
+                    width: 32,
+                    height: 32,
                     display: "grid",
                     placeItems: "center",
                     background: "transparent",
                     border: "none",
-                    borderRadius: 10,
-                    fontSize: 24,
+                    borderRadius: 8,
+                    fontSize: 22,
                     lineHeight: 1,
                     color: "#111827",
                     cursor: "pointer",
-                    transition: "background 0.2s ease, transform 0.1s ease",
+                    transition: "background 0.2s ease",
                     zIndex: 3,
                   }}
                   onMouseEnter={(e) => (e.currentTarget.style.background = "#f3f4f6")}
                   onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
-                  onMouseDown={(e) => (e.currentTarget.style.transform = "scale(0.97)")}
-                  onMouseUp={(e) => (e.currentTarget.style.transform = "scale(1)")}
                 >
                   ×
                 </button>
@@ -2388,59 +2362,59 @@ export default function Ventes() {
               <div
                 style={{
                   display: "grid",
-                  gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
-                  gap: 12,
-                  marginBottom: 24,
+                  gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))",
+                  gap: 10,
+                  marginBottom: 18,
                 }}
               >
-                <div style={{ background: "linear-gradient(135deg, #dbeafe, #bfdbfe)", borderRadius: 14, padding: 16, boxShadow: "0 4px 15px rgba(59, 130, 246, 0.08)" }}>
-                  <h4 style={{ margin: "0 0 6px", color: "#1d4ed8", fontSize: 14, fontWeight: 600 }}>Client</h4>
-                  <p style={{ margin: 0, fontSize: 16, fontWeight: 700, color: "#1f2937", wordBreak: "break-word" }}>
+                <div style={{ background: "linear-gradient(135deg, #dbeafe, #bfdbfe)", borderRadius: 12, padding: 14, boxShadow: "0 4px 12px rgba(59, 130, 246, 0.08)" }}>
+                  <h4 style={{ margin: "0 0 4px", color: "#1d4ed8", fontSize: 13, fontWeight: 600 }}>Client</h4>
+                  <p style={{ margin: 0, fontSize: 15, fontWeight: 700, color: "#1f2937", wordBreak: "break-word" }}>
                     {selectedVente?.client || "-"}
                   </p>
                 </div>
-                <div style={{ background: "linear-gradient(135deg, #dcfce7, #bbf7d0)", borderRadius: 14, padding: 16, boxShadow: "0 4px 15px rgba(34, 197, 94, 0.08)" }}>
-                  <h4 style={{ margin: "0 0 6px", color: "#15803d", fontSize: 14, fontWeight: 600 }}>Date</h4>
-                  <p style={{ margin: 0, fontSize: 16, fontWeight: 700, color: "#1f2937" }}>{formatDateSafe(selectedVente?.date)}</p>
+                <div style={{ background: "linear-gradient(135deg, #dcfce7, #bbf7d0)", borderRadius: 12, padding: 14, boxShadow: "0 4px 12px rgba(34, 197, 94, 0.08)" }}>
+                  <h4 style={{ margin: "0 0 4px", color: "#15803d", fontSize: 13, fontWeight: 600 }}>Date</h4>
+                  <p style={{ margin: 0, fontSize: 15, fontWeight: 700, color: "#1f2937" }}>{formatDateSafe(selectedVente?.date)}</p>
                 </div>
-                <div style={{ background: "linear-gradient(135deg, #fef3c7, #fde68a)", borderRadius: 14, padding: 16, boxShadow: "0 4px 15px rgba(245, 158, 11, 0.08)" }}>
-                  <h4 style={{ margin: "0 0 6px", color: "#b45309", fontSize: 14, fontWeight: 600 }}>Statut</h4>
-                  <p style={{ margin: 0, fontSize: 16, fontWeight: 700, color: "#1f2937" }}>{selectedVente?.statutPaiement || "-"}</p>
+                <div style={{ background: "linear-gradient(135deg, #fef3c7, #fde68a)", borderRadius: 12, padding: 14, boxShadow: "0 4px 12px rgba(245, 158, 11, 0.08)" }}>
+                  <h4 style={{ margin: "0 0 4px", color: "#b45309", fontSize: 13, fontWeight: 600 }}>Statut</h4>
+                  <p style={{ margin: 0, fontSize: 15, fontWeight: 700, color: "#1f2937" }}>{selectedVente?.statutPaiement || "-"}</p>
                 </div>
-                <div style={{ background: "linear-gradient(135deg, #f3e8ff, #e9d5ff)", borderRadius: 14, padding: 16, boxShadow: "0 4px 15px rgba(168, 85, 247, 0.08)" }}>
-                  <h4 style={{ margin: "0 0 6px", color: "#7e22ce", fontSize: 14, fontWeight: 600 }}>Mode</h4>
-                  <p style={{ margin: 0, fontSize: 16, fontWeight: 700, color: "#1f2937" }}>{selectedVente?.modePaiement || "Espèces"}</p>
+                <div style={{ background: "linear-gradient(135deg, #f3e8ff, #e9d5ff)", borderRadius: 12, padding: 14, boxShadow: "0 4px 12px rgba(168, 85, 247, 0.08)" }}>
+                  <h4 style={{ margin: "0 0 4px", color: "#7e22ce", fontSize: 13, fontWeight: 600 }}>Mode</h4>
+                  <p style={{ margin: 0, fontSize: 15, fontWeight: 700, color: "#1f2937" }}>{selectedVente?.modePaiement || "Espèces"}</p>
                 </div>
-                <div style={{ background: "linear-gradient(135deg, #d1fae5, #a7f3d0)", borderRadius: 14, padding: 16, boxShadow: "0 4px 15px rgba(16, 185, 129, 0.08)" }}>
-                  <h4 style={{ margin: "0 0 6px", color: "#065f46", fontSize: 14, fontWeight: 600 }}>Total</h4>
-                  <p style={{ margin: 0, fontSize: 16, fontWeight: 800, color: "#1f2937" }}>
+                <div style={{ background: "linear-gradient(135deg, #d1fae5, #a7f3d0)", borderRadius: 12, padding: 14, boxShadow: "0 4px 12px rgba(16, 185, 129, 0.08)" }}>
+                  <h4 style={{ margin: "0 0 4px", color: "#065f46", fontSize: 13, fontWeight: 600 }}>Total</h4>
+                  <p style={{ margin: 0, fontSize: 15, fontWeight: 800, color: "#1f2937" }}>
                     {safeToFixed(selectedVente?.montantTotal)} DH
                   </p>
                 </div>
               </div>
 
-              <h3 style={{ margin: "0 0 12px", fontSize: "clamp(16px, 2.2vw, 20px)", fontWeight: 600, color: "#374151" }}>
+              <h3 style={{ margin: "0 0 10px", fontSize: "clamp(15px, 2.2vw, 18px)", fontWeight: 600, color: "#374151" }}>
                 Articles ({selectedVente?.articles?.length || 0})
               </h3>
-              <div style={{ background: "#fff", borderRadius: 14, boxShadow: "0 8px 25px rgba(0, 0, 0, 0.05)", marginBottom: 20, overflowX: "auto" }}>
-                <table style={{ width: "100%", minWidth: 640, borderCollapse: "collapse" }}>
+              <div style={{ background: "#fff", borderRadius: 12, boxShadow: "0 8px 20px rgba(0, 0, 0, 0.05)", marginBottom: 16, overflowX: "auto" }}>
+                <table style={{ width: "100%", minWidth: 600, borderCollapse: "collapse" }}>
                   <thead>
                     <tr style={{ background: "linear-gradient(135deg, #6d28d9, #5b21b6)", color: "white" }}>
-                      <th style={{ padding: 12, textAlign: "left" }}>Produit / Traçabilité</th>
-                      <th style={{ padding: 12, textAlign: "center" }}>Qté</th>
-                      <th style={{ padding: 12, textAlign: "right" }}>Prix Unit.</th>
-                      <th style={{ padding: 12, textAlign: "right" }}>Remise</th>
-                      <th style={{ padding: 12, textAlign: "right" }}>Total</th>
-                      <th style={{ padding: 12, textAlign: "center" }}>Stock</th>
+                      <th style={{ padding: 11, textAlign: "left", fontSize: 12 }}>Produit / Traçabilité</th>
+                      <th style={{ padding: 11, textAlign: "center", fontSize: 12 }}>Qté</th>
+                      <th style={{ padding: 11, textAlign: "right", fontSize: 12 }}>Prix Unit.</th>
+                      <th style={{ padding: 11, textAlign: "right", fontSize: 12 }}>Remise</th>
+                      <th style={{ padding: 11, textAlign: "right", fontSize: 12 }}>Total</th>
+                      <th style={{ padding: 11, textAlign: "center", fontSize: 12 }}>Stock</th>
                     </tr>
                   </thead>
                   <tbody>
                     {(selectedVente?.articles || []).map((a, i) => (
                       <tr key={i} style={{ borderBottom: '1px solid #f1f5f9' }}>
-                        <td style={{ padding: 12, verticalAlign: "top" }}>
-                          <strong>{a?.produit || "-"}</strong>
+                        <td style={{ padding: 11, verticalAlign: "top" }}>
+                          <strong style={{ fontSize: 13 }}>{a?.produit || "-"}</strong>
                           {(a?.numeroArticle || a?.numeroLot || a?.fournisseur || a?.datePeremption) && (
-                            <div style={{ fontSize: 12, color: "#6b7280", marginTop: 4 }}>
+                            <div style={{ fontSize: 11, color: "#6b7280", marginTop: 3 }}>
                               {a?.numeroArticle ? `N° article: ${a.numeroArticle}` : ""}
                               {a?.numeroLot ? `${a?.numeroArticle ? " | " : ""}Lot: ${a.numeroLot}` : ""}
                               {a?.fournisseur ? `${(a?.numeroArticle || a?.numeroLot) ? " | " : ""}Fournisseur: ${a.fournisseur}` : ""}
@@ -2448,22 +2422,22 @@ export default function Ventes() {
                             </div>
                           )}
                         </td>
-                        <td style={{ padding: 12, textAlign: "center" }}>{safeNumber(a?.quantite)}</td>
-                        <td style={{ padding: 12, textAlign: "right" }}>{safeToFixed(a?.prixUnitaire)} DH</td>
-                        <td style={{ padding: 12, textAlign: "right" }}>{safeToFixed(a?.remise)} DH</td>
-                        <td style={{ padding: 12, textAlign: "right", fontWeight: 600 }}>
+                        <td style={{ padding: 11, textAlign: "center", fontSize: 13 }}>{safeNumber(a?.quantite)}</td>
+                        <td style={{ padding: 11, textAlign: "right", fontSize: 13 }}>{safeToFixed(a?.prixUnitaire)} DH</td>
+                        <td style={{ padding: 11, textAlign: "right", fontSize: 13 }}>{safeToFixed(a?.remise)} DH</td>
+                        <td style={{ padding: 11, textAlign: "right", fontWeight: 600, fontSize: 13 }}>
                           {safeToFixed(safeNumber(a?.prixUnitaire) * safeNumber(a?.quantite) - safeNumber(a?.remise))} DH
                         </td>
-                        <td style={{ padding: 12, textAlign: "center" }}>
+                        <td style={{ padding: 11, textAlign: "center" }}>
                           <span
                             style={{
                               background: (a?.stockSource === "stock2") 
                                 ? "linear-gradient(135deg, #10b981, #059669)"
                                 : "linear-gradient(135deg, #3b82f6, #2563eb)",
                               color: "white",
-                              padding: "4px 8px",
-                              borderRadius: 12,
-                              fontSize: 11,
+                              padding: "3px 7px",
+                              borderRadius: 10,
+                              fontSize: 10,
                               fontWeight: 600,
                             }}
                           >
@@ -2476,7 +2450,7 @@ export default function Ventes() {
                 </table>
               </div>
 
-              <div style={{ display: "flex", gap: 12, justifyContent: "flex-end", flexWrap: "wrap" }}>
+              <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", flexWrap: "wrap" }}>
                 <button
                   onClick={() => {
                     setShowDetails(false);
@@ -2486,16 +2460,16 @@ export default function Ventes() {
                     background: "linear-gradient(135deg, #f59e0b, #d97706)",
                     color: "white",
                     border: "none",
-                    padding: "10px 18px",
-                    borderRadius: 10,
-                    fontSize: 14,
+                    padding: "9px 16px",
+                    borderRadius: 9,
+                    fontSize: 13,
                     fontWeight: 600,
                     cursor: "pointer",
                     transition: "transform 0.2s ease, box-shadow 0.2s ease",
                   }}
                   onMouseEnter={(e) => {
                     e.currentTarget.style.transform = "translateY(-2px)";
-                    e.currentTarget.style.boxShadow = "0 8px 20px rgba(245, 158, 11, 0.3)";
+                    e.currentTarget.style.boxShadow = "0 8px 18px rgba(245, 158, 11, 0.3)";
                   }}
                   onMouseLeave={(e) => {
                     e.currentTarget.style.transform = "translateY(0)";
@@ -2513,16 +2487,16 @@ export default function Ventes() {
                     background: "linear-gradient(135deg, #6d28d9, #5b21b6)",
                     color: "white",
                     border: "none",
-                    padding: "10px 18px",
-                    borderRadius: 10,
-                    fontSize: 14,
+                    padding: "9px 16px",
+                    borderRadius: 9,
+                    fontSize: 13,
                     fontWeight: 600,
                     cursor: "pointer",
                     transition: "transform 0.2s ease, box-shadow 0.2s ease",
                   }}
                   onMouseEnter={(e) => {
                     e.currentTarget.style.transform = "translateY(-2px)";
-                    e.currentTarget.style.boxShadow = "0 8px 20px rgba(109, 40, 217, 0.3)";
+                    e.currentTarget.style.boxShadow = "0 8px 18px rgba(109, 40, 217, 0.3)";
                   }}
                   onMouseLeave={(e) => {
                     e.currentTarget.style.transform = "translateY(0)";
@@ -2644,15 +2618,15 @@ function CameraBarcodeInlineModal({ open, onClose, onDetected }) {
       <div
         style={{
           background: "#fff",
-          borderRadius: 16,
-          width: "min(100%, 720px)",
+          borderRadius: 14,
+          width: "min(100%, 680px)",
           padding: 16,
           boxShadow: "0 10px 30px rgba(0,0,0,.2)",
           position: "relative",
         }}
       >
-        <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8 }}>
-          <h3 style={{ margin: 0, fontWeight: 800, fontSize: 18 }}>Scanner un code-barres</h3>
+        <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 10 }}>
+          <h3 style={{ margin: 0, fontWeight: 800, fontSize: 17 }}>Scanner un code-barres</h3>
           <button
             onClick={onClose}
             style={{
@@ -2663,6 +2637,7 @@ function CameraBarcodeInlineModal({ open, onClose, onDetected }) {
               background: "#111827",
               color: "#fff",
               cursor: "pointer",
+              fontSize: 13,
             }}
           >
             Fermer
@@ -2691,9 +2666,9 @@ function CameraBarcodeInlineModal({ open, onClose, onDetected }) {
         </div>
 
         {error ? (
-          <p style={{ marginTop: 10, color: "#b91c1c", fontSize: 13 }}>{error}</p>
+          <p style={{ marginTop: 8, color: "#b91c1c", fontSize: 12 }}>{error}</p>
         ) : (
-          <p style={{ marginTop: 10, color: "#6b7280", fontSize: 13 }}>
+          <p style={{ marginTop: 8, color: "#6b7280", fontSize: 12 }}>
             Astuce : place le code bien à plat et évite les reflets.
           </p>
         )}
