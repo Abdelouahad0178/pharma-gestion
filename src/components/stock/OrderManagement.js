@@ -64,20 +64,20 @@ const normalizePhoneForWa = (num) => (num || "").replace(/\D/g, "");
 /* ======================================================
   Détection transfert (on exclut des ventes)
 ====================================================== */
-const isTransferOperation = (doc) => {
+const isTransferOperation = (docx) => {
   return !!(
-    doc?.isTransferred ||
-    doc?.isStockTransfer ||
-    doc?.transfert ||
-    doc?.type === "transfert" ||
-    doc?.type === "transfer" ||
-    doc?.operationType === "transfert" ||
-    doc?.operationType === "transfer" ||
-    (doc?.note && (
-      String(doc.note).toLowerCase().includes("transfert") ||
-      String(doc.note).toLowerCase().includes("transfer") ||
-      (String(doc.note).toLowerCase().includes("stock1") && String(doc.note).toLowerCase().includes("stock2"))
-    ))
+    docx?.isTransferred ||
+    docx?.isStockTransfer ||
+    docx?.transfert ||
+    docx?.type === "transfert" ||
+    docx?.type === "transfer" ||
+    docx?.operationType === "transfert" ||
+    docx?.operationType === "transfer" ||
+    (docx?.note &&
+      (String(docx.note).toLowerCase().includes("transfert") ||
+        String(docx.note).toLowerCase().includes("transfer") ||
+        (String(docx.note).toLowerCase().includes("stock1") &&
+          String(docx.note).toLowerCase().includes("stock2"))))
   );
 };
 
@@ -85,23 +85,13 @@ const isTransferOperation = (doc) => {
   Extraction robuste des ventes
 ====================================================== */
 function extractArticleName(a) {
-  return (
-    a?.nom ||
-    a?.produit ||
-    a?.designation ||
-    a?.medicament ||
-    a?.name ||
-    a?.libelle ||
-    a?.productName ||
-    ""
-  );
+  return a?.nom || a?.produit || a?.designation || a?.medicament || a?.name || a?.libelle || a?.productName || "";
 }
 function extractArticleLot(a) {
   return a?.numeroLot || a?.lot || a?.batch || a?.batchNumber || a?.nLot || "";
 }
 function extractArticleQty(a) {
-  const q =
-    a?.quantite ?? a?.qte ?? a?.qty ?? a?.quantity ?? a?.Quantite ?? a?.Qte ?? a?.Quantity ?? 0;
+  const q = a?.quantite ?? a?.qte ?? a?.qty ?? a?.quantity ?? a?.Quantite ?? a?.Qte ?? a?.Quantity ?? 0;
   return safeNumber(q, 0);
 }
 function looksLikeArticle(obj) {
@@ -146,17 +136,19 @@ export default function OrderManagement() {
   const [toOrder, setToOrder] = useState([]);
   const [groupCommercial, setGroupCommercial] = useState({});
   const [lineStatus, setLineStatus] = useState({});
+
+  // ✅ On ne persiste QUE les opérations ignorées (pas de bannissement par clé)
   const [dismissedOps, setDismissedOps] = useState(new Set());
 
   const [manualSuppliers, setManualSuppliers] = useState({});
-  const [manualLines, setManualLines] = useState([]); // État séparé pour les lignes manuelles
+  const [manualLines, setManualLines] = useState([]);
 
   const ORDER_STATUS_COLL = "order_status";
   const DISMISSED_COLL = "order_dismissed";
 
   const ventesListenerRef = useRef(null);
   const stockListenerRef = useRef(null);
-  const isProcessingRef = useRef(false); // Protection contre les boucles
+  const isProcessingRef = useRef(false);
 
   useEffect(() => {
     setWaiting(loading || !societeId || !user);
@@ -166,7 +158,6 @@ export default function OrderManagement() {
 
   const setupVentesListener = useCallback(() => {
     if (!societeId || ventesListenerRef.current) return;
-
     ventesListenerRef.current = onSnapshot(
       query(collection(db, "societe", societeId, "ventes"), orderBy("date", "desc")),
       (snapshot) => {
@@ -186,7 +177,6 @@ export default function OrderManagement() {
 
   const setupStockListener = useCallback(() => {
     if (!societeId || stockListenerRef.current) return;
-
     stockListenerRef.current = onSnapshot(
       query(collection(db, "societe", societeId, "stock_entries"), orderBy("nom")),
       (snapshot) => {
@@ -279,6 +269,9 @@ export default function OrderManagement() {
           frozenDate: st.frozenDate || null,
           frozenRemise: st.frozenRemise || 0,
           frozenUrgent: !!st.frozenUrgent,
+          frozenName: st.frozenName || null,
+          frozenLot: st.frozenLot || null,
+          frozenSupplier: st.frozenSupplier || null,
         };
       });
       setLineStatus(obj);
@@ -311,7 +304,6 @@ export default function OrderManagement() {
       fetchOrderStatus();
       fetchDismissedOps();
     }
-
     return () => {
       if (ventesListenerRef.current) {
         ventesListenerRef.current();
@@ -322,7 +314,15 @@ export default function OrderManagement() {
         stockListenerRef.current = null;
       }
     };
-  }, [waiting, setupVentesListener, setupStockListener, fetchFournisseurs, fetchAchatsIndex, fetchOrderStatus, fetchDismissedOps]);
+  }, [
+    waiting,
+    setupVentesListener,
+    setupStockListener,
+    fetchFournisseurs,
+    fetchAchatsIndex,
+    fetchOrderStatus,
+    fetchDismissedOps,
+  ]);
 
   /* ================== INDEX FOURNISSEURS ================== */
 
@@ -347,12 +347,12 @@ export default function OrderManagement() {
       const k1 = normalize(nomArt);
       if (lotSupplierIndex[k1]) return lotSupplierIndex[k1];
       if (achatsIndex[k1]) return achatsIndex[k1];
-      const partialMatchLot = Object.keys(lotSupplierIndex).find(key =>
-        key.includes(k1) || k1.includes(key.split('|')[0])
+      const partialMatchLot = Object.keys(lotSupplierIndex).find(
+        (key) => key.includes(k1) || k1.includes(key.split("|")[0])
       );
       if (partialMatchLot) return lotSupplierIndex[partialMatchLot];
-      const partialMatchAchat = Object.keys(achatsIndex).find(key =>
-        key.includes(k1) || k1.includes(key.split('|')[0])
+      const partialMatchAchat = Object.keys(achatsIndex).find(
+        (key) => key.includes(k1) || k1.includes(key.split("|")[0])
       );
       if (partialMatchAchat) return achatsIndex[partialMatchAchat];
       return "";
@@ -380,8 +380,7 @@ export default function OrderManagement() {
       const rows = extractVenteArticles(v);
       rows.forEach((a, idx) => {
         const opId = `${v.id}#${idx}`;
-        if (dismissedOps.has(opId)) return;
-
+        if (dismissedOps.has(opId)) return; // ignorée définitivement (par op)
         const nomA = (extractArticleName(a) || "").trim();
         if (!nomA) return;
         const lotA = (extractArticleLot(a) || "").trim();
@@ -416,7 +415,6 @@ export default function OrderManagement() {
     return out;
   }, [ventes, dismissedOps, findSupplierName]);
 
-  // Normalisation du numéro de lot
   const normalizeLotNumber = (lot) => {
     if (!lot) return "-";
     return lot
@@ -426,34 +424,27 @@ export default function OrderManagement() {
       .trim() || "-";
   };
 
-  // ★★★ NOUVEAU : FUSION CORRIGÉE SANS BOUCLE INFINIE ★★★
+  // ====== FUSION / RECONSTRUCTION ======
   useEffect(() => {
-    // Protection contre les exécutions multiples
     if (isProcessingRef.current) return;
     isProcessingRef.current = true;
 
     const fromSales = Object.values(ventesAggregate);
 
-    // Créer des index pour les lignes verrouillées basés sur lineStatus
     const lockedProductKeys = new Set();
     const allFrozenOps = new Set();
-    
-    // Utiliser lineStatus pour identifier les lignes verrouillées/validées
+
     Object.entries(lineStatus).forEach(([key, status]) => {
       if (status.sent || status.validated) {
-        // Extraire le produit de la clé
-        const [productPart] = key.split('|supplement');
-        const normalizedProduct = productPart.replace(/\|copy-.*/, '').replace(/\|manual-.*/, '');
+        const [productPart] = key.split("|supplement");
+        const normalizedProduct = productPart.replace(/\|copy-.*/, "").replace(/\|manual-.*/, "");
         lockedProductKeys.add(normalizedProduct);
-        
-        // Collecter les opérations gelées
         if (Array.isArray(status.frozenOps)) {
-          status.frozenOps.forEach(op => allFrozenOps.add(op));
+          status.frozenOps.forEach((op) => allFrozenOps.add(op));
         }
       }
     });
 
-    // Traiter les ventes et créer les lignes
     const allLines = [];
     const processedKeys = new Set();
     const supplementCounts = new Map();
@@ -461,7 +452,7 @@ export default function OrderManagement() {
     fromSales.forEach((x) => {
       const normalizedLot = normalizeLotNumber(x.numeroLot);
       const productKey = `${normalize(x.nom)}|${normalize(normalizedLot)}`;
-      
+
       const hasLockedLine = lockedProductKeys.has(productKey);
       const newOps = (x.sourceOps || []).filter((op) => !allFrozenOps.has(op) && !dismissedOps.has(op));
 
@@ -477,14 +468,13 @@ export default function OrderManagement() {
           newQty += extractArticleQty(art);
         });
 
-        // Si une ligne verrouillée existe pour ce produit
         if (hasLockedLine) {
           const supplementCount = supplementCounts.get(productKey) || 0;
           const versionNumber = supplementCount + 1;
           supplementCounts.set(productKey, versionNumber);
-          
+
           const supplementKey = `${x.key}|supplement-v${versionNumber}-${Date.now()}`;
-          
+
           allLines.push({
             key: supplementKey,
             nom: x.nom,
@@ -500,7 +490,6 @@ export default function OrderManagement() {
           });
           processedKeys.add(supplementKey);
         } else {
-          // Pas de ligne verrouillée, création/mise à jour normale
           const fournisseurFinal = manualSuppliers[x.key] || x.fournisseur || "";
 
           allLines.push({
@@ -520,45 +509,45 @@ export default function OrderManagement() {
       }
     });
 
-    // Reconstruire les lignes verrouillées/validées depuis lineStatus
+    // reconstruction des lignes envoyées/verrouillées
     Object.entries(lineStatus).forEach(([key, status]) => {
       if ((status.sent || status.validated) && !processedKeys.has(key)) {
-        // Reconstruire la ligne depuis les données gelées
-        const [baseKey] = key.split('|supplement');
+        const [baseKey] = key.split("|supplement");
         const baseData = ventesAggregate[baseKey];
-        
-        if (baseData || status.frozenQuantity) {
-          allLines.push({
-            key,
-            nom: baseData?.nom || "Produit",
-            numeroLot: baseData?.numeroLot || "-",
-            fournisseur: baseData?.fournisseur || "",
-            quantite: status.frozenQuantity || 0,
-            date: status.frozenDate || todayISO(),
-            remise: status.frozenRemise || 0,
-            urgent: status.frozenUrgent || false,
-            sourceOps: status.frozenOps || [],
-            isNewAfterSent: false,
-          });
-        }
+
+        const nom = status.frozenName || baseData?.nom || "Produit";
+        const lot = status.frozenLot || baseData?.numeroLot || "-";
+        const fournisseur = status.frozenSupplier || baseData?.fournisseur || "";
+
+        allLines.push({
+          key,
+          nom,
+          numeroLot: lot,
+          fournisseur,
+          quantite: status.frozenQuantity || 0,
+          date: status.frozenDate || todayISO(),
+          remise: status.frozenRemise || 0,
+          urgent: status.frozenUrgent || false,
+          sourceOps: status.frozenOps || [],
+          isNewAfterSent: false,
+        });
       }
     });
 
-    // Mise à jour atomique de l'état
-    setToOrder(prev => {
-      const manualLines = prev.filter(
-        l => (!l.sourceOps || l.sourceOps.length === 0) && 
-             !processedKeys.has(l.key) &&
-             !lineStatus[l.key]?.sent &&
-             !lineStatus[l.key]?.validated
+    setToOrder((prev) => {
+      const manualLinesStill = prev.filter(
+        (l) =>
+          (!l.sourceOps || l.sourceOps.length === 0) &&
+          !processedKeys.has(l.key) &&
+          !lineStatus[l.key]?.sent &&
+          !lineStatus[l.key]?.validated
       );
-      const newState = [...allLines, ...manualLines];
-      
-      // Débloquer le flag après la mise à jour
+      const newState = [...allLines, ...manualLinesStill];
+
       setTimeout(() => {
         isProcessingRef.current = false;
       }, 100);
-      
+
       return newState;
     });
   }, [ventesAggregate, lineStatus, manualSuppliers, ventes, dismissedOps]);
@@ -592,7 +581,7 @@ export default function OrderManagement() {
     setGroupCommercial((prev) => {
       const next = { ...prev };
       let hasChanges = false;
-      
+
       Object.keys(groups).forEach((supName) => {
         const rec = findSupplierRecord(supName);
         if (!rec) return;
@@ -602,7 +591,7 @@ export default function OrderManagement() {
           hasChanges = true;
         }
       });
-      
+
       return hasChanges ? next : prev;
     });
   }, [groups, findSupplierRecord]);
@@ -627,6 +616,9 @@ export default function OrderManagement() {
           ...(patch.frozenDate !== undefined ? { frozenDate: patch.frozenDate } : {}),
           ...(patch.frozenRemise !== undefined ? { frozenRemise: patch.frozenRemise } : {}),
           ...(patch.frozenUrgent !== undefined ? { frozenUrgent: patch.frozenUrgent } : {}),
+          ...(patch.frozenName !== undefined ? { frozenName: patch.frozenName } : {}),
+          ...(patch.frozenLot !== undefined ? { frozenLot: patch.frozenLot } : {}),
+          ...(patch.frozenSupplier !== undefined ? { frozenSupplier: patch.frozenSupplier } : {}),
           updatedAt: Timestamp.now(),
         };
         setDoc(ref, payload, { merge: true }).catch((e) => console.error(e));
@@ -696,12 +688,17 @@ export default function OrderManagement() {
     async (line) => {
       const key = line.key;
       const ops = Array.isArray(line.sourceOps) ? line.sourceOps : [];
+
+      // 👉 Persister l’ignorance des opérations qui ont généré cette ligne
       if (ops.length) {
         await persistDismissOps(ops);
       }
+
+      // Nettoyer le statut gelé et retirer de l’UI
       clearLineStatus(key, true);
       setToOrder((prev) => prev.filter((l) => l.key !== key));
-      setSuccess(ops.length ? "Ligne supprimée (opérations de ventes ignorées)" : "Ligne supprimée");
+
+      setSuccess("Ligne supprimée (les opérations correspondantes sont ignorées définitivement).");
       setTimeout(() => setSuccess(""), 1200);
     },
     [persistDismissOps, clearLineStatus]
@@ -838,15 +835,15 @@ export default function OrderManagement() {
   const sendWhatsAppForSupplier = useCallback(
     async (supplierName) => {
       const todayString = new Date().toISOString().split("T")[0];
-      
+
       const lines = (groups[supplierName] || []).filter((l) => {
         const st = lineStatus[l.key] || {};
         const isToday = l.date === todayString;
         const notSent = !st.sent;
-        const isNewSupplement = l.isNewAfterSent === true; // Nouvelles lignes supplémentaires
+        const isNewSupplement = l.isNewAfterSent === true;
         return (isToday && notSent) || (isNewSupplement && notSent);
       });
-      
+
       if (!lines.length) {
         setError("Aucune ligne à envoyer pour aujourd'hui");
         return;
@@ -907,6 +904,9 @@ export default function OrderManagement() {
               frozenDate: l.date,
               frozenRemise: l.remise,
               frozenUrgent: l.urgent,
+              frozenName: l.nom,
+              frozenLot: l.numeroLot,
+              frozenSupplier: l.fournisseur || supplierName,
             },
             true
           );
@@ -937,11 +937,20 @@ export default function OrderManagement() {
     [setLineStatusPartial]
   );
 
-  // Fonction pour ajouter une ligne manuelle
+  // ========= Formulaire Ligne manuelle =========
   const addManualLine = useCallback(() => {
     const nom = window.prompt("Nom du médicament :");
     if (!nom) return;
     const lot = window.prompt("Numéro de lot (optionnel) :") || "-";
+
+    const existsList = fournisseurs.length
+      ? `\n\nFournisseurs existants :\n- ${fournisseurs.map((f) => f.nom).join("\n- ")}\n\n`
+      : "\n";
+    const fournisseurInput =
+      window.prompt("Nom du fournisseur : (laisser vide pour 'Fournisseur inconnu')" + existsList) || "";
+
+    const fournisseurFinal = (fournisseurInput || "").trim() || "Fournisseur inconnu";
+
     const qtyStr = window.prompt("Quantité :");
     const qty = safeNumber(qtyStr, 1);
     if (qty <= 0) {
@@ -953,7 +962,7 @@ export default function OrderManagement() {
       key: `manual-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       nom: nom.trim(),
       numeroLot: lot,
-      fournisseur: "",
+      fournisseur: fournisseurFinal,
       quantite: qty,
       date: todayISO(),
       remise: 0,
@@ -965,7 +974,7 @@ export default function OrderManagement() {
     setToOrder((prev) => [...prev, newLine]);
     setSuccess("Ligne manuelle ajoutée");
     setTimeout(() => setSuccess(""), 1200);
-  }, []);
+  }, [fournisseurs]);
 
   /* ================== UI ================== */
 
@@ -1025,7 +1034,8 @@ export default function OrderManagement() {
               Gestion des Commandes (Fournisseurs)
             </h1>
             <p style={{ margin: "6px 0 0", color: "#6b7280" }}>
-              Lignes envoyées = VERROUILLÉES. Nouvelles ventes = ligne séparée avec indicateur vert.
+              Supprimer = on ignore définitivement les ventes qui ont généré cette ligne. 
+              De nouvelles ventes réapparaîtront normalement.
             </p>
           </div>
         </div>
@@ -1043,10 +1053,7 @@ export default function OrderManagement() {
           }}
         >
           {error}
-          <button
-            onClick={() => setError("")}
-            style={{ marginLeft: 8, border: "none", background: "transparent", cursor: "pointer" }}
-          >
+          <button onClick={() => setError("")} style={{ marginLeft: 8, border: "none", background: "transparent", cursor: "pointer" }}>
             ×
           </button>
         </div>
@@ -1063,10 +1070,7 @@ export default function OrderManagement() {
           }}
         >
           {success}
-          <button
-            onClick={() => setSuccess("")}
-            style={{ marginLeft: 8, border: "none", background: "transparent", cursor: "pointer" }}
-          >
+          <button onClick={() => setSuccess("")} style={{ marginLeft: 8, border: "none", background: "transparent", cursor: "pointer" }}>
             ×
           </button>
         </div>
@@ -1113,13 +1117,9 @@ export default function OrderManagement() {
 
           <button
             onClick={async () => {
-              const keysToClean = Object.keys(lineStatus).filter(
-                (k) => lineStatus[k]?.validated
-              );
+              const keysToClean = Object.keys(lineStatus).filter((k) => lineStatus[k]?.validated);
               await Promise.all(
-                keysToClean.map((k) =>
-                  deleteDoc(doc(db, "societe", societeId, ORDER_STATUS_COLL, k)).catch(() => {})
-                )
+                keysToClean.map((k) => deleteDoc(doc(db, "societe", societeId, ORDER_STATUS_COLL, k)).catch(() => {}))
               );
               setLineStatus((prev) => {
                 const next = { ...prev };
@@ -1164,13 +1164,12 @@ export default function OrderManagement() {
             const telSel = supplierId ? groupCommercial[supplierId] || "" : "";
 
             const todayString = new Date().toISOString().split("T")[0];
-            
+
             const filteredLines = lines.filter((l) => {
               const st = lineStatus[l.key] || {};
               const isToday = l.date === todayString;
               const isSentButNotValidated = st.sent && !st.validated;
               const isNewAfterSent = l.isNewAfterSent === true;
-              
               return isToday || isSentButNotValidated || isNewAfterSent;
             });
 
@@ -1198,12 +1197,25 @@ export default function OrderManagement() {
                     {supName === "Fournisseur inconnu" ? "Fournisseur inconnu (vérifiez Achats/Stock)" : supName}
                   </strong>
 
-                  <div style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                  <div
+                    style={{
+                      marginLeft: "auto",
+                      display: "flex",
+                      gap: 8,
+                      alignItems: "center",
+                      flexWrap: "wrap",
+                    }}
+                  >
                     <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
                       <select
                         value={telSel}
                         onChange={(e) => handleCommercialSelectChange(supName, e.target.value)}
-                        style={{ padding: "8px 10px", borderRadius: 10, border: "2px solid #e5e7eb", minWidth: 240 }}
+                        style={{
+                          padding: "8px 10px",
+                          borderRadius: 10,
+                          border: "2px solid #e5e7eb",
+                          minWidth: 240,
+                        }}
                         title="Sélection du commercial WhatsApp"
                       >
                         <option value="">— Commercial (WhatsApp) —</option>
@@ -1318,54 +1330,53 @@ export default function OrderManagement() {
                         const isLocked = st.sent && !st.validated;
                         const isNewAfterSent = l.isNewAfterSent || false;
 
-                        const displayQuantite = isLocked ? (st.frozenQuantity || l.quantite) : l.quantite;
-                        const displayDate = isLocked ? (st.frozenDate || l.date) : l.date;
-                        const displayRemise = isLocked ? (st.frozenRemise || l.remise) : l.remise;
-                        const displayUrgent = isLocked ? (st.frozenUrgent || l.urgent) : l.urgent;
+                        const displayNom = isLocked ? st.frozenName || l.nom : l.nom;
+                        const displayLot = isLocked ? st.frozenLot || l.numeroLot : l.numeroLot;
+                        const displaySupplier = isLocked ? st.frozenSupplier || l.fournisseur : l.fournisseur;
+
+                        const displayQuantite = isLocked ? st.frozenQuantity || l.quantite : l.quantite;
+                        const displayDate = isLocked ? st.frozenDate || l.date : l.date;
+                        const displayRemise = isLocked ? st.frozenRemise || l.remise : l.remise;
+                        const displayUrgent = isLocked ? st.frozenUrgent || l.urgent : l.urgent;
 
                         return (
                           <tr
                             key={l.key}
                             style={{
-                              background: isLocked 
+                              background: isLocked
                                 ? "rgba(254,243,199,.4)"
-                                : isNewAfterSent 
+                                : isNewAfterSent
                                 ? "rgba(220,252,231,.4)"
-                                : idx % 2 
-                                ? "rgba(249,250,251,.6)" 
+                                : idx % 2
+                                ? "rgba(249,250,251,.6)"
                                 : "white",
                               borderBottom: "1px solid #f3f4f6",
-                              borderLeft: isLocked 
-                                ? "4px solid #f59e0b" 
-                                : isNewAfterSent 
-                                ? "4px solid #22c55e" 
-                                : undefined,
+                              borderLeft: isLocked ? "4px solid #f59e0b" : isNewAfterSent ? "4px solid #22c55e" : undefined,
                             }}
                           >
                             <td style={{ padding: 10, fontWeight: 700 }}>
-                              {/* ★★★ AFFICHAGE DISTINCTIF POUR NOUVELLES LIGNES ★★★ */}
                               {isNewAfterSent ? (
                                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                                  <span style={{ fontSize: 20, color: "#22c55e", fontWeight: 900 }}>➕</span>
-                                  <span>{l.nom}</span>
+                                  <span style={{ fontSize: 20, fontWeight: 900 }}>➕</span>
+                                  <span>{displayNom}</span>
                                   {l.supplementVersion && (
-                                    <span style={{
-                                      padding: "2px 6px",
-                                      background: "#dcfce7",
-                                      border: "2px solid #22c55e",
-                                      borderRadius: 6,
-                                      fontSize: 10,
-                                      fontWeight: 800,
-                                      color: "#166534",
-                                    }}>
+                                    <span
+                                      style={{
+                                        padding: "2px 6px",
+                                        background: "#dcfce7",
+                                        border: "2px solid #22c55e",
+                                        borderRadius: 6,
+                                        fontSize: 10,
+                                        fontWeight: 800,
+                                      }}
+                                    >
                                       SUPPLÉMENT #{l.supplementVersion}
                                     </span>
                                   )}
                                 </div>
                               ) : (
-                                l.nom
+                                displayNom
                               )}
-                              
                               {isLocked && (
                                 <span
                                   style={{
@@ -1376,34 +1387,19 @@ export default function OrderManagement() {
                                     border: "1px solid #f59e0b",
                                     fontSize: 11,
                                     fontWeight: 600,
-                                    color: "#92400e",
                                   }}
                                   title="Ligne verrouillée - envoyée mais non validée"
                                 >
                                   VERROUILLÉE
                                 </span>
                               )}
-                              
-                              {isNewAfterSent && (
-                                <span
-                                  style={{
-                                    marginLeft: 8,
-                                    padding: "4px 10px",
-                                    borderRadius: 999,
-                                    background: "linear-gradient(135deg,#22c55e,#16a34a)",
-                                    border: "2px solid #15803d",
-                                    fontSize: 12,
-                                    fontWeight: 800,
-                                    color: "#fff",
-                                    boxShadow: "0 2px 8px rgba(34,197,94,0.3)",
-                                  }}
-                                  title="Nouvelle vente après envoi d'une commande précédente"
-                                >
-                                  NOUVEAU +{l.quantite}
-                                </span>
-                              )}
+                              <div style={{ fontSize: 11, color: "#6b7280", marginTop: 4 }}>
+                                Fournisseur : <strong>{displaySupplier || "—"}</strong>
+                              </div>
                             </td>
-                            <td style={{ padding: 10 }}>{l.numeroLot}</td>
+
+                            <td style={{ padding: 10 }}>{displayLot}</td>
+
                             <td style={{ padding: 10, textAlign: "center" }}>
                               <input
                                 type="date"
@@ -1420,6 +1416,7 @@ export default function OrderManagement() {
                                 }}
                               />
                             </td>
+
                             <td style={{ padding: 10, textAlign: "center" }}>
                               <input
                                 type="number"
@@ -1441,6 +1438,7 @@ export default function OrderManagement() {
                                 }}
                               />
                             </td>
+
                             <td style={{ padding: 10, textAlign: "center" }}>
                               <input
                                 type="number"
@@ -1463,6 +1461,7 @@ export default function OrderManagement() {
                                 }}
                               />
                             </td>
+
                             <td style={{ padding: 10, textAlign: "center" }}>
                               <label
                                 style={{
@@ -1470,7 +1469,6 @@ export default function OrderManagement() {
                                   alignItems: "center",
                                   gap: 8,
                                   fontWeight: 700,
-                                  color: displayUrgent ? "#DC2626" : "#374151",
                                   cursor: isLocked ? "not-allowed" : "pointer",
                                   opacity: isLocked ? 0.7 : 1,
                                 }}
@@ -1570,18 +1568,14 @@ export default function OrderManagement() {
                                       padding: "6px 10px",
                                       cursor: "pointer",
                                     }}
-                                    title="Supprimer la ligne"
+                                    title="Supprimer (ignore définitivement les ventes concernées)"
                                   >
                                     Supprimer
                                   </button>
                                 </>
                               )}
 
-                              {isLocked && (
-                                <span style={{ color: "#92400e", fontSize: 12, fontWeight: 600 }}>
-                                  Ligne verrouillée
-                                </span>
-                              )}
+                              {isLocked && <span style={{ fontSize: 12, fontWeight: 600 }}>Ligne verrouillée</span>}
                             </td>
                           </tr>
                         );

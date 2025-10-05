@@ -73,7 +73,7 @@ const useInjectStyles = () => {
       .hdr{ background:linear-gradient(135deg,var(--p),var(--p2)); color:#fff; border-radius:16px; padding:16px; margin-bottom:16px; box-shadow:0 12px 30px rgba(99,102,241,.25); }
       .card{ background:var(--card); border:1px solid var(--border); border-radius:14px; padding:16px; box-shadow:0 6px 20px rgba(99,102,241,.06); }
       .controls{ display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
-      .btn{ padding:8px 12px; border-radius:10px; border:1px solid var(--border);  cursor:pointer; font-weight:700; }
+      .btn{ padding:8px 12px; border-radius:10px; border:1px solid var(--border); cursor:pointer; font-weight:700; }
       .btn.on{ background:#10b981; color:#fff; border-color:#10b981; }
       .btn.primary{ background:linear-gradient(135deg,var(--p),var(--p2)); color:#fff; border:0; }
       .btn.warn{ background:#f59e0b; color:#fff; border:0; }
@@ -94,6 +94,8 @@ const useInjectStyles = () => {
       .subcard{ background:#f8fafc; border:1px solid var(--border); border-radius:12px; padding:12px; }
       .grid-add{ display:grid; grid-template-columns: 130px 1fr 140px 150px 1fr 130px 1fr auto; gap:8px; }
       @media (max-width:1100px){ .grid-add{ grid-template-columns: 1fr 1fr; } }
+      .tbl tfoot td{ padding:12px 10px; font-weight:900; border-top:2px solid var(--border); background:#f8fafc; }
+      @media print { .no-print{ display:none !important; } }
     `;
     document.head.appendChild(style);
   }, []);
@@ -191,12 +193,18 @@ export default function Paiements() {
         (s, p) => s + (Number(p.montant) || 0),
         0
       );
+
+      // >>> FIX ANTI-SOLDE NÉGATIF (transferts, etc.)
+      // On ne laisse jamais un solde < 0 s'afficher.
+      const rawSolde = total - paid;
+      const solde = rawSolde > 0.01 ? rawSolde : 0;
+
       idx[d.id] = {
         id: d.id,
         name,
         total,
         paid,
-        solde: total - paid,
+        solde,
         dateStr:
           (d.date && formatDate(d.date)) ||
           (d.timestamp && formatDate(d.timestamp)) ||
@@ -322,6 +330,88 @@ export default function Paiements() {
     filterMode,
     filterStatus,
   ]);
+
+  /* ------------ Totaux des documents visibles ------------ */
+  const docsTotals = useMemo(() => {
+    let sumTotal = 0;
+    let sumPaid = 0;
+    let sumSolde = 0;
+    for (const d of filteredDocs) {
+      const meta = docIndex[d.id];
+      if (!meta) continue;
+      sumTotal += Number(meta.total) || 0;
+      sumPaid += Number(meta.paid) || 0;
+      sumSolde += Number(meta.solde) || 0; // solde déjà clampé à 0
+    }
+    return {
+      count: filteredDocs.length,
+      total: sumTotal,
+      paid: sumPaid,
+      solde: sumSolde,
+    };
+  }, [filteredDocs, docIndex]);
+
+  /* ------------ Ensemble des docIds filtrés (pour recaps) ------------ */
+  const filteredDocIds = useMemo(
+    () => new Set(filteredDocs.map((d) => d.id)),
+    [filteredDocs]
+  );
+
+  /* ------------ Totaux des paiements restreints aux DOCS FILTRÉS ------------ */
+  const paymentsTotals = useMemo(() => {
+    const from = dateFrom ? new Date(`${dateFrom}T00:00:00`) : null;
+    const to = dateTo ? new Date(`${dateTo}T23:59:59`) : null;
+
+    let especes = 0;
+    let cheque = 0;
+    let traite = 0;
+    let count = 0;
+
+    for (const p of paiements) {
+      // 1) le paiement doit appartenir à un document filtré
+      if (!filteredDocIds.has(p.docId)) continue;
+
+      // 2) respecter la période et le mode
+      const pd = toDateSafe(p.date) || new Date(0);
+      if (from && pd < from) continue;
+      if (to && pd > to) continue;
+      if (!isModeWanted(p.mode, filterMode)) continue;
+
+      const amt = Number(p.montant) || 0;
+      const m = norm(p.mode);
+      if (m === "espèces" || m === "especes") especes += amt;
+      else if (m === "cheque" || m === "chèque") cheque += amt;
+      else if (m === "traite") traite += amt;
+
+      count++;
+    }
+
+    return {
+      especes,
+      cheque,
+      traite,
+      total: especes + cheque + traite,
+      count,
+    };
+  }, [paiements, filterMode, dateFrom, dateTo, filteredDocIds]);
+
+  /* ------------ Paiements filtrés par doc (pour impression) ------------ */
+  const filteredPaymentsForDoc = useCallback(
+    (docId) => {
+      if (!filteredDocIds.has(docId)) return []; // sécurité
+      const from = dateFrom ? new Date(`${dateFrom}T00:00:00`) : null;
+      const to = dateTo ? new Date(`${dateTo}T23:59:59`) : null;
+      const pays = paiementsByDoc[docId] || [];
+      return pays.filter((p) => {
+        if (!isModeWanted(p.mode, filterMode)) return false;
+        const pd = toDateSafe(p.date) || new Date(0);
+        if (from && pd < from) return false;
+        if (to && pd > to) return false;
+        return true;
+      });
+    },
+    [paiementsByDoc, filterMode, dateFrom, dateTo, filteredDocIds]
+  );
 
   /* ------------ MAJ statut doc ------------ */
   const updateDocStatus = useCallback(
@@ -560,6 +650,245 @@ export default function Paiements() {
     setExpandedDocId((prev) => (prev === docId ? null : docId));
   }, []);
 
+  /* ------------ Impression : builder + ouverture via Blob/iframe ------------ */
+  const buildFilterSummary = () => {
+    const parts = [];
+    parts.push(`Type: ${relatedTo === "ventes" ? "Ventes" : "Achats"}`);
+    if (filterName) parts.push(`Recherche: "${filterName}"`);
+    if (filterStatus !== "all")
+      parts.push(`Statut: ${filterStatus === "paid" ? "Payés" : "Avec solde"}`);
+    if (filterMode !== "all") parts.push(`Mode: ${filterMode}`);
+    if (dateFrom || dateTo)
+      parts.push(`Période paiements: ${dateFrom || "—"} → ${dateTo || "—"}`);
+    return parts.join(" • ");
+  };
+
+  const handlePrint = useCallback(() => {
+    const now = new Date();
+    const title =
+      "Etat " + (relatedTo === "ventes" ? "Ventes" : "Achats") + " — Filtré";
+    const filterSummary = buildFilterSummary();
+
+    // Section tableau docs
+    const rowsDocs = filteredDocs
+      .map((d) => {
+        const meta = docIndex[d.id];
+        if (!meta) return "";
+        const statut = meta.solde > 0.01 ? "Partiel/Impayé" : "Payé";
+        return `
+          <tr>
+            <td class="left">${escapeHtml(meta.name)}</td>
+            <td>${escapeHtml(meta.numberStr)}</td>
+            <td>${escapeHtml(meta.dateStr)}</td>
+            <td class="money">${fmtDH(meta.total)}</td>
+            <td>${fmtDH(meta.paid)}</td>
+            <td class="${meta.solde > 0.01 ? "neg" : "pos"}">${fmtDH(meta.solde)}</td>
+            <td>${statut}</td>
+          </tr>
+        `;
+      })
+      .join("");
+
+    // Section détail paiements par doc (filtrés)
+    const details = filteredDocs
+      .map((d) => {
+        const meta = docIndex[d.id];
+        if (!meta) return "";
+        const pays = filteredPaymentsForDoc(d.id);
+        const inner =
+          pays.length === 0
+            ? `<div class="muted">Aucun paiement correspondant aux filtres.</div>`
+            : `
+              <table class="inner">
+                <thead>
+                  <tr><th class="left">Date</th><th>Mode</th><th>Montant</th><th>Instruments</th></tr>
+                </thead>
+                <tbody>
+                  ${pays
+                    .map((p) => {
+                      const isCheque =
+                        norm(p.mode) === "cheque" || norm(p.mode) === "chèque";
+                      const isTraite = norm(p.mode) === "traite";
+                      const canLabel = isCheque || isTraite;
+                      const lab = canLabel
+                        ? labelInstruments(Array.isArray(p.instruments) ? p.instruments : [])
+                        : "—";
+                      return `
+                        <tr>
+                          <td class="left">${escapeHtml(formatDate(p.date))}</td>
+                          <td>${escapeHtml(p.mode || "—")}</td>
+                          <td class="money">${fmtDH(p.montant)}</td>
+                          <td>${escapeHtml(lab)}</td>
+                        </tr>
+                      `;
+                    })
+                    .join("")}
+                </tbody>
+              </table>
+            `;
+        return `
+          <section class="doc-block">
+            <h4>${escapeHtml(meta.name)} • ${escapeHtml(meta.numberStr)}</h4>
+            ${inner}
+          </section>
+        `;
+      })
+      .join("");
+
+    // Récap paiements (docs filtrés seulement)
+    const recap = `
+      <div class="recap">
+        <div><span class="muted">Espèces</span><b>${fmtDH(paymentsTotals.especes)}</b></div>
+        <div><span class="muted">Chèque</span><b>${fmtDH(paymentsTotals.cheque)}</b></div>
+        <div><span class="muted">Traite</span><b>${fmtDH(paymentsTotals.traite)}</b></div>
+        <div><span class="muted">Grand total</span><b>${fmtDH(paymentsTotals.total)}</b></div>
+        <div><span class="muted"># paiements</span><b>${paymentsTotals.count}</b></div>
+      </div>
+    `;
+
+    const html = `
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8" />
+<title>${escapeHtml(title)}</title>
+<style>
+  :root{ --ink:#0f172a; --muted:#6b7280; --border:#e5e7eb; --bg:#ffffff; --brand:#4f46e5; }
+  *{ box-sizing:border-box; }
+  body{ font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,'Helvetica Neue',Arial; color:#0f172a; background:#fff; margin:24px; }
+  h1{ margin:0 0 4px 0; font-size:22px; }
+  .meta{ color:var(--muted); margin-bottom:16px; font-size:12px; }
+  .filters{ background:#f8fafc; border:1px solid var(--border); padding:8px 12px; border-radius:8px; margin: 8px 0 16px 0; }
+  table{ width:100%; border-collapse:collapse; }
+  table.main thead th{ font-size:12px; text-transform:uppercase; letter-spacing:.3px; text-align:center; border-bottom:2px solid var(--border); padding:8px; }
+  table.main tbody td{ padding:8px; border-bottom:1px solid var(--border); text-align:center; }
+  table.main tfoot td{ padding:10px 8px; font-weight:900; border-top:2px solid var(--border); background:#f8fafc; }
+  .left{text-align:left}
+  .money{ font-weight:800; }
+  .neg{ color:#b91c1c; font-weight:800; }
+  .pos{ color:#065f46; font-weight:800; }
+  .section-title{ margin:24px 0 8px 0; font-size:16px; border-left:4px solid var(--brand); padding-left:8px; }
+  .doc-block{ page-break-inside: avoid; border:1px solid var(--border); border-radius:8px; padding:10px; margin:8px 0; }
+  .doc-block h4{ margin:0 0 8px 0; }
+  table.inner thead th{ text-align:left; border-bottom:1px solid var(--border); padding:6px; font-size:12px; }
+  table.inner tbody td{ padding:6px; border-bottom:1px dashed #f1f5f9; }
+  .muted{ color:var(--muted); }
+  .recap{ display:grid; grid-template-columns: repeat(5, minmax(120px,1fr)); gap:8px; margin-top:8px; }
+  .recap > div{ border:1px solid var(--border); border-radius:8px; padding:8px; display:flex; align-items:center; justify-content:space-between; }
+  @media print { body{ margin:0.6cm; } .doc-block{ page-break-inside: avoid; } .recap{ grid-template-columns: repeat(5, 1fr); } }
+</style>
+</head>
+<body>
+  <header>
+    <h1>${escapeHtml(title)}</h1>
+    <div class="meta">Imprimé le ${now.toLocaleString("fr-FR")}</div>
+    <div class="filters"><b>Filtres:</b> ${escapeHtml(filterSummary || "Aucun")}</div>
+  </header>
+
+  <section>
+    <div class="section-title">Documents</div>
+    <table class="main">
+      <thead>
+        <tr>
+          <th class="left">${relatedTo === "ventes" ? "Client" : "Fournisseur"}</th>
+          <th>N°</th>
+          <th>Date</th>
+          <th>Total</th>
+          <th>Payé</th>
+          <th>Solde</th>
+          <th>Statut</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${rowsDocs || `<tr><td colspan="7" class="muted" style="text-align:center;padding:12px">Aucun document</td></tr>`}
+      </tbody>
+      <tfoot>
+        <tr>
+          <td class="left" colspan="2">Totaux (${docsTotals.count} doc.)</td>
+          <td>—</td>
+          <td class="money">${fmtDH(docsTotals.total)}</td>
+          <td>${fmtDH(docsTotals.paid)}</td>
+          <td class="${docsTotals.solde > 0.01 ? "neg" : "pos"}">${fmtDH(docsTotals.solde)}</td>
+          <td>—</td>
+        </tr>
+      </tfoot>
+    </table>
+  </section>
+
+  <section>
+    <div class="section-title">Détail des paiements (filtrés)</div>
+    ${details || `<div class="muted">Aucun paiement correspondant aux filtres.</div>`}
+  </section>
+
+  <section>
+    <div class="section-title">Récapitulatif des paiements (docs filtrés)</div>
+    ${recap}
+  </section>
+
+  <script>
+    window.addEventListener('load', () => { setTimeout(() => { window.print(); }, 50); });
+  </script>
+</body>
+</html>
+    `;
+
+    // OUVERTURE via URL Blob
+    try {
+      const blob = new Blob([html], { type: "text/html" });
+      const url = URL.createObjectURL(blob);
+
+      const w = window.open(url, "_blank", "noopener,noreferrer");
+      if (w && typeof w.addEventListener === "function") {
+        const revoke = () => URL.revokeObjectURL(url);
+        w.addEventListener("beforeunload", revoke, { once: true });
+        return;
+      }
+
+      const iframe = document.createElement("iframe");
+      iframe.style.position = "fixed";
+      iframe.style.right = "0";
+      iframe.style.bottom = "0";
+      iframe.style.width = "0";
+      iframe.style.height = "0";
+      iframe.style.border = "0";
+      iframe.setAttribute("sandbox", "allow-modals allow-same-origin");
+      iframe.src = url;
+      document.body.appendChild(iframe);
+      iframe.onload = () => {
+        try {
+          iframe.contentWindow?.focus();
+          iframe.contentWindow?.print();
+        } finally {
+          setTimeout(() => {
+            URL.revokeObjectURL(url);
+            document.body.removeChild(iframe);
+          }, 500);
+        }
+      };
+    } catch (err) {
+      console.error("Erreur impression:", err);
+      alert("Impossible d'ouvrir l'aperçu d'impression. Désactivez le bloqueur de pop-up ou essayez un autre navigateur.");
+    }
+  }, [
+    relatedTo,
+    filteredDocs,
+    docIndex,
+    paymentsTotals,
+    filteredPaymentsForDoc,
+    docsTotals,
+    buildFilterSummary
+  ]);
+
+// util secu HTML
+  function escapeHtml(str) {
+    return String(str || "")
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;")
+      .replaceAll("'", "&#039;");
+  }
+
   /* ------------ Guards ------------ */
   if (loading) return <div style={{ padding: 16 }}>Chargement…</div>;
   if (!user) return <div style={{ padding: 16, color: "#e11d48" }}>Non connecté.</div>;
@@ -660,9 +989,14 @@ export default function Paiements() {
             <option value="paid">Payés</option>
             <option value="due">Avec solde</option>
           </select>
+
+          {/* Bouton d'impression */}
+          <button className="btn primary" onClick={handlePrint} title="Imprimer l'état filtré">
+            Imprimer l’état filtré
+          </button>
         </div>
 
-        {/* Encaissement / Règlement (VENTES & ACHATS) */}
+        {/* Encaissement / Règlement */}
         <div className="subcard">
           <h3 style={{ margin: "0 0 10px 0" }}>
             {relatedTo === "ventes" ? "Régler une vente" : "Régler un achat"}
@@ -744,7 +1078,7 @@ export default function Paiements() {
             )}
           </div>
 
-          {/* Grille instruments pour création (cheque/traite) */}
+          {/* Grille instruments pour création */}
           {payMode !== "Espèces" && createInstr.length > 0 && (
             <div style={{ width: "100%", overflowX: "auto" }}>
               <div className="grid-add" style={{ minWidth: 900 }}>
@@ -980,11 +1314,53 @@ export default function Paiements() {
                 </tr>
               )}
             </tbody>
+
+            {/* Totaux documents */}
+            <tfoot>
+              <tr>
+                <td className="left" colSpan={2}>
+                  <span>Totaux ({docsTotals.count} doc.)</span>
+                </td>
+                <td>—</td>
+                <td className="money">{fmtDH(docsTotals.total)}</td>
+                <td>{fmtDH(docsTotals.paid)}</td>
+                <td style={{ fontWeight: 900 }}>{fmtDH(docsTotals.solde)}</td>
+                <td colSpan={2}>—</td>
+              </tr>
+            </tfoot>
           </table>
         </div>
       </div>
 
-      {/* ÉDITEUR D'INSTRUMENTS (édition paiements existants) */}
+      {/* Récap des paiements — aligné sur les DOCS FILTRÉS */}
+      <div className="card" style={{ marginTop: 16 }}>
+        <h3 style={{ marginTop: 0 }}>
+          Totaux des paiements — {relatedTo === "ventes" ? "Ventes" : "Achats"} (docs filtrés)
+        </h3>
+        <div className="controls" style={{ flexWrap: "wrap" }}>
+          <div className="subcard" style={{ minWidth: 240 }}>
+            <div className="soft">Espèces</div>
+            <div className="money" style={{ fontSize: 18 }}>{fmtDH(paymentsTotals.especes)}</div>
+          </div>
+          <div className="subcard" style={{ minWidth: 240 }}>
+            <div className="soft">Chèque</div>
+            <div className="money" style={{ fontSize: 18 }}>{fmtDH(paymentsTotals.cheque)}</div>
+          </div>
+          <div className="subcard" style={{ minWidth: 240 }}>
+            <div className="soft">Traite</div>
+            <div className="money" style={{ fontSize: 18 }}>{fmtDH(paymentsTotals.traite)}</div>
+          </div>
+          <div className="subcard" style={{ minWidth: 260 }}>
+            <div className="soft">Grand total (paiements filtrés & docs filtrés)</div>
+            <div className="money" style={{ fontSize: 20 }}>{fmtDH(paymentsTotals.total)}</div>
+            <div className="soft" style={{ marginTop: 4 }}>
+              {paymentsTotals.count} paiement{paymentsTotals.count > 1 ? "s" : ""} retenu(s)
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* ÉDITEUR D'INSTRUMENTS */}
       {editingInstrumentsFor && (
         <div
           className="card"
@@ -1003,7 +1379,7 @@ export default function Paiements() {
           </h3>
 
           <div className="controls" style={{ margin: "8px 0 12px 0" }}>
-            <button className="btn" onClick={addInstrument}>
+            <button className="btn" onClick={() => addInstrument()}>
               + Ajouter instrument
             </button>
             <span className="soft">

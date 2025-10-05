@@ -5,8 +5,8 @@ import { useUserRole } from "../../contexts/UserRoleContext";
 import {
   collection,
   addDoc,
+  getDoc,
   getDocs,
-  setDoc,
   updateDoc,
   deleteDoc,
   doc,
@@ -16,7 +16,11 @@ import {
   onSnapshot,
   Timestamp,
   runTransaction,
+  increment,
 } from "firebase/firestore";
+
+// 🔗 Sync ventes -> stock en temps réel
+import { attachRealtimeSalesSync } from "../../lib/realtimeSalesSync";
 
 /* ======================================================
   Utils & Helpers
@@ -64,14 +68,26 @@ const normalize = (s) =>
     .trim()
     .toLowerCase();
 
-const STOCK_KEYS = ["stock", "stockSource", "originStock", "stockId", "stockName", "stock_label", "depot", "magasin", "source"];
+const STOCK_KEYS = [
+  "stock",
+  "stockSource",
+  "originStock",
+  "stockId",
+  "stockName",
+  "stock_label",
+  "depot",
+  "magasin",
+  "source",
+];
 
 const normalizeStockValue = (val) => {
   if (val === undefined || val === null) return "unknown";
   if (typeof val === "number") return val === 1 ? "stock1" : val === 2 ? "stock2" : "unknown";
   const raw = String(val).toLowerCase().replace(/[\s_\-]/g, "");
-  if (["stock1","s1","magasin1","depot1","principal","primary","p","m1","1"].includes(raw)) return "stock1";
-  if (["stock2","s2","magasin2","depot2","secondaire","secondary","s","m2","2"].includes(raw)) return "stock2";
+  if (["stock1", "s1", "magasin1", "depot1", "principal", "primary", "p", "m1", "1"].includes(raw))
+    return "stock1";
+  if (["stock2", "s2", "magasin2", "depot2", "secondaire", "secondary", "s", "m2", "2"].includes(raw))
+    return "stock2";
   return "unknown";
 };
 
@@ -94,11 +110,11 @@ const isTransferOperation = (doc) => {
     doc?.type === "transfer" ||
     doc?.operationType === "transfert" ||
     doc?.operationType === "transfer" ||
-    (doc?.note && (
-      String(doc.note).toLowerCase().includes("transfert") ||
-      String(doc.note).toLowerCase().includes("transfer") ||
-      String(doc.note).toLowerCase().includes("stock1") && String(doc.note).toLowerCase().includes("stock2")
-    ))
+    (doc?.note &&
+      (String(doc.note).toLowerCase().includes("transfert") ||
+        String(doc.note).toLowerCase().includes("transfer") ||
+        (String(doc.note).toLowerCase().includes("stock1") &&
+          String(doc.note).toLowerCase().includes("stock2"))))
   );
 };
 
@@ -171,7 +187,6 @@ export default function StockManagement() {
 
   const [lots, setLots] = useState([]);
   const [achats, setAchats] = useState([]);
-  const [ventes, setVentes] = useState([]);
   const [fournisseurs, setFournisseurs] = useState([]);
 
   const [error, setError] = useState("");
@@ -200,20 +215,12 @@ export default function StockManagement() {
   const [transferQty, setTransferQty] = useState("");
   const [transferNote, setTransferNote] = useState("");
 
-  const [appliedSales, setAppliedSales] = useState(new Set());
-  const [dismissedOps, setDismissedOps] = useState(new Set());
-
   const [isSyncing, setIsSyncing] = useState(false);
   const [lastSyncTime, setLastSyncTime] = useState(null);
-  const [autoApply, setAutoApply] = useState(true);
 
-  const APPLIED_SALES_COLL = "sales_applied";
-  const DISMISSED_COLL = "order_dismissed";
-
-  const isApplyingRef = useRef(false);
   const achatsListenerRef = useRef(null);
   const stockListenerRef = useRef(null);
-  const ventesListenerRef = useRef(null);
+  const salesSyncDetachRef = useRef(null);
 
   const hasFilter = normalize(search).length > 0;
 
@@ -221,7 +228,33 @@ export default function StockManagement() {
     setWaiting(loading || !societeId || !user);
   }, [loading, societeId, user]);
 
-  /* ================== SYNCHRONISATION ================== */
+  /* ================== SYNCHRONISATION VENTES → STOCK (TEMPS RÉEL) ================== */
+
+  useEffect(() => {
+    if (!societeId || !user) {
+      if (salesSyncDetachRef.current) {
+        salesSyncDetachRef.current();
+        salesSyncDetachRef.current = null;
+      }
+      return;
+    }
+    if (salesSyncDetachRef.current) return;
+
+    salesSyncDetachRef.current = attachRealtimeSalesSync(db, {
+      societeId,
+      user,
+      enabled: true,
+    });
+
+    return () => {
+      if (salesSyncDetachRef.current) {
+        salesSyncDetachRef.current();
+        salesSyncDetachRef.current = null;
+      }
+    };
+  }, [societeId, user?.uid]);
+
+  /* ================== SYNCHRONISATION ACHATS → STOCK ================== */
 
   const setupAchatsListener = useCallback(() => {
     if (!societeId || achatsListenerRef.current) return;
@@ -231,11 +264,11 @@ export default function StockManagement() {
       (snapshot) => {
         const achatsData = [];
         const changes = snapshot.docChanges();
-        
-        snapshot.forEach((doc) => {
-          const data = doc.data();
-          if (Array.isArray(data.articles) && data.articles.some(a => (a?.commandee?.quantite || 0) > 0)) {
-            achatsData.push({ id: doc.id, ...data });
+
+        snapshot.forEach((docSnap) => {
+          const data = docSnap.data();
+          if (Array.isArray(data.articles) && data.articles.some((a) => (a?.commandee?.quantite || 0) > 0)) {
+            achatsData.push({ id: docSnap.id, ...data });
           }
         });
 
@@ -250,8 +283,8 @@ export default function StockManagement() {
 
         setLastSyncTime(new Date());
       },
-      (error) => {
-        console.error("Erreur listener achats:", error);
+      (err) => {
+        console.error("Erreur listener achats:", err);
         setError("Erreur de synchronisation avec les achats");
       }
     );
@@ -264,124 +297,155 @@ export default function StockManagement() {
       query(collection(db, "societe", societeId, "stock_entries"), orderBy("nom")),
       (snapshot) => {
         const stockData = [];
-        snapshot.forEach((doc) => {
-          const data = doc.data();
-          const q = Math.max(0, safeNumber(data.quantite));
-          const s1 = Math.min(q, Math.max(0, safeNumber(data.stock1, q)));
-          const s2 = Math.max(0, q - s1);
-          stockData.push({ id: doc.id, ...data, quantite: s1 + s2, stock1: s1, stock2: s2 });
+        snapshot.forEach((dc) => {
+          const data = dc.data();
+          const s1 = Math.max(0, safeNumber(data.stock1));
+          const s2 = Math.max(0, safeNumber(data.stock2));
+          const q = s1 + s2;
+          stockData.push({ id: dc.id, ...data, quantite: q, stock1: s1, stock2: s2 });
         });
         setLots(stockData);
+        setLastSyncTime(new Date());
       },
-      (error) => {
-        console.error("Erreur listener stock:", error);
+      (err) => {
+        console.error("Erreur listener stock:", err);
         setError("Erreur de synchronisation du stock");
       }
     );
   }, [societeId]);
 
-  const setupVentesListener = useCallback(() => {
-    if (!societeId || ventesListenerRef.current) return;
+  const computeNumeroLotFallback = (achatId, produit) => {
+    const base = `${String(produit || "").trim()}_${String(achatId || "").slice(-6)}`;
+    return `LOT_${base.replace(/[^A-Za-z0-9_]/g, "").toUpperCase()}`;
+  };
 
-    ventesListenerRef.current = onSnapshot(
-      query(collection(db, "societe", societeId, "ventes"), orderBy("date", "desc")),
-      (snapshot) => {
-        const ventesData = [];
-        
-        snapshot.forEach((doc) => {
-          const data = doc.data();
-          if (!isTransferOperation(data)) {
-            ventesData.push({ id: doc.id, ...data });
+  // ⚠️ Anti-double: n'applique que les DELTAS POSITIFS entre la quantité reçue actuelle et la base stockée
+  const syncStockFromAchat = useCallback(
+    async (achatData) => {
+      if (!societeId || !user || !achatData?.articles?.length) return;
+      if (achatData.statutReception !== "reçu") return;
+      if (isTransferOperation(achatData)) return;
+
+      try {
+        setIsSyncing(true);
+        const isStock1 = pickDocStock(achatData) === "stock1";
+
+        for (const article of achatData.articles) {
+          const recu = article?.recu || {};
+          const commandee = article?.commandee || {};
+          const nom = article.produit || "";
+          const qte = Number(recu.quantite || commandee.quantite || 0);
+          if (qte <= 0) continue;
+
+          const pA = Number(
+            recu.prixUnitaire || recu.prixAchat || commandee.prixUnitaire || commandee.prixAchat || 0
+          );
+          const pV = Number(recu.prixVente || commandee.prixVente || 0);
+          const numeroLot =
+            recu.numeroLot || commandee.numeroLot || computeNumeroLotFallback(achatData.id, nom);
+          const numeroArticle =
+            recu.numeroArticle || recu.codeBarre || commandee.numeroArticle || commandee.codeBarre || null;
+          const codeBarre =
+            recu.codeBarre || recu.numeroArticle || commandee.codeBarre || commandee.numeroArticle || null;
+          const dateP = recu.datePeremption
+            ? Timestamp.fromDate(new Date(recu.datePeremption))
+            : commandee.datePeremption
+            ? Timestamp.fromDate(new Date(commandee.datePeremption))
+            : null;
+
+          let existingSnap;
+          if (numeroLot) {
+            existingSnap = await getDocs(
+              query(
+                collection(db, "societe", societeId, "stock_entries"),
+                where("achatId", "==", achatData.id),
+                where("nom", "==", nom),
+                where("numeroLot", "==", numeroLot)
+              )
+            );
+          } else {
+            existingSnap = await getDocs(
+              query(
+                collection(db, "societe", societeId, "stock_entries"),
+                where("achatId", "==", achatData.id),
+                where("nom", "==", nom)
+              )
+            );
           }
-        });
-        
-        setVentes(ventesData);
-      },
-      (error) => {
-        console.error("Erreur listener ventes:", error);
-        setError("Erreur de synchronisation avec les ventes");
-      }
-    );
-  }, [societeId]);
 
-  const syncStockFromAchat = useCallback(async (achatData) => {
-    if (!societeId || !user || !achatData?.articles?.length) return;
-    if (achatData.statutReception !== "reçu") return;
-    if (isTransferOperation(achatData)) return;
-
-    try {
-      setIsSyncing(true);
-      const isStock1 = pickDocStock(achatData) === "stock1";
-
-      for (const article of achatData.articles) {
-        if (!article.recu || (article.recu.quantite || 0) <= 0) continue;
-
-        const nom = article.produit || "";
-        const qte = Number(article.recu.quantite || 0);
-        const pA = Number(article.recu.prixUnitaire || article.recu.prixAchat || 0);
-        const pV = Number(article.recu.prixVente || 0);
-        const dateP = article.recu.datePeremption ? Timestamp.fromDate(new Date(article.recu.datePeremption)) : null;
-
-        const existingQuery = query(
-          collection(db, "societe", societeId, "stock_entries"),
-          where("achatId", "==", achatData.id),
-          where("nom", "==", nom),
-          where("numeroLot", "==", article.recu.numeroLot || `LOT${Date.now().toString().slice(-6)}`)
-        );
-        const existingSnap = await getDocs(existingQuery);
-
-        if (existingSnap.empty) {
-          await addDoc(collection(db, "societe", societeId, "stock_entries"), {
-            nom,
-            quantite: qte,
-            stock1: isStock1 ? qte : 0,
-            stock2: isStock1 ? 0 : qte,
-            quantiteInitiale: qte,
-            prixAchat: pA,
-            prixVente: pV,
-            datePeremption: dateP,
-            numeroArticle: article.recu.numeroArticle || article.recu.codeBarre || null,
-            codeBarre: article.recu.codeBarre || article.recu.numeroArticle || null,
-            numeroLot: article.recu.numeroLot || `LOT${Date.now().toString().slice(-6)}`,
-            fournisseur: article.recu.fournisseurArticle || achatData.fournisseur || "",
-            fournisseurPrincipal: achatData.fournisseur || "",
-            dateAchat: achatData.date || Timestamp.now(),
-            statut: "actif",
-            createdAt: Timestamp.now(),
-            createdBy: user.email || user.uid,
-            creePar: user.uid,
-            creeParEmail: user.email,
-            updatedAt: Timestamp.now(),
-            updatedBy: user.email || user.uid,
-            societeId,
-            achatId: achatData.id,
-            stock: pickDocStock(achatData),
-            stockSource: pickDocStock(achatData),
-            syncedFromAchat: true,
-            lastSyncAt: Timestamp.now(),
-          });
-        } else {
-          existingSnap.forEach(async (doc) => {
-            await updateDoc(doc.ref, {
+          if (existingSnap.empty) {
+            await addDoc(collection(db, "societe", societeId, "stock_entries"), {
+              nom,
+              numeroLot,
+              fournisseur: recu.fournisseurArticle || achatData.fournisseur || "",
               quantite: qte,
               stock1: isStock1 ? qte : 0,
               stock2: isStock1 ? 0 : qte,
+              quantiteInitiale: qte, // base de référence
               prixAchat: pA,
               prixVente: pV,
               datePeremption: dateP,
+              numeroArticle,
+              codeBarre,
+              dateAchat: achatData.date || Timestamp.now(),
+              statut: "actif",
+              createdAt: Timestamp.now(),
+              createdBy: user.email || user.uid,
+              creePar: user.uid,
+              creeParEmail: user.email,
               updatedAt: Timestamp.now(),
               updatedBy: user.email || user.uid,
+              societeId,
+              achatId: achatData.id,
+              stock: pickDocStock(achatData),
+              stockSource: pickDocStock(achatData),
+              syncedFromAchat: true,
               lastSyncAt: Timestamp.now(),
             });
-          });
+          } else {
+            for (const d of existingSnap.docs) {
+              const cur = d.data();
+              const prevInit = Number(cur.quantiteInitiale || 0);
+              const delta = qte - prevInit;
+
+              const metaUpdates = {
+                prixAchat: pA,
+                prixVente: pV,
+                datePeremption: dateP,
+                numeroArticle,
+                codeBarre,
+                updatedAt: Timestamp.now(),
+                updatedBy: user.email || user.uid,
+                lastSyncAt: Timestamp.now(),
+              };
+
+              if (delta > 0) {
+                // ➕ On augmente du delta, on aligne la base
+                await updateDoc(d.ref, {
+                  ...metaUpdates,
+                  quantiteInitiale: qte,
+                  quantite: increment(delta),
+                  ...(isStock1 ? { stock1: increment(delta) } : { stock2: increment(delta) }),
+                });
+              } else if (delta === 0) {
+                // Pas de changement de quantité — màj métadatas seulement
+                await updateDoc(d.ref, { ...metaUpdates });
+              } else {
+                // ❌ delta négatif (souvent causé par un retour/avoir déjà appliqué côté stock)
+                // On ignore la déduction ici pour éviter la double opération
+                await updateDoc(d.ref, { ...metaUpdates });
+              }
+            }
+          }
         }
+      } catch (e) {
+        console.error("Erreur sync stock depuis achat:", e);
+      } finally {
+        setIsSyncing(false);
       }
-    } catch (e) {
-      console.error("Erreur sync stock depuis achat:", e);
-    } finally {
-      setIsSyncing(false);
-    }
-  }, [societeId, user]);
+    },
+    [societeId, user?.uid]
+  );
 
   const fetchFournisseurs = useCallback(async () => {
     if (!societeId) {
@@ -407,44 +471,11 @@ export default function StockManagement() {
     }
   }, [societeId]);
 
-  const fetchAppliedSales = useCallback(async () => {
-    if (!societeId) return;
-    try {
-      const snap = await getDocs(collection(db, "societe", societeId, APPLIED_SALES_COLL));
-      const s = new Set();
-      snap.forEach((d) => {
-        const data = d.data();
-        if (data?.applied) s.add(d.id);
-      });
-      setAppliedSales(s);
-    } catch (e) {
-      console.error(e);
-    }
-  }, [societeId]);
-
-  const fetchDismissedOps = useCallback(async () => {
-    if (!societeId) return;
-    try {
-      const snap = await getDocs(collection(db, "societe", societeId, DISMISSED_COLL));
-      const s = new Set();
-      snap.forEach((d) => {
-        const data = d.data();
-        if (data?.dismissed) s.add(d.id);
-      });
-      setDismissedOps(s);
-    } catch (e) {
-      console.error(e);
-    }
-  }, [societeId]);
-
   useEffect(() => {
     if (!waiting) {
       setupAchatsListener();
       setupStockListener();
-      setupVentesListener();
       fetchFournisseurs();
-      fetchAppliedSales();
-      fetchDismissedOps();
     }
 
     return () => {
@@ -456,408 +487,146 @@ export default function StockManagement() {
         stockListenerRef.current();
         stockListenerRef.current = null;
       }
-      if (ventesListenerRef.current) {
-        ventesListenerRef.current();
-        ventesListenerRef.current = null;
-      }
     };
-  }, [waiting, setupAchatsListener, setupStockListener, setupVentesListener]);
-
-  /* ================== APPLICATION VENTES AU STOCK ================== */
-
-  function extractArticleName(a) {
-    return (
-      a?.nom ||
-      a?.produit ||
-      a?.designation ||
-      a?.medicament ||
-      a?.name ||
-      a?.libelle ||
-      a?.productName ||
-      ""
-    );
-  }
-
-  function extractArticleLot(a) {
-    return a?.numeroLot || a?.lot || a?.batch || a?.batchNumber || a?.nLot || "";
-  }
-
-  function extractArticleQty(a) {
-    const q =
-      a?.quantite ?? a?.qte ?? a?.qty ?? a?.quantity ?? a?.Quantite ?? a?.Qte ?? a?.Quantity ?? 0;
-    return safeNumber(q, 0);
-  }
-
-  function looksLikeArticle(obj) {
-    if (!obj || typeof obj !== "object") return false;
-    const name = extractArticleName(obj);
-    const qty = extractArticleQty(obj);
-    return !!name || Number.isFinite(qty);
-  }
-
-  function extractVenteArticles(vDoc) {
-    if (isTransferOperation(vDoc)) {
-      return [];
-    }
-
-    if (Array.isArray(vDoc?.articles)) return vDoc.articles.filter(looksLikeArticle);
-    
-    const candidates = [];
-    const candidateKeys = ["items", "lignes", "produits", "products", "details", "cart", "panier"];
-    candidateKeys.forEach((k) => {
-      if (Array.isArray(vDoc?.[k])) candidates.push(...vDoc[k]);
-    });
-    
-    Object.keys(vDoc || {}).forEach((k) => {
-      const val = vDoc[k];
-      if (Array.isArray(val) && val.length && typeof val[0] === "object") {
-        candidates.push(...val);
-      }
-    });
-    
-    return (candidates || []).filter(looksLikeArticle);
-  }
-
-  const applyPendingSalesToStock = useCallback(async () => {
-    if (!societeId || !user || !lots.length || !ventes.length || isApplyingRef.current) {
-      return;
-    }
-
-    isApplyingRef.current = true;
-    console.log("🔄 Démarrage de l'application des ventes au stock...");
-
-    try {
-      const idxByNameLot = {};
-      const idxByName = {};
-      lots.forEach((l) => {
-        const k1 = `${normalize(l.nom)}|${normalize(l.numeroLot || "-")}`;
-        idxByNameLot[k1] = l;
-        const kn = normalize(l.nom);
-        if (!idxByName[kn]) idxByName[kn] = [];
-        idxByName[kn].push(l);
-      });
-
-      const tasks = [];
-      ventes.forEach((v) => {
-        if (isTransferOperation(v)) return;
-
-        const rows = extractVenteArticles(v);
-        rows.forEach((a, idx) => {
-          const opId = `${v.id || "sale"}#${idx}`;
-          if (dismissedOps.has(opId) || appliedSales.has(opId)) return;
-
-          const nomA = (extractArticleName(a) || "").trim();
-          if (!nomA) return;
-          const lotA = (extractArticleLot(a) || "").trim();
-          let q = extractArticleQty(a);
-          if (!Number.isFinite(q) || q <= 0) q = 1;
-
-          const stockSource = pickDocStock(a) !== "unknown" ? pickDocStock(a) : pickDocStock(v);
-
-          tasks.push({ opId, nom: nomA, numeroLot: lotA, qty: q, stockSource });
-        });
-      });
-
-      if (!tasks.length) {
-        console.log("ℹ️ Aucune vente en attente d'application");
-        isApplyingRef.current = false;
-        return;
-      }
-
-      console.log(`📋 ${tasks.length} opération(s) de vente à traiter`);
-      let appliedCount = 0;
-      const newAppliedSet = new Set(appliedSales);
-
-      for (const t of tasks) {
-        try {
-          await runTransaction(db, async (transaction) => {
-            const appliedRef = doc(db, "societe", societeId, APPLIED_SALES_COLL, t.opId);
-            const appliedSnap = await transaction.get(appliedRef);
-
-            if (appliedSnap.exists() && appliedSnap.data()?.applied) {
-              return;
-            }
-
-            const kFull = `${normalize(t.nom)}|${normalize(t.numeroLot || "-")}`;
-            let lot = idxByNameLot[kFull];
-
-            if (!lot) {
-              const arr = idxByName[normalize(t.nom)] || [];
-              if (arr.length === 1) lot = arr[0];
-            }
-            if (!lot) return;
-
-            const lotRef = doc(db, "societe", societeId, "stock_entries", lot.id);
-            const lotSnap = await transaction.get(lotRef);
-            if (!lotSnap.exists()) return;
-
-            const lotData = lotSnap.data();
-
-            let achatSnap = null;
-            let achatRef = null;
-            if (lotData.achatId) {
-              achatRef = doc(db, "societe", societeId, "achats", lotData.achatId);
-              achatSnap = await transaction.get(achatRef);
-            }
-
-            const s1 = Math.max(0, safeNumber(lotData.stock1, 0));
-            const s2 = Math.max(0, safeNumber(lotData.stock2, 0));
-            
-            let takeFromS1 = 0, takeFromS2 = 0;
-            let q = Math.max(0, safeNumber(t.qty, 0));
-            
-            if (t.stockSource === "stock1") {
-              takeFromS1 = Math.min(s1, q);
-              q -= takeFromS1;
-              if (q > 0) takeFromS2 = Math.min(s2, q);
-            } else if (t.stockSource === "stock2") {
-              takeFromS2 = Math.min(s2, q);
-              q -= takeFromS2;
-              if (q > 0) takeFromS1 = Math.min(s1, q);
-            } else {
-              takeFromS1 = Math.min(s1, q);
-              const rest = Math.max(0, q - takeFromS1);
-              takeFromS2 = Math.min(s2, rest);
-            }
-
-            if (takeFromS1 === 0 && takeFromS2 === 0) return;
-
-            const newS1 = s1 - takeFromS1;
-            const newS2 = s2 - takeFromS2;
-            const newQ = Math.max(0, newS1 + newS2);
-
-            transaction.update(lotRef, {
-              stock1: newS1,
-              stock2: newS2,
-              quantite: newQ,
-              lastSaleNote: `-${takeFromS1} (s1) -${takeFromS2} (s2) via ventes [${t.stockSource}]`,
-              updatedAt: Timestamp.now(),
-              updatedBy: user.email || user.uid,
-              lastSyncAt: Timestamp.now(),
-            });
-
-            if (achatSnap && achatSnap.exists()) {
-              const achatData = achatSnap.data();
-              const updatedArticles = (achatData.articles || []).map(art => {
-                if (art.produit === lot.nom && art.recu?.numeroLot === lot.numeroLot) {
-                  return {
-                    ...art,
-                    recu: {
-                      ...art.recu,
-                      quantite: Math.max(0, (art.recu?.quantite || 0) - (takeFromS1 + takeFromS2))
-                    }
-                  };
-                }
-                return art;
-              });
-              
-              transaction.update(achatRef, {
-                articles: updatedArticles,
-                lastSaleDeduction: takeFromS1 + takeFromS2,
-                lastSaleDate: Timestamp.now(),
-                lastSaleStockSource: t.stockSource,
-                syncedFromStock: true,
-              });
-            }
-
-            transaction.set(
-              appliedRef,
-              {
-                applied: true,
-                at: Timestamp.now(),
-                lotId: lot.id,
-                qty: takeFromS1 + takeFromS2,
-                tookS1: takeFromS1,
-                tookS2: takeFromS2,
-                stockSource: t.stockSource,
-                syncedWithAchat: !!lotData.achatId,
-              },
-              { merge: true }
-            );
-
-            newAppliedSet.add(t.opId);
-            appliedCount++;
-          });
-        } catch (err) {
-          console.error(`❌ Erreur lors du traitement de l'opération ${t.opId}:`, err);
-        }
-      }
-
-      if (appliedCount > 0) {
-        setAppliedSales(newAppliedSet);
-        setSuccess(`✅ ${appliedCount} vente(s) appliquée(s) au stock (+ sync achats)`);
-        beepOk();
-        setTimeout(() => setSuccess(""), 3000);
-      }
-    } catch (err) {
-      console.error("❌ Erreur globale durant l'application des ventes au stock:", err);
-      setError("Une erreur est survenue lors de la synchronisation.");
-      beepErr();
-    } finally {
-      isApplyingRef.current = false;
-    }
-  }, [
-    societeId,
-    user,
-    lots,
-    ventes,
-    dismissedOps,
-    appliedSales,
-    beepOk,
-    beepErr,
-  ]);
-
-  useEffect(() => {
-    if (!waiting && lots.length && ventes.length && autoApply) {
-      const timer = setTimeout(() => {
-        applyPendingSalesToStock();
-      }, 500);
-      
-      return () => clearTimeout(timer);
-    }
-  }, [waiting, lots.length, ventes.length, autoApply, applyPendingSalesToStock]);
+  }, [waiting, setupAchatsListener, setupStockListener, fetchFournisseurs]);
 
   /* ================== TRANSFERTS ================== */
 
-  const transferEligibleLots = lots.filter(lot => safeNumber(lot.stock1, 0) > 0);
+  const transferEligibleLots = lots.filter((lot) => safeNumber(lot.stock1, 0) > 0);
 
-  const resetTransferForm = () => { 
-    setTransferFromLotId(""); 
-    setTransferQty(""); 
-    setTransferNote(""); 
+  const resetTransferForm = () => {
+    setTransferFromLotId("");
+    setTransferQty("");
+    setTransferNote("");
   };
 
-  const syncAchatFromStockTransfer = useCallback(async (originalLotId, newLotId, transferData) => {
-    if (!societeId || !user) return;
+  const syncAchatFromStockTransfer = useCallback(
+    async (originalLotId, newLotId, transferData) => {
+      if (!societeId || !user) return;
 
-    try {
-      const originalLot = lots.find(l => l.id === originalLotId);
-      if (!originalLot?.achatId) return;
+      try {
+        const originalLot = lots.find((l) => l.id === originalLotId);
+        if (!originalLot?.achatId) return;
 
-      const achatRef = doc(db, "societe", societeId, "achats", originalLot.achatId);
-      const achatSnap = await getDocs(query(collection(db, "societe", societeId, "achats"), where("__name__", "==", originalLot.achatId)));
-      
-      if (achatSnap.empty) return;
+        const achatRef = doc(db, "societe", societeId, "achats", originalLot.achatId);
+        const achatSnap = await getDoc(achatRef);
+        if (!achatSnap.exists()) return;
 
-      const achatDoc = achatSnap.docs[0];
-      const achatData = achatDoc.data();
+        const achatData = achatSnap.data();
 
-      const articleTransfere = {
-        produit: originalLot.nom,
-        commandee: {
-          quantite: transferData.quantite,
-          prixUnitaire: originalLot.prixAchat || 0,
-          prixVente: originalLot.prixVente || 0,
-          datePeremption: originalLot.datePeremption,
-          numeroLot: originalLot.numeroLot + "-S2",
-          numeroArticle: originalLot.numeroArticle || originalLot.codeBarre || "",
-          fournisseurArticle: originalLot.fournisseur || "",
+        const articleTransfere = {
+          produit: originalLot.nom,
+          commandee: {
+            quantite: transferData.quantite,
+            prixUnitaire: originalLot.prixAchat || 0,
+            prixVente: originalLot.prixVente || 0,
+            datePeremption: originalLot.datePeremption,
+            numeroLot: (originalLot.numeroLot || "LOT") + "-S2",
+            numeroArticle: originalLot.numeroArticle || originalLot.codeBarre || "",
+            fournisseurArticle: originalLot.fournisseur || "",
+            stock: "stock2",
+            stockSource: "stock2",
+          },
+          recu: {
+            quantite: transferData.quantite,
+            prixUnitaire: originalLot.prixAchat || 0,
+            prixVente: originalLot.prixVente || 0,
+            datePeremption: originalLot.datePeremption,
+            numeroLot: (originalLot.numeroLot || "LOT") + "-S2",
+            numeroArticle: originalLot.numeroArticle || originalLot.codeBarre || "",
+            fournisseurArticle: originalLot.fournisseur || "",
+            stock: "stock2",
+            stockSource: "stock2",
+          },
+        };
+
+        const nouveauBonRef = await addDoc(collection(db, "societe", societeId, "achats"), {
+          fournisseur: (achatData.fournisseur || "") + " [TRANSFERT STOCK]",
+          date: Timestamp.now(),
+          timestamp: Timestamp.now(),
+          statutPaiement: achatData.statutPaiement || "payé",
+          remiseGlobale: 0,
+          articles: [articleTransfere],
+          statutReception: "reçu",
+          dateReception: Timestamp.now(),
+          creePar: user.uid,
+          creeParEmail: user.email,
+          creeLe: Timestamp.now(),
+          recuPar: user.uid,
+          recuParEmail: user.email,
+          societeId,
           stock: "stock2",
-          stockSource: "stock2"
-        },
-        recu: {
-          quantite: transferData.quantite,
-          prixUnitaire: originalLot.prixAchat || 0,
-          prixVente: originalLot.prixVente || 0,
-          datePeremption: originalLot.datePeremption,
-          numeroLot: originalLot.numeroLot + "-S2",
-          numeroArticle: originalLot.numeroArticle || originalLot.codeBarre || "",
-          fournisseurArticle: originalLot.fournisseur || "",
-          stock: "stock2",
-          stockSource: "stock2"
-        }
-      };
+          stockSource: "stock2",
+          isTransferred: true,
+          isStockTransfer: true,
+          type: "transfert",
+          operationType: "transfert",
+          originalAchatId: originalLot.achatId,
+          originalLotId: originalLotId,
+          transferNote: transferData.note || "Stock1 → Stock2",
+          transferDate: Timestamp.now(),
+          syncedFromStock: true,
+        });
 
-      const nouveauBonRef = await addDoc(collection(db, "societe", societeId, "achats"), {
-        fournisseur: (achatData.fournisseur || "") + " [TRANSFERT STOCK]",
-        date: Timestamp.now(),
-        timestamp: Timestamp.now(),
-        statutPaiement: achatData.statutPaiement || "payé",
-        remiseGlobale: 0,
-        articles: [articleTransfere],
-        statutReception: "reçu",
-        dateReception: Timestamp.now(),
-        creePar: user.uid,
-        creeParEmail: user.email,
-        creeLe: Timestamp.now(),
-        recuPar: user.uid,
-        recuParEmail: user.email,
-        societeId,
-        stock: "stock2",
-        stockSource: "stock2",
-        isTransferred: true,
-        isStockTransfer: true,
-        type: "transfert",
-        operationType: "transfert",
-        originalAchatId: originalLot.achatId,
-        originalLotId: originalLotId,
-        transferNote: transferData.note || "Stock1 → Stock2",
-        transferDate: Timestamp.now(),
-        syncedFromStock: true,
-      });
+        const updatedArticles = (achatData.articles || []).map((a) => {
+          if (a.produit === originalLot.nom && a.recu?.numeroLot === originalLot.numeroLot) {
+            return {
+              ...a,
+              recu: { ...a.recu, quantite: Math.max(0, (a.recu?.quantite || 0) - transferData.quantite) },
+            };
+          }
+          return a;
+        });
 
-      const updatedArticles = achatData.articles.map(a => {
-        if (a.produit === originalLot.nom && a.recu?.numeroLot === originalLot.numeroLot) {
-          return {
-            ...a,
-            recu: {
-              ...a.recu,
-              quantite: Math.max(0, (a.recu?.quantite || 0) - transferData.quantite)
-            }
-          };
-        }
-        return a;
-      });
-
-      await updateDoc(achatRef, {
-        articles: updatedArticles,
-        lastTransferDate: Timestamp.now(),
-        lastTransferNote: transferData.note || "Stock1 → Stock2",
-        lastTransferQuantity: transferData.quantite,
-        transferredToAchatId: nouveauBonRef.id,
-      });
-
-    } catch (e) {
-      console.error("Erreur sync achat depuis transfert stock:", e);
-    }
-  }, [societeId, user, lots]);
+        await updateDoc(achatRef, {
+          articles: updatedArticles,
+          lastTransferDate: Timestamp.now(),
+          lastTransferNote: transferData.note || "Stock1 → Stock2",
+          lastTransferQuantity: transferData.quantite,
+          transferredToAchatId: nouveauBonRef.id,
+        });
+      } catch (e) {
+        console.error("Erreur sync achat depuis transfert stock:", e);
+      }
+    },
+    [societeId, user, lots]
+  );
 
   const handleTransferWithNewLot = useCallback(async () => {
     try {
-      if (!societeId || !user) { 
-        setError("Session invalide."); 
+      if (!societeId || !user) {
+        setError("Session invalide.");
         beepErr();
-        return; 
+        return;
       }
-      
-      const lotOriginal = lots.find(l => l.id === transferFromLotId);
-      if (!lotOriginal) { 
-        setError("Lot original introuvable."); 
+
+      const lotOriginal = lots.find((l) => l.id === transferFromLotId);
+      if (!lotOriginal) {
+        setError("Lot original introuvable.");
         beepErr();
-        return; 
+        return;
       }
 
       const qtyToTransfer = Number(transferQty);
       const currentStock1 = Number(lotOriginal.stock1 || 0);
-      
-      if (!qtyToTransfer || qtyToTransfer <= 0) { 
-        setError("Quantité invalide."); 
+
+      if (!qtyToTransfer || qtyToTransfer <= 0) {
+        setError("Quantité invalide.");
         beepErr();
-        return; 
+        return;
       }
-      
-      if (qtyToTransfer > currentStock1) { 
-        setError(`Quantité > stock1 disponible (${currentStock1}).`); 
+      if (qtyToTransfer > currentStock1) {
+        setError(`Quantité > stock1 disponible (${currentStock1}).`);
         beepErr();
-        return; 
+        return;
       }
 
       setError("");
       setIsSyncing(true);
-      
+
       const nouveauLotData = {
         nom: lotOriginal.nom + " [TRANSFERT S2]",
-        numeroLot: lotOriginal.numeroLot + "-S2",
+        numeroLot: (lotOriginal.numeroLot || "LOT") + "-S2",
         fournisseur: lotOriginal.fournisseur || "",
         quantite: qtyToTransfer,
         stock1: 0,
@@ -884,7 +653,7 @@ export default function StockManagement() {
         transferredByEmail: user.email,
         stockSource: "stock1",
         stockDestination: "stock2",
-        achatId: lotOriginal.achatId,
+        achatId: lotOriginal.achatId || null,
         syncedFromStock: true,
         lastSyncAt: Timestamp.now(),
       };
@@ -908,22 +677,32 @@ export default function StockManagement() {
 
       await syncAchatFromStockTransfer(transferFromLotId, nouveauLotRef.id, {
         quantite: qtyToTransfer,
-        note: transferNote || "Stock1 → Stock2"
+        note: transferNote || "Stock1 → Stock2",
       });
 
-      setSuccess(`Transfert réussi avec sync achats : ${qtyToTransfer} unités → Stock2. Nouveau lot créé.`);
+      setSuccess(`Transfert réussi : ${qtyToTransfer} → Stock2. Nouveau lot créé.`);
       beepOk();
       resetTransferForm();
       setShowTransferModal(false);
       setTimeout(() => setSuccess(""), 1500);
     } catch (e) {
       console.error("handleTransferWithNewLot:", e);
-      setError("Erreur lors du transfert avec synchronisation.");
+      setError("Erreur lors du transfert.");
       beepErr();
     } finally {
       setIsSyncing(false);
     }
-  }, [societeId, user, lots, transferFromLotId, transferQty, transferNote, syncAchatFromStockTransfer, beepOk, beepErr]);
+  }, [
+    societeId,
+    user,
+    lots,
+    transferFromLotId,
+    transferQty,
+    transferNote,
+    syncAchatFromStockTransfer,
+    beepOk,
+    beepErr,
+  ]);
 
   /* ================== RETOURS/AVOIRS ================== */
 
@@ -931,15 +710,12 @@ export default function StockManagement() {
     const R = Math.max(0, safeNumber(lot.retourQuantite, 0));
     const S1 = Math.max(0, safeNumber(lot.stock1, 0));
     const S2 = Math.max(0, safeNumber(lot.stock2, 0));
-    
     const takeFromS1 = Math.min(S1, R);
     const remaining = Math.max(0, R - takeFromS1);
     const takeFromS2 = Math.min(S2, remaining);
-    
     const newS1 = S1 - takeFromS1;
     const newS2 = S2 - takeFromS2;
     const newQ = newS1 + newS2;
-    
     return { newQ, newS1, newS2, takeFromS1, takeFromS2 };
   };
 
@@ -1019,19 +795,16 @@ export default function StockManagement() {
         return;
       }
       if (!window.confirm("Confirmer : l'avoir est réglé ? Le stock sera diminué automatiquement.")) return;
-      
+
       const { newQ, newS1, newS2, takeFromS1, takeFromS2 } = computeStockAfterReturn(lot);
-      
+
       try {
         setIsSyncing(true);
-        
+
         await runTransaction(db, async (transaction) => {
           const lotRef = doc(db, "societe", societeId, "stock_entries", lot.id);
           const lotSnap = await transaction.get(lotRef);
-          
-          if (!lotSnap.exists()) {
-            throw new Error("Lot introuvable");
-          }
+          if (!lotSnap.exists()) throw new Error("Lot introuvable");
 
           let achatSnap = null;
           let achatRef = null;
@@ -1039,9 +812,10 @@ export default function StockManagement() {
             achatRef = doc(db, "societe", societeId, "achats", lot.achatId);
             achatSnap = await transaction.get(achatRef);
           }
-          
+
           const qtyReturned = safeNumber(lot.retourQuantite, 0);
-          
+
+          // 1) Ajustement stock (déduction réelle)
           transaction.update(lotRef, {
             avoirRegle: true,
             retourEnCours: false,
@@ -1057,37 +831,22 @@ export default function StockManagement() {
             lastSyncAt: Timestamp.now(),
           });
 
+          // 2) Journal côté achats (sans rediminuer la quantité reçue)
           if (achatSnap && achatSnap.exists()) {
-            const achatData = achatSnap.data();
-            
-            const updatedArticles = (achatData.articles || []).map(art => {
-              if (art.produit === lot.nom && art.recu?.numeroLot === lot.numeroLot) {
-                return {
-                  ...art,
-                  recu: {
-                    ...art.recu,
-                    quantite: Math.max(0, (art.recu?.quantite || 0) - qtyReturned)
-                  }
-                };
-              }
-              return art;
-            });
-
             transaction.update(achatRef, {
-              articles: updatedArticles,
-              lastReturn: { 
-                quantity: qtyReturned, 
-                date: Timestamp.now(), 
+              lastReturn: {
+                quantity: qtyReturned,
+                date: Timestamp.now(),
                 settled: true,
                 lotId: lot.id,
-                productName: lot.nom 
+                productName: lot.nom,
               },
               syncedFromStock: true,
             });
           }
         });
-        
-        setSuccess("Avoir réglé — stock ajusté définitivement (+ sync achat)");
+
+        setSuccess("Avoir réglé — stock ajusté (+ journal Achats)");
         beepOk();
         setTimeout(() => setSuccess(""), 1500);
       } catch (e) {
@@ -1117,17 +876,14 @@ export default function StockManagement() {
         return;
 
       const { newQ, newS1, newS2, takeFromS1, takeFromS2 } = computeStockAfterReturn(lot);
-      
+
       try {
         setIsSyncing(true);
-        
+
         await runTransaction(db, async (transaction) => {
           const lotRef = doc(db, "societe", societeId, "stock_entries", lot.id);
           const lotSnap = await transaction.get(lotRef);
-          
-          if (!lotSnap.exists()) {
-            throw new Error("Lot introuvable");
-          }
+          if (!lotSnap.exists()) throw new Error("Lot introuvable");
 
           let achatSnap = null;
           let achatRef = null;
@@ -1135,9 +891,10 @@ export default function StockManagement() {
             achatRef = doc(db, "societe", societeId, "achats", lot.achatId);
             achatSnap = await transaction.get(achatRef);
           }
-          
+
           const qtyReturned = safeNumber(lot.retourQuantite, 0);
-          
+
+          // 1) Ajustement stock immédiat
           transaction.update(lotRef, {
             retourValide: true,
             retourValideAt: Timestamp.now(),
@@ -1155,38 +912,23 @@ export default function StockManagement() {
             lastSyncAt: Timestamp.now(),
           });
 
+          // 2) Journal côté achats (sans réduire 'reçu')
           if (achatSnap && achatSnap.exists()) {
-            const achatData = achatSnap.data();
-            
-            const updatedArticles = (achatData.articles || []).map(art => {
-              if (art.produit === lot.nom && art.recu?.numeroLot === lot.numeroLot) {
-                return {
-                  ...art,
-                  recu: {
-                    ...art.recu,
-                    quantite: Math.max(0, (art.recu?.quantite || 0) - qtyReturned)
-                  }
-                };
-              }
-              return art;
-            });
-
             transaction.update(achatRef, {
-              articles: updatedArticles,
-              lastReturn: { 
-                quantity: qtyReturned, 
-                date: Timestamp.now(), 
-                settled: true, 
+              lastReturn: {
+                quantity: qtyReturned,
+                date: Timestamp.now(),
+                settled: true,
                 immediate: true,
                 lotId: lot.id,
-                productName: lot.nom 
+                productName: lot.nom,
               },
               syncedFromStock: true,
             });
           }
         });
-        
-        setSuccess("Retour validé et stock ajusté définitivement (+ sync achat)");
+
+        setSuccess("Retour validé + stock ajusté (+ journal Achats)");
         beepOk();
         setTimeout(() => setSuccess(""), 1500);
       } catch (e) {
@@ -1262,9 +1004,9 @@ export default function StockManagement() {
     setNom(lot.nom || "");
     setNumeroLot(lot.numeroLot || "");
     setFournisseur(lot.fournisseur || "");
-    const q = Math.max(0, safeNumber(lot.quantite));
-    const s1 = Math.min(q, Math.max(0, safeNumber(lot.stock1, q)));
-    const s2 = Math.max(0, q - s1);
+    const s1 = Math.max(0, safeNumber(lot.stock1));
+    const s2 = Math.max(0, safeNumber(lot.stock2));
+    const q = s1 + s2;
     setQuantite(q);
     setStock1(s1);
     setStock2(s2);
@@ -1286,7 +1028,7 @@ export default function StockManagement() {
         beepErr();
         return;
       }
-      const { Q, S1, S2 } = keepSplitInvariant(quantite, stock1);
+      const { S1, S2 } = keepSplitInvariant(quantite, stock1);
       try {
         const payload = {
           nom: nom.trim(),
@@ -1350,19 +1092,16 @@ export default function StockManagement() {
     async (lot) => {
       if (!user || !societeId) return;
       if (!window.confirm(`Supprimer le lot ${lot.numeroLot} de ${lot.nom} ?`)) return;
-      
+
       try {
         if (lot.achatId) {
           const achatRef = doc(db, "societe", societeId, "achats", lot.achatId);
-          const achatSnap = await getDocs(query(collection(db, "societe", societeId, "achats"), where("__name__", "==", lot.achatId)));
-          
-          if (!achatSnap.empty) {
-            const achatDoc = achatSnap.docs[0];
-            const achatData = achatDoc.data();
-            const updatedArticles = (achatData.articles || []).filter(art => 
-              !(art.produit === lot.nom && art.recu?.numeroLot === lot.numeroLot)
+          const achatSnap = await getDoc(achatRef);
+          if (achatSnap.exists()) {
+            const achatData = achatSnap.data();
+            const updatedArticles = (achatData.articles || []).filter(
+              (art) => !(art.produit === lot.nom && art.recu?.numeroLot === lot.numeroLot)
             );
-            
             await updateDoc(achatRef, {
               articles: updatedArticles,
               syncedFromStock: true,
@@ -1372,7 +1111,7 @@ export default function StockManagement() {
         }
 
         await deleteDoc(doc(db, "societe", societeId, "stock_entries", lot.id));
-        setSuccess("Lot supprimé (+ sync achat)");
+        setSuccess("Lot supprimé (+ journal achat)");
         beepOk();
         setTimeout(() => setSuccess(""), 1200);
       } catch (err) {
@@ -1504,34 +1243,19 @@ export default function StockManagement() {
                   {isSyncing ? "Synchronisation en cours..." : `Dernière sync: ${lastSyncTime.toLocaleTimeString("fr-FR")}`}
                 </div>
               )}
-              <label style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 13, cursor: "pointer" }}>
-                <input
-                  type="checkbox"
-                  checked={autoApply}
-                  onChange={(e) => setAutoApply(e.target.checked)}
-                />
-                <span style={{ fontWeight: 600, color: autoApply ? "#059669" : "#6b7280" }}>
-                  Application auto des ventes {autoApply ? "✓" : "✗"}
-                </span>
-              </label>
-              {!autoApply && (
-                <button
-                  onClick={applyPendingSalesToStock}
-                  disabled={isSyncing}
-                  style={{
-                    padding: "6px 12px",
-                    borderRadius: 8,
-                    border: "1px solid #e5e7eb",
-                    background: isSyncing ? "#d1d5db" : "linear-gradient(135deg,#3b82f6,#2563eb)",
-                    color: "#fff",
-                    fontSize: 12,
-                    fontWeight: 700,
-                    cursor: isSyncing ? "not-allowed" : "pointer",
-                  }}
-                >
-                  {isSyncing ? "Sync..." : "Appliquer ventes maintenant"}
-                </button>
-              )}
+              <span
+                title="Chaque vente impacte le stock instantanément"
+                style={{
+                  fontSize: 12,
+                  color: "#065f46",
+                  background: "#d1fae5",
+                  padding: "4px 8px",
+                  borderRadius: 8,
+                  fontWeight: 700,
+                }}
+              >
+                Sync ventes: temps réel ✓
+              </span>
             </div>
           </div>
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
@@ -1551,32 +1275,30 @@ export default function StockManagement() {
               }}
             />
             <button
-              onClick={openCreate}
+              onClick={() => {
+                resetForm();
+                setShowForm(true);
+              }}
               style={{
                 background: "linear-gradient(135deg,#1e40af,#1d4ed8)",
                 color: "#ffffff",
                 border: "2px solid transparent",
                 borderRadius: 12,
-                padding: window.innerWidth < 768 ? "8px 12px" : "12px 20px",
+                padding: "12px 20px",
                 fontWeight: 700,
-                fontSize: window.innerWidth < 768 ? "14px" : "16px",
+                fontSize: "16px",
                 cursor: "pointer",
                 boxShadow: "0 4px 14px rgba(30, 64, 175, 0.3)",
                 transition: "all 0.2s ease-in-out",
-                minWidth: window.innerWidth < 768 ? "auto" : "200px",
+                minWidth: "200px",
                 whiteSpace: "nowrap",
                 textShadow: "0 1px 2px rgba(0,0,0,0.2)",
               }}
             >
-              {window.innerWidth < 480 ? "+ Article" : "+ Ajouter article"}
+              + Ajouter article
             </button>
           </div>
         </div>
-        {hasFilter && (
-          <div style={{ marginTop: 10, color: "#6b7280", fontSize: 13 }}>
-            Filtre actif : <strong>{search}</strong> — <em>clique une ligne pour afficher ses actions.</em>
-          </div>
-        )}
       </div>
 
       {/* Messages */}
@@ -1633,9 +1355,7 @@ export default function StockManagement() {
         }}
       >
         <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 12 }}>
-          <h2 style={{ margin: 0, fontWeight: 800, color: "#059669" }}>
-            Stock1 → Stock2
-          </h2>
+          <h2 style={{ margin: 0, fontWeight: 800, color: "#059669" }}>Stock1 → Stock2</h2>
           <button
             onClick={() => setShowTransferModal(!showTransferModal)}
             style={{
@@ -1675,7 +1395,7 @@ export default function StockManagement() {
             >
               ⚠️ Ce transfert créera un NOUVEAU lot pour Stock2, diminuera le stock1 du lot original ET synchronisera avec les achats correspondants.
             </div>
-            
+
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 12 }}>
               <div>
                 <label style={{ display: "block", marginBottom: 4, fontWeight: 700 }}>Lot à transférer</label>
@@ -1703,17 +1423,17 @@ export default function StockManagement() {
 
               <div>
                 <label style={{ display: "block", marginBottom: 4, fontWeight: 700 }}>
-                  Quantité à transférer
+                  Quantité à transférer{" "}
                   {transferFromLotId && (
                     <span style={{ color: "#6b7280", fontWeight: 400 }}>
-                      (max: {lots.find(l => l.id === transferFromLotId)?.stock1 || 0})
+                      (max: {lots.find((l) => l.id === transferFromLotId)?.stock1 || 0})
                     </span>
                   )}
                 </label>
                 <input
                   type="number"
                   min="1"
-                  max={transferFromLotId ? lots.find(l => l.id === transferFromLotId)?.stock1 || 0 : undefined}
+                  max={transferFromLotId ? lots.find((l) => l.id === transferFromLotId)?.stock1 || 0 : undefined}
                   placeholder="Quantité"
                   value={transferQty}
                   onChange={(e) => setTransferQty(e.target.value)}
@@ -1749,15 +1469,16 @@ export default function StockManagement() {
                   onClick={handleTransferWithNewLot}
                   disabled={!transferFromLotId || !transferQty || isSyncing}
                   style={{
-                    background: (transferFromLotId && transferQty && !isSyncing)
-                      ? "linear-gradient(135deg,#059669,#047857)"
-                      : "#d1d5db",
+                    background:
+                      transferFromLotId && transferQty && !isSyncing
+                        ? "linear-gradient(135deg,#059669,#047857)"
+                        : "#d1d5db",
                     color: "#fff",
                     border: "none",
                     borderRadius: 10,
                     padding: "10px 16px",
                     fontWeight: 700,
-                    cursor: (transferFromLotId && transferQty && !isSyncing) ? "pointer" : "not-allowed",
+                    cursor: transferFromLotId && transferQty && !isSyncing ? "pointer" : "not-allowed",
                     flex: 1,
                   }}
                 >
@@ -1780,12 +1501,13 @@ export default function StockManagement() {
                 </button>
               </div>
             </div>
-            
+
             {transferFromLotId && transferQty && (
               <div style={{ marginTop: 12, padding: 8, background: "#ecfdf5", borderRadius: 8, fontSize: 14 }}>
                 <strong>Aperçu :</strong> Transfert de <strong>{transferQty}</strong> unité(s) de{" "}
-                <strong>{lots.find(l => l.id === transferFromLotId)?.nom}</strong> (Lot: {lots.find(l => l.id === transferFromLotId)?.numeroLot}) vers un nouveau lot Stock2.
-                {lots.find(l => l.id === transferFromLotId)?.achatId && (
+                <strong>{lots.find((l) => l.id === transferFromLotId)?.nom}</strong> (Lot:{" "}
+                {lots.find((l) => l.id === transferFromLotId)?.numeroLot}) vers un nouveau lot Stock2.
+                {lots.find((l) => l.id === transferFromLotId)?.achatId && (
                   <span style={{ color: "#059669" }}> + Synchronisation automatique avec le bon d'achat lié.</span>
                 )}
               </div>
@@ -1843,14 +1565,13 @@ export default function StockManagement() {
                   const expSoon = d && !expired && d <= new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
 
                   const qRet = safeNumber(lot.retourQuantite, 0);
-                  const badgeRetour =
-                    lot.retourEnCours && !lot.retourValide
-                      ? `Retour/Avoir demandé (Qté: ${qRet})`
-                      : lot.retourValide && !lot.avoirRegle
-                      ? `Retour validé (Qté: ${qRet})`
-                      : lot.avoirRegle
-                      ? `Retour réglé`
-                      : "";
+                  const badgeRetour = lot.retourEnCours && !lot.retourValide
+                    ? `Retour/Avoir demandé (Qté: ${qRet})`
+                    : lot.retourValide && !lot.avoirRegle
+                    ? `Retour validé (Qté: ${qRet})`
+                    : lot.avoirRegle
+                    ? `Retour réglé`
+                    : "";
 
                   const showRowActions = hasFilter && selectedLotId === lot.id;
 
@@ -1863,21 +1584,31 @@ export default function StockManagement() {
                       key={lot.id}
                       onClick={() => setSelectedLotId((prev) => (prev === lot.id ? null : lot.id))}
                       style={{
-                        background: selectedLotId === lot.id 
-                          ? "rgba(219,234,254,.5)" 
-                          : isTransferredLot
-                          ? "rgba(220,252,231,.3)"
-                          : idx % 2 ? "rgba(249,250,251,.6)" : "white",
+                        background:
+                          selectedLotId === lot.id
+                            ? "rgba(219,234,254,.5)"
+                            : isTransferredLot
+                            ? "rgba(220,252,231,.3)"
+                            : idx % 2
+                            ? "rgba(249,250,251,.6)"
+                            : "white",
                         borderBottom: "1px solid #f3f4f6",
                         cursor: hasFilter ? "pointer" : "default",
-                        borderLeft: isTransferredLot ? "4px solid #059669" : isLinkedToAchat ? "4px solid #3b82f6" : undefined,
+                        borderLeft: isTransferredLot
+                          ? "4px solid #059669"
+                          : isLinkedToAchat
+                          ? "4px solid #3b82f6"
+                          : undefined,
                       }}
                       title={hasFilter ? "Clique pour afficher/masquer les actions" : ""}
                     >
                       <td style={{ padding: 12, fontWeight: 600 }}>
                         {lot.nom}{" "}
                         {badgeTransfert && (
-                          <span style={{ marginLeft: 8, fontSize: 12, color: "#059669" }} title="Lot créé par transfert">
+                          <span
+                            style={{ marginLeft: 8, fontSize: 12, color: "#059669" }}
+                            title="Lot créé par transfert"
+                          >
                             {badgeTransfert}
                           </span>
                         )}
@@ -1889,9 +1620,15 @@ export default function StockManagement() {
                       </td>
                       <td style={{ padding: 12 }}>{lot.numeroLot}</td>
                       <td style={{ padding: 12 }}>{lot.fournisseur || "-"}</td>
-                      <td style={{ padding: 12, textAlign: "center", fontWeight: 700 }}>{safeNumber(lot.stock1 + lot.stock2)}</td>
-                      <td style={{ padding: 12, textAlign: "center", fontWeight: 700 }}>{safeNumber(lot.stock1)}</td>
-                      <td style={{ padding: 12, textAlign: "center", fontWeight: 700 }}>{safeNumber(lot.stock2)}</td>
+                      <td style={{ padding: 12, textAlign: "center", fontWeight: 700 }}>
+                        {safeNumber(lot.stock1 + lot.stock2)}
+                      </td>
+                      <td style={{ padding: 12, textAlign: "center", fontWeight: 700 }}>
+                        {safeNumber(lot.stock1)}
+                      </td>
+                      <td style={{ padding: 12, textAlign: "center", fontWeight: 700 }}>
+                        {safeNumber(lot.stock2)}
+                      </td>
                       <td style={{ padding: 12, textAlign: "right" }}>
                         {Number(lot.prixVente || 0).toFixed(2)} DH
                       </td>
@@ -1909,28 +1646,28 @@ export default function StockManagement() {
                       <td style={{ padding: 12, fontFamily: "monospace" }}>{lot.codeBarre || "-"}</td>
                       <td style={{ padding: 12, textAlign: "center" }}>
                         {isLinkedToAchat && (
-                          <span 
-                            style={{ 
-                              fontSize: 12, 
-                              color: "#3b82f6", 
-                              background: "#dbeafe", 
-                              padding: "2px 6px", 
-                              borderRadius: 4 
+                          <span
+                            style={{
+                              fontSize: 12,
+                              color: "#3b82f6",
+                              background: "#dbeafe",
+                              padding: "2px 6px",
+                              borderRadius: 4,
                             }}
-                            title={`Lié à l'achat ${lot.achatId?.slice(0, 8)}`}
+                            title={`Lié à l'achat ${String(lot.achatId || "").slice(0, 8)}`}
                           >
                             Achat
                           </span>
                         )}
                         {lot.syncedFromStock && (
-                          <span 
-                            style={{ 
-                              fontSize: 12, 
-                              color: "#059669", 
-                              background: "#dcfce7", 
-                              padding: "2px 6px", 
+                          <span
+                            style={{
+                              fontSize: 12,
+                              color: "#059669",
+                              background: "#dcfce7",
+                              padding: "2px 6px",
                               borderRadius: 4,
-                              marginLeft: 4 
+                              marginLeft: 4,
                             }}
                             title="Synchronisé"
                           >
@@ -1994,7 +1731,7 @@ export default function StockManagement() {
                               padding: "8px 12px",
                               cursor: "pointer",
                             }}
-                            title="Demander un retour/avoir (avec sync achat)"
+                            title="Demander un retour/avoir (avec journal achat)"
                           >
                             Retour/Avoir
                           </button>
@@ -2032,7 +1769,7 @@ export default function StockManagement() {
                                   padding: "8px 12px",
                                   cursor: "pointer",
                                 }}
-                                title="Valider et déduire du stock + sync achat"
+                                title="Valider et déduire du stock + journal achat"
                               >
                                 Valider + déduire
                               </button>
@@ -2071,16 +1808,14 @@ export default function StockManagement() {
                                 padding: "8px 12px",
                                 cursor: "pointer",
                               }}
-                              title="Marquer l'avoir comme réglé et diminuer le stock + sync achat"
+                              title="Marquer l'avoir comme réglé et diminuer le stock + journal achat"
                             >
                               Avoir réglé
                             </button>
                           )}
                         </div>
                         {!showRowActions && hasFilter && (
-                          <div style={{ fontSize: 11, color: "#9ca3af", textAlign: "center" }}>
-                            (clique la ligne)
-                          </div>
+                          <div style={{ fontSize: 11, color: "#9ca3af", textAlign: "center" }}>(clique la ligne)</div>
                         )}
                       </td>
                     </tr>
@@ -2119,9 +1854,7 @@ export default function StockManagement() {
               overflowY: "auto",
             }}
           >
-            <h3 style={{ marginTop: 0, marginBottom: 12 }}>
-              {isEditing ? "Modifier le lot" : "Ajouter un lot"}
-            </h3>
+            <h3 style={{ marginTop: 0, marginBottom: 12 }}>{isEditing ? "Modifier le lot" : "Ajouter un lot"}</h3>
             <form onSubmit={handleSubmit}>
               <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
                 <div style={{ flex: 1, minWidth: 240 }}>
@@ -2131,12 +1864,7 @@ export default function StockManagement() {
                     value={nom}
                     onChange={(e) => setNom(e.target.value)}
                     required
-                    style={{
-                      width: "100%",
-                      padding: 10,
-                      border: "1px solid #e5e7eb",
-                      borderRadius: 10,
-                    }}
+                    style={{ width: "100%", padding: 10, border: "1px solid #e5e7eb", borderRadius: 10 }}
                   />
                 </div>
                 <div style={{ flex: 1, minWidth: 240 }}>
@@ -2146,12 +1874,7 @@ export default function StockManagement() {
                     value={numeroLot}
                     onChange={(e) => setNumeroLot(e.target.value)}
                     required
-                    style={{
-                      width: "100%",
-                      padding: 10,
-                      border: "1px solid #e5e7eb",
-                      borderRadius: 10,
-                    }}
+                    style={{ width: "100%", padding: 10, border: "1px solid #e5e7eb", borderRadius: 10 }}
                   />
                 </div>
               </div>
@@ -2163,12 +1886,7 @@ export default function StockManagement() {
                     type="text"
                     value={fournisseur}
                     onChange={(e) => setFournisseur(e.target.value)}
-                    style={{
-                      width: "100%",
-                      padding: 10,
-                      border: "1px solid #e5e7eb",
-                      borderRadius: 10,
-                    }}
+                    style={{ width: "100%", padding: 10, border: "1px solid #e5e7eb", borderRadius: 10 }}
                   />
                 </div>
                 <div style={{ flex: 1, minWidth: 240 }}>
@@ -2178,12 +1896,7 @@ export default function StockManagement() {
                       type="text"
                       value={codeBarre}
                       onChange={(e) => setCodeBarre(e.target.value)}
-                      style={{
-                        flex: 1,
-                        padding: 10,
-                        border: "1px solid #e5e7eb",
-                        borderRadius: 10,
-                      }}
+                      style={{ flex: 1, padding: 10, border: "1px solid #e5e7eb", borderRadius: 10 }}
                     />
                     <button
                       type="button"
@@ -2203,10 +1916,8 @@ export default function StockManagement() {
               </div>
 
               <div style={{ display: "flex", gap: 12, marginTop: 12, flexWrap: "wrap" }}>
-                <div style={{ minWidth:120 }}>
-                  <label style={{ display: "block", marginBottom: 4, fontWeight: 700 }}>
-                    Quantité totale *
-                  </label>
+                <div style={{ minWidth: 120 }}>
+                  <label style={{ display: "block", marginBottom: 4, fontWeight: 700 }}>Quantité totale *</label>
                   <input
                     type="number"
                     min="0"
@@ -2217,12 +1928,7 @@ export default function StockManagement() {
                       keepSplitInvariant(v, stock1);
                     }}
                     required
-                    style={{
-                      width: "100%",
-                      padding: 10,
-                      border: "1px solid #e5e7eb",
-                      borderRadius: 10,
-                    }}
+                    style={{ width: "100%", padding: 10, border: "1px solid #e5e7eb", borderRadius: 10 }}
                   />
                 </div>
                 <div style={{ minWidth: 120 }}>
@@ -2236,18 +1942,11 @@ export default function StockManagement() {
                       setStock1(v);
                       keepSplitInvariant(quantite, v);
                     }}
-                    style={{
-                      width: "100%",
-                      padding: 10,
-                      border: "1px solid #e5e7eb",
-                      borderRadius: 10,
-                    }}
+                    style={{ width: "100%", padding: 10, border: "1px solid #e5e7eb", borderRadius: 10 }}
                   />
                 </div>
                 <div style={{ minWidth: 120 }}>
-                  <label style={{ display: "block", marginBottom: 4, fontWeight: 700 }}>
-                    Stock2 (calculé)
-                  </label>
+                  <label style={{ display: "block", marginBottom: 4, fontWeight: 700 }}>Stock2 (calculé)</label>
                   <input
                     type="number"
                     value={stock2}
@@ -2272,12 +1971,7 @@ export default function StockManagement() {
                     min="0"
                     value={prixAchat}
                     onChange={(e) => setPrixAchat(safeNumber(e.target.value))}
-                    style={{
-                      width: "100%",
-                      padding: 10,
-                      border: "1px solid #e5e7eb",
-                      borderRadius: 10,
-                    }}
+                    style={{ width: "100%", padding: 10, border: "1px solid #e5e7eb", borderRadius: 10 }}
                   />
                 </div>
                 <div style={{ flex: 1, minWidth: 150 }}>
@@ -2288,12 +1982,7 @@ export default function StockManagement() {
                     min="0"
                     value={prixVente}
                     onChange={(e) => setPrixVente(safeNumber(e.target.value))}
-                    style={{
-                      width: "100%",
-                      padding: 10,
-                      border: "1px solid #e5e7eb",
-                      borderRadius: 10,
-                    }}
+                    style={{ width: "100%", padding: 10, border: "1px solid #e5e7eb", borderRadius: 10 }}
                   />
                 </div>
                 <div style={{ flex: 1, minWidth: 180 }}>
@@ -2302,12 +1991,7 @@ export default function StockManagement() {
                     type="date"
                     value={datePeremption}
                     onChange={(e) => setDatePeremption(e.target.value)}
-                    style={{
-                      width: "100%",
-                      padding: 10,
-                      border: "1px solid #e5e7eb",
-                      borderRadius: 10,
-                    }}
+                    style={{ width: "100%", padding: 10, border: "1px solid #e5e7eb", borderRadius: 10 }}
                   />
                 </div>
               </div>
@@ -2389,10 +2073,7 @@ function CameraBarcodeInlineModal({ open, onClose, onDetected }) {
         if ("BarcodeDetector" in window) {
           const supported = await window.BarcodeDetector.getSupportedFormats?.();
           const detector = new window.BarcodeDetector({
-            formats:
-              supported && supported.length
-                ? supported
-                : ["ean_13", "ean_8", "code_128", "upc_a", "upc_e"],
+            formats: supported && supported.length ? supported : ["ean_13", "ean_8", "code_128", "upc_a", "upc_e"],
           });
           const scan = async () => {
             if (!open || stopRequested) return;
@@ -2417,14 +2098,10 @@ function CameraBarcodeInlineModal({ open, onClose, onDetected }) {
             const lib = await import("@zxing/browser");
             const { BrowserMultiFormatReader } = lib;
             reader = new BrowserMultiFormatReader();
-            controls = await reader.decodeFromVideoDevice(
-              null,
-              videoRef.current,
-              (result) => {
-                const txt = result?.getText?.();
-                if (txt) onDetected?.(txt);
-              }
-            );
+            controls = await reader.decodeFromVideoDevice(null, videoRef.current, (result) => {
+              const txt = result?.getText?.();
+              if (txt) onDetected?.(txt);
+            });
           } catch (e) {
             setError("ZXing non installé. Lance: npm i @zxing/browser");
           }
@@ -2507,12 +2184,7 @@ function CameraBarcodeInlineModal({ open, onClose, onDetected }) {
             aspectRatio: "16/9",
           }}
         >
-          <video
-            ref={videoRef}
-            muted
-            playsInline
-            style={{ width: "100%", height: "100%", objectFit: "cover" }}
-          />
+          <video ref={videoRef} muted playsInline style={{ width: "100%", height: "100%", objectFit: "cover" }} />
           <div
             style={{
               position: "absolute",

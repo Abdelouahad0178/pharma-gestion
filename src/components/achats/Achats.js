@@ -24,6 +24,7 @@ import { useUserRole } from "../../contexts/UserRoleContext";
  * - Transfert mensuel: crée un NOUVEAU BON avec les quantités transférées vers stock2
  * - Le bon original voit ses quantités diminuées
  * - Total affiché en bas du tableau des bons
+ * - Transfert fonctionnel pour réceptions totales ET partielles
  */
 
 export default function Achats() {
@@ -575,6 +576,16 @@ export default function Achats() {
     setRemiseArticle(0); setDatePeremption(""); setNumeroLot(""); setNumeroArticle(""); setFournisseurArticle("");
   }
 
+  /* ===== Helper total bon (reutilisé pour le transfert/paiements) ===== */
+  const getTotalBon = useCallback((bon) => {
+    const arr = bon?.articles || [];
+    return arr.reduce((sum, a) => {
+      const item = a?.recu || a?.commandee || {};
+      const total = (item.prixUnitaire || item.prixAchat || 0) * (item.quantite || 0) - (item.remise || 0);
+      return sum + total;
+    }, 0) - (Number(bon?.remiseGlobale) || 0);
+  }, []);
+
   /* ===================== Enregistrer bon (création/édition) ===================== */
   const handleAddBon = useCallback(async (e) => {
     e.preventDefault?.();
@@ -838,9 +849,9 @@ export default function Achats() {
   const [transferQty, setTransferQty] = useState("");
   const [transferNote, setTransferNote] = useState("");
 
-  // Bons éligibles au transfert : reçus avec des articles ayant des quantités reçues > 0
+  // MODIFICATION ICI : Bons éligibles au transfert incluent maintenant "partiel" ET "reçu"
   const transferEligibleBons = achats.filter(bon => 
-    bon.statutReception === "reçu" && 
+    (bon.statutReception === "reçu" || bon.statutReception === "partiel") && 
     bon.articles?.some(a => (a?.recu?.quantite || 0) > 0)
   );
 
@@ -889,7 +900,7 @@ export default function Achats() {
 
       setIsLoading(true);
 
-      // 1. Créer le nouveau bon de transfert (Stock2)
+      // 1) Créer le nouvel article transféré (Stock2)
       const articleTransfere = {
         produit: articleOriginal.produit,
         commandee: {
@@ -906,11 +917,63 @@ export default function Achats() {
         }
       };
 
+      // 2) Calcul du montant transféré (pour gérer paiements/statut)
+      const prixAchatUnit = Number(articleOriginal.recu.prixUnitaire || articleOriginal.recu.prixAchat || 0);
+      const remiseItem = Number(articleOriginal.recu.remise || 0);
+      // S'il y a des remises article sur tout le lot original, on les applique proportionnellement (simple : par unité)
+      const remiseParUnite = currentQty > 0 ? (remiseItem / currentQty) : 0;
+      const montantTransfere = qtyToTransfer * prixAchatUnit - qtyToTransfer * remiseParUnite;
+
+      // 3) Récupérer paiements du bon original (pour reproduire l'état sur le nouveau)
+      let totalOriginal = getTotalBon(bonOriginal);
+      if (totalOriginal < 0) totalOriginal = 0;
+
+      const paysSnap = await getDocs(
+        query(
+          collection(db, "societe", societeId, "paiements"),
+          where("type", "==", "achats"),
+          where("docId", "==", transferBonId)
+        )
+      );
+      const paiementsOriginal = [];
+      paysSnap.forEach((d) => paiementsOriginal.push({ id: d.id, ...d.data() }));
+      const totalPayeOriginal = paiementsOriginal.reduce((s, p) => s + (Number(p.montant) || 0), 0);
+      // Mode de paiement à copier (dernier paiement connu, sinon "Espèces")
+      const lastMode = (paiementsOriginal[0]?.mode) || (paiementsOriginal[paiementsOriginal.length - 1]?.mode) || "Espèces";
+
+      // 4) Déterminer le paiement du nouveau bon
+      //    - "payé" : on paie 100% du montant transféré
+      //    - "partiel" : paiement proportionnel au ratio (totalPayeOriginal / totalOriginal)
+      //    - "impayé" : pas de paiement créé
+      let montantPaiementNouveau = 0;
+      let statutPaiementNouveau = "impayé";
+
+      if (bonOriginal.statutPaiement === "payé") {
+        montantPaiementNouveau = Math.max(0, Number(montantTransfere.toFixed(2)));
+        statutPaiementNouveau = "payé";
+      } else if (bonOriginal.statutPaiement === "partiel") {
+        const ratio = totalOriginal > 0 ? (montantTransfere / totalOriginal) : 0;
+        const proportion = Math.max(0, Math.min(1, ratio));
+        montantPaiementNouveau = Math.min(montantTransfere, Number((totalPayeOriginal * proportion).toFixed(2)));
+        if (montantPaiementNouveau <= 0.001) {
+          statutPaiementNouveau = "impayé";
+        } else if (Math.abs(montantPaiementNouveau - montantTransfere) < 0.01) {
+          statutPaiementNouveau = "payé";
+        } else {
+          statutPaiementNouveau = "partiel";
+        }
+      } else {
+        // impayé
+        montantPaiementNouveau = 0;
+        statutPaiementNouveau = "impayé";
+      }
+
+      // 5) Créer le nouveau bon de transfert (Stock2) avec le statut de paiement calculé
       const nouveauBonRef = await addDoc(collection(db, "societe", societeId, "achats"), {
         fournisseur: bonOriginal.fournisseur + " [TRANSFERT]",
         date: Timestamp.now(),
         timestamp: Timestamp.now(),
-        statutPaiement: bonOriginal.statutPaiement,
+        statutPaiement: statutPaiementNouveau, // hérite/adapté
         remiseGlobale: 0,
         articles: [articleTransfere],
         statutReception: "reçu",
@@ -932,7 +995,38 @@ export default function Achats() {
         transferDate: Timestamp.now()
       });
 
-      // 2. Mettre à jour le bon original (diminuer la quantité)
+      // 6) Si paiement à générer sur le nouveau bon, le créer (un seul, mode = dernier du bon d'origine)
+      if (montantPaiementNouveau > 0.001) {
+        await addDoc(collection(db, "societe", societeId, "paiements"), {
+          docId: nouveauBonRef.id,
+          montant: Number(montantPaiementNouveau.toFixed(2)),
+          mode: lastMode || "Espèces",
+          type: "achats",
+          date: Timestamp.now(),
+          creePar: user.uid,
+          creeParEmail: user.email,
+          creeLe: Timestamp.now(),
+          societeId,
+        });
+        await addDoc(collection(db, "societe", societeId, "activities"), {
+          type: "paiement",
+          userId: user.uid,
+          userEmail: user.email,
+          timestamp: Timestamp.now(),
+          details: {
+            mode: lastMode || "Espèces",
+            type: "achats",
+            montant: Number(montantPaiementNouveau.toFixed(2)),
+            fournisseur: bonOriginal.fournisseur + " [TRANSFERT]",
+            paiementAuto: true,
+            fromTransfer: true,
+            originalBonId: transferBonId,
+            newBonId: nouveauBonRef.id,
+          },
+        });
+      }
+
+      // 7) Mettre à jour le bon original (diminuer la quantité)
       const articlesOriginalUpdated = [...bonOriginal.articles];
       articlesOriginalUpdated[articleIndex] = {
         ...articleOriginal,
@@ -949,7 +1043,7 @@ export default function Achats() {
         lastTransferNote: transferNote || "Transfert mensuel Stock1 → Stock2"
       });
 
-      // 3. Créer l'entrée stock pour le nouveau bon (Stock2)
+      // 8) Créer l'entrée stock pour le nouveau bon (Stock2)
       await updateStockOnAdd({
         id: nouveauBonRef.id,
         fournisseur: bonOriginal.fournisseur + " [TRANSFERT]",
@@ -961,7 +1055,7 @@ export default function Achats() {
         date: Timestamp.now(),
       });
 
-      // 4. Enregistrer l'activité
+      // 9) Enregistrer l'activité transfert
       await addDoc(collection(db, "societe", societeId, "activities"), {
         type: "transfert_mensuel",
         userId: user.uid,
@@ -974,11 +1068,13 @@ export default function Achats() {
           quantite: qtyToTransfer,
           originalBonId: transferBonId,
           newBonId: nouveauBonRef.id,
-          note: transferNote || ""
+          note: transferNote || "",
+          montantTransfere: Number(montantTransfere.toFixed(2)),
+          statutPaiementNouveau,
         },
       });
 
-      showNotification(`Transfert réussi : ${qtyToTransfer} unités → Stock2. Nouveau bon créé.`, "success");
+      showNotification(`Transfert réussi : ${qtyToTransfer} unités → Stock2. Nouveau bon créé (${statutPaiementNouveau}).`, "success");
       resetTransferForm();
       await Promise.all([fetchAchats(), fetchStockEntries()]);
     } catch (e) {
@@ -987,7 +1083,7 @@ export default function Achats() {
     } finally {
       setIsLoading(false);
     }
-  }, [societeId, user, achats, transferBonId, transferArticleIndex, transferQty, transferNote, updateStockOnAdd, fetchAchats, fetchStockEntries, showNotification]);
+  }, [societeId, user, achats, transferBonId, transferArticleIndex, transferQty, transferNote, updateStockOnAdd, fetchAchats, fetchStockEntries, showNotification, getTotalBon]);
 
   /* ===================== Affichage utilitaires ===================== */
   const formatDateDisplay = useCallback((dateField) => {
@@ -995,15 +1091,6 @@ export default function Achats() {
     if (!d) return "Date non spécifiée";
     try { return d.toLocaleDateString("fr-FR"); } catch { return d.toISOString().split("T")[0].split("-").reverse().join("/"); }
   }, [toDateSafe]);
-
-  const getTotalBon = useCallback((bon) => {
-    const arr = bon?.articles || [];
-    return arr.reduce((sum, a) => {
-      const item = a?.recu || a?.commandee || {};
-      const total = (item.prixUnitaire || item.prixAchat || 0) * (item.quantite || 0) - (item.remise || 0);
-      return sum + total;
-    }, 0) - (Number(bon?.remiseGlobale) || 0);
-  }, []);
 
   /* ===================== Impression ===================== */
   const generateCachetHtml = useCallback(() => {
@@ -1054,7 +1141,7 @@ export default function Achats() {
 <title>${titleDocument} - ${bon.fournisseur || ""}</title>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
-*{margin:0;padding:0;box-sizing:border-box}
+* {margin:0;padding:0;box-sizing:border-box}
 body{font-family:'Inter',Arial,sans-serif;margin:0;padding:${isMobileDevice ? "5px" : "10px"};background:#fff;color:#0F172A;font-size:${isMobileDevice ? "10px" : "12px"};line-height:1.3;-webkit-print-color-adjust:exact;print-color-adjust:exact}
 .document-container{background:#fff;max-width:100%;margin:0 auto;position:relative;min-height:${isMobileDevice ? "calc(100vh - 10px)" : "calc(100vh - 20px)"};display:flex;flex-direction:column}
 .header-section{background:linear-gradient(135deg,#0B1220 0%,${primaryColor} 100%);padding:${isMobileDevice ? "15px 10px" : "20px 15px"};text-align:center}
@@ -1157,6 +1244,90 @@ body{font-family:'Inter',Arial,sans-serif;margin:0;padding:${isMobileDevice ? "5
       fullPrintHTML(bon, arts, total, cachetHtml, isMobileDevice);
   }, [fullPrintHTML]);
 
+  /* ===================== Impression de la liste filtrée ===================== */
+  const generateFilteredListPrintHTML = useCallback((filteredAchats, totalGeneral, isMobileDevice = false) => {
+    const primaryColor = "#4F46E5"; const secondaryColor = "#06B6D4";
+    const dateStr = new Date().toLocaleDateString("fr-FR");
+    const filtersDescription = `
+      Fournisseur: ${filterFournisseur || "Tous"} • 
+      Date début: ${filterDateStart || "Aucune"} • 
+      Date fin: ${filterDateEnd || "Aucune"} • 
+      Paiement: ${filterStatutPaiement || "Tous"} • 
+      Réception: ${filterStatutReception || "Tous"}
+    `;
+
+    return `<!DOCTYPE html>
+<html lang="fr"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>État des Bons d'Achat Filtrés</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'Inter',Arial,sans-serif;margin:0;padding:${isMobileDevice ? "5px" : "10px"};background:#fff;color:#0F172A;font-size:${isMobileDevice ? "10px" : "12px"};line-height:1.3;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+.document-container{background:#fff;max-width:100%;margin:0 auto;position:relative;min-height:${isMobileDevice ? "calc(100vh - 10px)" : "calc(100vh - 20px)"};display:flex;flex-direction:column}
+.header-section{background:linear-gradient(135deg,#0B1220 0%,${primaryColor} 100%);padding:${isMobileDevice ? "15px 10px" : "20px 15px"};text-align:center}
+.company-title{color:#fff;font-size:${isMobileDevice ? "1.4em" : "1.8em"};font-weight:800;margin-bottom:${isMobileDevice ? "5px" : "8px"};text-shadow:2px 2px 4px rgba(0,0,0,.3)}
+.document-badge{background:rgba(255,255,255,.92);color:${primaryColor};padding:${isMobileDevice ? "4px 12px" : "6px 16px"};border-radius:20px;font-size:${isMobileDevice ? ".8em" : "1em"};font-weight:700;text-transform:uppercase}
+.content-wrapper{padding:${isMobileDevice ? "15px 10px" : "20px 15px"};flex:1;overflow:auto;display:flex;flex-direction:column}
+.info-section{display:grid;grid-template-columns:${isMobileDevice ? "1fr" : "1fr 1fr"};gap:${isMobileDevice ? "8px" : "12px"};margin-bottom:${isMobileDevice ? "12px" : "15px"}}
+.info-card{background:linear-gradient(135deg,#F8FAFC 0%,#EFF6FF 100%);padding:${isMobileDevice ? "8px" : "12px"};border-radius:${isMobileDevice ? "6px" : "8px"};border-left:${isMobileDevice ? "2px" : "3px"} solid ${secondaryColor};box-shadow:0 2px 8px rgba(0,0,0,.05)}
+.info-label{color:#475569;font-weight:700;font-size:${isMobileDevice ? ".6em" : ".7em"};text-transform:uppercase;letter-spacing:${isMobileDevice ? ".5px" : "1px"};margin-bottom:${isMobileDevice ? "3px" : "4px"}}
+.info-value{color:#0F172A;font-weight:800;font-size:${isMobileDevice ? ".8em" : ".9em"};word-wrap:break-word;line-height:1.2}
+.section-title{color:${secondaryColor};font-size:${isMobileDevice ? "1em" : "1.2em"};font-weight:800;margin-bottom:${isMobileDevice ? "8px" : "10px"};text-align:center;text-transform:uppercase}
+.achats-table{width:100%;border-collapse:collapse;overflow:hidden;margin:${isMobileDevice ? "8px" : "10px"} 0;font-size:${isMobileDevice ? ".75em" : ".85em"}}
+.achats-table thead{background:linear-gradient(135deg,#0B1220 0%,#111827 100%)}
+.achats-table th{padding:${isMobileDevice ? "8px 6px" : "12px 10px"};text-align:center;color:#fff;font-weight:700;font-size:${isMobileDevice ? ".8em" : ".9em"}}
+.achats-table td{padding:${isMobileDevice ? "8px 6px" : "12px 10px"};text-align:center;border-bottom:1px solid #E2E8F0;font-weight:600;font-size:${isMobileDevice ? ".85em" : "1em"};color:#0F172A}
+.grand-total-section{margin:${isMobileDevice ? "25px" : "40px"} 0;padding:${isMobileDevice ? "20px 15px" : "30px"};background:linear-gradient(135deg,${primaryColor} 0%,${secondaryColor} 100%);border-radius:${isMobileDevice ? "10px" : "20px"};color:#fff;text-align:center}
+.total-amount{font-size:${isMobileDevice ? "2em" : "3em"};font-weight:900;text-shadow:2px 2px 4px rgba(0,0,0,.25)}
+.footer-section{background:linear-gradient(135deg,#0B1220 0%,#111827 100%);padding:${isMobileDevice ? "10px 8px" : "12px 10px"};text-align:center;color:#fff}
+.print-info{color:#A5B4FC;font-size:${isMobileDevice ? ".6em" : ".7em"};margin-top:${isMobileDevice ? "4px" : "6px"}}
+@media print{
+  @page{margin:.5cm;size:A4}
+  body{background:#fff!important;padding:0!important;margin:0!important;font-size:11px!important}
+  .achats-table th,.achats-table td{padding:6px 4px!important;font-size:8px!important;line-height:1.2!important}
+}
+</style>
+</head>
+<body>
+  <div class="document-container">
+    <div class="header-section">
+      <div class="company-title">${parametres.entete || "PHARMACIE"}</div>
+      <div class="document-badge">🗂️ État des Bons d'Achat Filtrés</div>
+    </div>
+    <div class="content-wrapper">
+      <div class="info-section">
+        <div class="info-card"><div class="info-label">📅 Date du rapport</div><div class="info-value">${dateStr}</div></div>
+        <div class="info-card"><div class="info-label">🔎 Filtres appliqués</div><div class="info-value">${filtersDescription}</div></div>
+      </div>
+      <div class="section-title">📋 Liste des Bons</div>
+      <table className="achats-table">
+        <thead><tr><th>Fournisseur</th><th>Date</th><th>Paiement</th><th>Statut réception</th><th>Stock</th><th>Total</th></tr></thead>
+        <tbody>
+          ${filteredAchats.map((b) => `
+            <tr>
+              <td>${b.fournisseur}${b.isTransferred ? " 🔄" : ""}</td>
+              <td>${formatDateDisplay(b.date || b.timestamp)}</td>
+              <td>${b.statutPaiement}</td>
+              <td>${b.statutReception || "en_attente"}</td>
+              <td>${(b.stock || b.stockSource || b.magasin || b.depot || "stock1").toUpperCase()}</td>
+              <td>${Number(getTotalBon(b) || 0).toFixed(2)} DH</td>
+            </tr>
+          `).join("")}
+        </tbody>
+      </table>
+      <div class="grand-total-section">
+        <div class="total-amount">${totalGeneral.toFixed(2)} DH</div>
+        <div class="print-info">Total Général - ${filteredAchats.length} bons</div>
+      </div>
+    </div>
+    <div class="footer-section">
+      <div class="print-info">Rapport généré le ${dateStr} par ${user?.email || "Utilisateur"}</div>
+      <div class="print-info">${parametres.pied || "Merci pour votre confiance !"}</div>
+    </div>
+  </div>
+</body></html>`;
+  }, [parametres, formatDateDisplay, getTotalBon, filterFournisseur, filterDateStart, filterDateEnd, filterStatutPaiement, filterStatutReception, user]);
+
   /* ===================== Impression orchestrée ===================== */
   function downloadPrintFile(htmlContent, titleDocument, numero) {
     try {
@@ -1184,8 +1355,7 @@ body{font-family:'Inter',Arial,sans-serif;margin:0;padding:${isMobileDevice ? "5
           <div style="position:fixed;bottom:20px;right:20px;background:#4F46E5;color:#fff;padding:15px 25px;border-radius:25px;cursor:pointer;box-shadow:0 4px 12px rgba(0,0,0,.3);z-index:9999;font-weight:bold;text-align:center;font-size:16px" onclick="window.print()">🖨️ Imprimer</div>
           <div style="position:fixed;bottom:80px;right:20px;background:#06B6D4;color:#fff;padding:10px 20px;border-radius:20px;cursor:pointer;box-shadow:0 4px 12px rgba(0,0,0,.3);z-index:9999;font-weight:bold;text-align:center;font-size:14px" onclick="window.close()">✖️ Fermer</div>`;
         w.document.body.appendChild(btn);
-        downloadPrintFile(htmlContent, _title, _numero);
-      }
+        downloadPrintFile(htmlContent, _title, _numero);}
     } catch (e) { console.error("handleMobileNewWindow:", e); downloadPrintFile(htmlContent, _title, _numero); }
   }
   function showMobileDownloadOption(htmlContent, titleDocument, numero) {
@@ -1262,18 +1432,41 @@ body{font-family:'Inter',Arial,sans-serif;margin:0;padding:${isMobileDevice ? "5
   }, [generateCachetHtml, generatePrintHTML, showNotification]);
 
   /* ===================== Filtrage des achats ===================== */
-  const filteredAchats = achats.filter((b) => {
-    if (filterFournisseur && !String(b.fournisseur || "").toLowerCase().includes(filterFournisseur.toLowerCase())) return false;
-    const bonDate = toDateSafe(b.date || b.timestamp);
-    if (filterDateStart && bonDate < new Date(filterDateStart)) return false;
-    if (filterDateEnd && bonDate > new Date(filterDateEnd + "T23:59:59")) return false;
-    if (filterStatutPaiement && b.statutPaiement !== filterStatutPaiement) return false;
-    if (filterStatutReception && (b.statutReception || "en_attente") !== filterStatutReception) return false;
-    return true;
-  });
+  const filteredAchats = React.useMemo(() => {
+    return achats.filter((b) => {
+      if (filterFournisseur && !String(b.fournisseur || "").toLowerCase().includes(filterFournisseur.toLowerCase())) return false;
+      const bonDate = toDateSafe(b.date || b.timestamp);
+      if (filterDateStart && bonDate < new Date(filterDateStart)) return false;
+      if (filterDateEnd && bonDate > new Date(filterDateEnd + "T23:59:59")) return false;
+      if (filterStatutPaiement && b.statutPaiement !== filterStatutPaiement) return false;
+      if (filterStatutReception && (b.statutReception || "en_attente") !== filterStatutReception) return false;
+      return true;
+    });
+  }, [achats, filterFournisseur, filterDateStart, filterDateEnd, filterStatutPaiement, filterStatutReception, toDateSafe]);
 
   /* ===================== Calcul total des bons ===================== */
-  const totalGeneral = filteredAchats.reduce((sum, bon) => sum + getTotalBon(bon), 0);
+  const totalGeneral = React.useMemo(() => {
+    return filteredAchats.reduce((sum, bon) => sum + getTotalBon(bon), 0);
+  }, [filteredAchats, getTotalBon]);
+
+  /* ===================== Impression de la liste filtrée ===================== */
+  const handlePrintFilteredList = useCallback(() => {
+    try {
+      const isMobileDevice = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) || window.innerWidth < 768;
+      const htmlContent = generateFilteredListPrintHTML(filteredAchats, totalGeneral, isMobileDevice);
+      const title = "Etat_Bons_Filtres";
+      
+      if (isMobileDevice) {
+        handleMobilePrint(htmlContent, title, Date.now());
+      } else {
+        handleDesktopPrint(htmlContent, title, Date.now());
+      }
+      showNotification(`Impression de l'état filtré prête ${isMobileDevice ? "(mobile)" : "(desktop)"}`, "success");
+    } catch (e) {
+      console.error("handlePrintFilteredList:", e);
+      showNotification("Erreur lors de la préparation d'impression de la liste", "error");
+    }
+  }, [generateFilteredListPrintHTML, filteredAchats, totalGeneral, showNotification]);
 
   /* ===================== Rendu ===================== */
   if (waiting) {
@@ -1294,8 +1487,6 @@ body{font-family:'Inter',Arial,sans-serif;margin:0;padding:${isMobileDevice ? "5
 
       {/* Notifications */}
       {notification && <div className={`notice ${notification.type || "success"}`}>{notification.message}</div>}
-
-     
 
       {/* Formulaire nouveau / modifier bon — REPLIABLE */}
       <div className="card">
@@ -1392,7 +1583,7 @@ body{font-family:'Inter',Arial,sans-serif;margin:0;padding:${isMobileDevice ? "5
         </div>
       </div>
 
- {/* ===== Transfert Stock1 → Stock2 (Nouveau Bon) ===== */}
+      {/* ===== Transfert Stock1 → Stock2 (Nouveau Bon) ===== */}
       <div className="card" style={{ borderColor: "#D1FAE5" }}>
         <div className="section-title" style={{ justifyContent: "space-between" }}>
           <span>Transfert mensuel — Stock1 → Stock2 (Nouveau Bon)</span>
@@ -1407,15 +1598,15 @@ body{font-family:'Inter',Arial,sans-serif;margin:0;padding:${isMobileDevice ? "5
           <div className="form-panel form-shown">
             <div className="form-panel-inner">
               <div className="notice warning" style={{ marginBottom: 12 }}>
-                Le transfert créera un nouveau bon d'achat (Stock2) et diminuera les quantités du bon original.
+                Le transfert créera un nouveau bon d'achat (Stock2) et diminuera les quantités du bon original. Le nouvel état de paiement est reproduit. Fonctionne pour les réceptions complètes ET partielles.
               </div>
               
               <div className="form-grid">
                 <select className="select" value={transferBonId} onChange={(e) => { setTransferBonId(e.target.value); setTransferArticleIndex(""); }}>
-                  <option value="">— Choisir un bon reçu —</option>
+                  <option value="">— Choisir un bon reçu (total ou partiel) —</option>
                   {transferEligibleBons.map((bon) => (
                     <option key={bon.id} value={bon.id}>
-                      {bon.fournisseur} - {formatDateDisplay(bon.date)} (#{bon.id.slice(0, 8)})
+                      {bon.fournisseur} - {formatDateDisplay(bon.date)} (#{bon.id.slice(0, 8)}) [{bon.statutReception}]
                     </option>
                   ))}
                 </select>
@@ -1459,7 +1650,6 @@ body{font-family:'Inter',Arial,sans-serif;margin:0;padding:${isMobileDevice ? "5
           </div>
         )}
       </div>
-
 
       {/* ÉDITEUR DE RÉCEPTION */}
       {receptionId && (
@@ -1513,6 +1703,7 @@ body{font-family:'Inter',Arial,sans-serif;margin:0;padding:${isMobileDevice ? "5
               {showFilters ? "🔽 Masquer" : "🔎 Filtres"}
             </button>
             {activeFiltersCount > 0 && <span className="filters-badge" title="Filtres actifs">{activeFiltersCount} actif{activeFiltersCount > 1 ? "s" : ""}</span>}
+            <button className="btn btn-primary" onClick={handlePrintFilteredList} title="Imprimer l'état filtré">🖨️ Imprimer liste filtrée</button>
           </div>
         </div>
 

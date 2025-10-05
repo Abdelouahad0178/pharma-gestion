@@ -71,9 +71,29 @@
     ]
   },
   "devDependencies": {
+    "@axe-core/playwright": "^4.10.2",
     "@craco/craco": "^7.1.0",
+    "@lhci/cli": "^0.15.1",
     "autoprefixer": "^10.4.21",
+    "eslint": "^8.57.1",
+    "eslint-plugin-security": "^3.0.1",
+    "lighthouse": "^12.8.2",
+    "playwright": "^1.55.1",
     "postcss": "^8.5.6",
     "tailwindcss": "^4.1.11"
-  }
+  },
+  "description": "This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app).",
+  "main": "craco.config.js",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Abdelouahad0178/pharma-gestion.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/Abdelouahad0178/pharma-gestion/issues"
+  },
+  "homepage": "https://github.com/Abdelouahad0178/pharma-gestion#readme"
 }

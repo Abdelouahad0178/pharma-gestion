@@ -10,7 +10,7 @@ import {
   getDoc,
 } from "firebase/firestore";
 import { useUserRole } from "../../contexts/UserRoleContext";
-import { usePermissions } from "../hooks/usePermissions"; // NOUVEAU IMPORT
+import { usePermissions } from "../hooks/usePermissions";
 import { Link } from "react-router-dom";
 
 /* =========================
@@ -99,9 +99,6 @@ function isCash(mode) {
 
 /* =========================
    Détection du STOCK d'un document (S1/S2)
-   - 1) Doc-level: stockTag/stock/...
-   - 2) Lignes: articles/mouvements
-   - 3) Défaut = stock1 (back-compat)
 ========================= */
 const STOCK_KEYS = [
   "stockTag", "stock", "stockName", "stock_label", "depot", "magasin", "source",
@@ -112,7 +109,7 @@ const STOCK_KEYS = [
 function normalizeStock(val) {
   if (val === undefined || val === null) return "unknown";
   if (typeof val === "number") return val === 1 ? "stock1" : val === 2 ? "stock2" : "unknown";
-  const raw = String(val).toLowerCase().replace(/[\s_\-]/g, "");
+  const raw = String(val).toLowerCase().replace(/[\s_-]/g, "");
   if (["stock1","s1","magasin1","depot1","principal","primary","p","m1","1"].includes(raw)) return "stock1";
   if (["stock2","s2","magasin2","depot2","secondaire","secondary","s","m2","2"].includes(raw)) return "stock2";
   return "unknown";
@@ -149,6 +146,54 @@ function getDocStockTag(doc) {
 }
 const isStock1 = (doc) => getDocStockTag(doc) === "stock1";
 
+/** Détection AU NIVEAU LIGNE (fallback = tag du document, puis S1) */
+function getLineStockTag(line, parentDoc) {
+  for (const k of STOCK_KEYS) {
+    if (line?.[k] !== undefined) {
+      const tag = normalizeStock(line[k]);
+      if (tag !== "unknown") return tag;
+    }
+  }
+  const parent = normalizeStock(getDocStockTag(parentDoc));
+  return parent !== "unknown" ? parent : "stock1";
+}
+
+/* =========================
+   Normalisation NUMÉRO DE LOT
+   (évite la double-comptabilisation sur transferts S1/S2)
+========================= */
+function normalizeLotNumber(lot) {
+  if (!lot) return "-";
+  return String(lot)
+    .replace(/\[TRANSFERT\s+S\d+\]/gi, "")
+    .replace(/-S\d+$/i, "")
+    .replace(/-TRANSFERT.*$/i, "")
+    .trim() || "-";
+}
+
+/* =========================
+   Paiements — détection type
+========================= */
+function isSupplierPayment(p) {
+  const t = norm(p?.type || p?.relatedTo || p?.for || p?.category);
+  return [
+    "achat","achats",
+    "fournisseur","fournisseurs",
+    "supplier","suppliers",
+    "purchase","purchases",
+    "reglementfournisseur","reglement_fournisseur"
+  ].includes(t);
+}
+
+function isSalePayment(p) {
+  const t = norm(p?.type || p?.relatedTo || p?.for || p?.category);
+  return [
+    "vente","ventes",
+    "sale","sales",
+    "reglementclient","reglement_client"
+  ].includes(t);
+}
+
 /* =========================
    Affichage helpers
 ========================= */
@@ -173,8 +218,6 @@ function userDisplayName(user) {
 
 export default function Dashboard() {
   const { user, societeId, role, loading, hasCustomPermissions, getExtraPermissions } = useUserRole();
-  
-  // NOUVEAU : Utiliser le hook permissions
   const { can, isVendeuse } = usePermissions();
 
   // Société
@@ -184,8 +227,8 @@ export default function Dashboard() {
   // Collections
   const [ventes, setVentes] = useState([]);
   const [achats, setAchats] = useState([]);
-  const [stock, setStock] = useState([]);            // produits (si utilisés ailleurs)
-  const [stockEntries, setStockEntries] = useState([]); // lots multi-stocks (stock1/stock2)
+  const [stock, setStock] = useState([]);
+  const [stockEntries, setStockEntries] = useState([]);
   const [paiements, setPaiements] = useState([]);
 
   // UI
@@ -198,12 +241,12 @@ export default function Dashboard() {
   const [dateMin, setDateMin] = useState("");
   const [dateMax, setDateMax] = useState("");
 
-  // Bascule S1 ↔ TOUS (dblclick) — uniquement Ventes & Achats
+  // Bascule S1 ↔ TOUS (dblclick)
   const [showAllVentes, setShowAllVentes] = useState(false);
   const [showAllAchats, setShowAllAchats] = useState(false);
 
-  // Caisse: pas de bascule — TOUS
-  // Paiements: pas de bascule — TOUS
+  // Paiements KPI: par défaut Fournisseurs, dbl-clic => Ventes
+  const [showSalesPayments, setShowSalesPayments] = useState(false);
 
   /* Responsive */
   useEffect(() => {
@@ -253,7 +296,7 @@ export default function Dashboard() {
     // Collections
     const qVentes = query(collection(db, "societe", societeId, "ventes"), orderBy("date", "desc"));
     const qAchats = query(collection(db, "societe", societeId, "achats"), orderBy("timestamp", "desc"));
-    const qStock = collection(db, "societe", societeId, "stock");
+    const qStock = collection(db, "societe", societeId, "stock"); // (fix) pas de parenthèse en trop
     const qStockEntries = query(collection(db, "societe", societeId, "stock_entries"), orderBy("nom"));
     const qPaiements = query(collection(db, "societe", societeId, "paiements"), orderBy("date", "desc"));
 
@@ -272,7 +315,52 @@ export default function Dashboard() {
     return () => { unsubs.forEach(u => { try { u && u(); } catch {} }); };
   }, [loading, user, societeId, toast]);
 
-  /* Calculs */
+  /* =========================
+     CALCULS VENTES (ligne S1/S2)
+  ========================= */
+
+  // Total de toutes les lignes (après remise globale)
+  const computeMontantVenteAll = useCallback((vente) => {
+    const m = Number(vente?.montantTotal) || 0;
+    if (m > 0) return m;
+    const arts = Array.isArray(vente?.articles) ? vente.articles : [];
+    const subtotal = arts.reduce((sum, a) => {
+      const q = Number(a?.quantite) || 0;
+      const pu = Number(a?.prixUnitaire ?? a?.prix ?? 0) || 0;
+      const r = Number(a?.remise) || 0;
+      return sum + (q * pu - r);
+    }, 0);
+    const rTot = Number(vente?.remiseTotal ?? vente?.remiseGlobale ?? 0);
+    return Math.max(0, subtotal - rTot);
+  }, []);
+
+  // Total filtré par tag (ex: "stock1") au NIVEAU LIGNE avec remise globale proportionnelle
+  const computeMontantVenteByTag = useCallback((vente, tag = "stock1") => {
+    const arts = Array.isArray(vente?.articles) ? vente.articles : [];
+    if (arts.length === 0) return 0;
+
+    const subtotalAllBefore = arts.reduce((sum, a) => {
+      const q = Number(a?.quantite) || 0;
+      const pu = Number(a?.prixUnitaire ?? a?.prix ?? 0) || 0;
+      const r = Number(a?.remise) || 0;
+      return sum + (q * pu - r);
+    }, 0);
+
+    const subtotalTag = arts.reduce((sum, a) => {
+      if (getLineStockTag(a, vente) !== tag) return sum;
+      const q = Number(a?.quantite) || 0;
+      const pu = Number(a?.prixUnitaire ?? a?.prix ?? 0) || 0;
+      const r = Number(a?.remise) || 0;
+      return sum + (q * pu - r);
+    }, 0);
+
+    const rTot = Number(vente?.remiseTotal ?? vente?.remiseGlobale ?? 0);
+    const partRemise = subtotalAllBefore > 0 ? (subtotalTag / subtotalAllBefore) * rTot : 0;
+
+    return Math.max(0, subtotalTag - partRemise);
+  }, []);
+
+  /* Calculs existants (achats/doc, paiements, ruptures, compteur produits) */
   const computeMontantAchat = useCallback((achat) => {
     const m = Number(achat?.montantTotal) || Number(achat?.montant) || 0;
     if (m > 0) return m;
@@ -288,20 +376,6 @@ export default function Dashboard() {
     return Math.max(0, subtotal - rg);
   }, []);
 
-  const computeMontantVente = useCallback((vente) => {
-    const m = Number(vente?.montantTotal) || 0;
-    if (m > 0) return m;
-    const arts = Array.isArray(vente?.articles) ? vente.articles : [];
-    const subtotal = arts.reduce((sum, a) => {
-      const q = Number(a?.quantite) || 0;
-      const pu = Number(a?.prixUnitaire ?? a?.prix ?? 0) || 0;
-      const r = Number(a?.remise) || 0;
-      return sum + (q * pu - r);
-    }, 0);
-    const rTot = Number(vente?.remiseTotal ?? vente?.remiseGlobale ?? 0);
-    return Math.max(0, subtotal - rTot);
-  }, []);
-
   const {
     totalVentes,
     totalAchats,
@@ -315,30 +389,58 @@ export default function Dashboard() {
     const aPer = achats.filter(a => inPeriod(achatDate(a),        periode, dateMin, dateMax));
     const pPer = paiements.filter(p => inPeriod(p.date || p.timestamp, periode, dateMin, dateMax));
 
-    // RÈGLE: Ventes/Achats = S1 par défaut, dbl-click ⇒ TOUS
-    const vUsed = showAllVentes ? vPer : vPer.filter(isStock1);
-    const aUsed = showAllAchats ? aPer : aPer.filter(isStock1);
+    // VENTES — S1 par défaut (somme des lignes S1), TOUS en double-clic
+    const totalVentes = showAllVentes
+      ? vPer.reduce((s,v) => s + computeMontantVenteAll(v), 0)
+      : vPer.reduce((s,v) => s + computeMontantVenteByTag(v, "stock1"), 0);
 
-    // Totaux
-    const totalVentes = vUsed.reduce((s,v) => s + computeMontantVente(v), 0);
+    // ACHATS — filtre doc (inchangé)
+    const aUsed = showAllAchats ? aPer : aPer.filter(isStock1);
     const totalAchats = aUsed.reduce((s,a) => s + computeMontantAchat(a), 0);
 
-    // Paiements: TOUS (S1+S2)
-    const totalPaiements = pPer.reduce((s,p) => s + (Number(p?.montant) || 0), 0);
+    // PAIEMENTS — Fournisseurs (def) ⇄ Ventes (dbl-clic)
+    const totalPaiements = pPer
+      .filter(p => showSalesPayments ? isSalePayment(p) : isSupplierPayment(p))
+      .reduce((s,p) => s + (Number(p?.montant) || 0), 0);
 
-    // Caisse (espèces aujourd'hui): TOUS (S1+S2)
+    // ====== PRODUITS EN STOCK (S1+S2) — DÉDUPLIQUÉ ======
+    const uniqueIds = new Set();
+
+    const totalQtyOfStockItem = (item) => {
+      const q = Number(item?.quantite);
+      if (Number.isFinite(q) && q > 0) return q;
+      const s1 = Number(item?.stock1) || 0;
+      const s2 = Number(item?.stock2) || 0;
+      return s1 + s2;
+    };
+
+    (Array.isArray(stock) ? stock : []).forEach((item) => {
+      const nom = item?.nom || item?.name || "";
+      const key = `p|${norm(nom)}`;
+      const qty = totalQtyOfStockItem(item);
+      if (qty > 0 && nom) uniqueIds.add(key);
+    });
+
+    (Array.isArray(stockEntries) ? stockEntries : []).forEach((lot) => {
+      const nom = lot?.nom || "";
+      const lotNum = normalizeLotNumber(lot?.numeroLot);
+      const qty = (Number(lot?.stock1) || 0) + (Number(lot?.stock2) || 0);
+      const key = `l|${norm(nom)}|${norm(lotNum)}`;
+      if (qty > 0 && nom) uniqueIds.add(key);
+    });
+
+    const produitsStock = uniqueIds.size;
+
+    // Caisse (espèces aujourd'hui)
     const soldeCaisse = pPer.reduce((s,p) => {
       if (!sameLocalDay(p?.date ?? p?.timestamp)) return s;
-      const typeRaw = String(p?.type || p?.relatedTo || p?.for || "").toLowerCase();
-      if (!["vente","ventes"].includes(typeRaw)) return s;
+      const typeRaw = String(p?.type || p?.relatedTo || p?.for || p?.category || "").toLowerCase();
+      if (!["vente","ventes","sale","sales","reglementclient","reglement_client"].includes(typeRaw)) return s;
       if (!isCash(p?.mode ?? p?.paymentMode ?? p?.moyen ?? p?.typePaiement)) return s;
       return s + (Number(p?.montant) || 0);
     }, 0);
 
-    // Produits (stock + lots) — total S1+S2
-    const produitsStock = stock.length + (Array.isArray(stockEntries) ? stockEntries.filter(e => (Number(e.quantite)||0) > 0).length : 0);
-
-    // Ruptures & péremptions (≤ 180 j)
+    // Ruptures & péremptions
     const rows = [];
     (Array.isArray(stock) ? stock : []).forEach((item) => {
       const q = Number(item.quantite) || 0;
@@ -351,7 +453,7 @@ export default function Dashboard() {
       }
     });
     (Array.isArray(stockEntries) ? stockEntries : []).forEach((lot) => {
-      const q = Number(lot.stock1 || 0) + Number(lot.stock2 || 0); // total réel
+      const q = (Number(lot.stock1 || 0) + Number(lot.stock2 || 0));
       const seuil = Number(lot.seuil) > 0 ? Number(lot.seuil) : DEFAULT_SEUIL;
       const dluo = lot.datePeremption ? daysToExp(lot.datePeremption) : null;
       const byQty = (q <= 0) || (q <= seuil);
@@ -373,8 +475,9 @@ export default function Dashboard() {
   }, [
     ventes, achats, paiements, stock, stockEntries,
     periode, dateMin, dateMax,
-    showAllVentes, showAllAchats,
-    computeMontantAchat, computeMontantVente
+    showAllVentes, showAllAchats, showSalesPayments,
+    computeMontantVenteAll, computeMontantVenteByTag,
+    computeMontantAchat
   ]);
 
   /* Styles */
@@ -390,8 +493,7 @@ export default function Dashboard() {
       title: { textAlign: "center", fontSize: isMobile ? "1.8em" : "2.6em", fontWeight: 800, margin: "6px 0 0" },
       subtitle: { textAlign: "center", opacity: .9, marginTop: 6 },
       actions: { marginTop: 16, display: "flex", gap: 12, justifyContent: "center", flexWrap: "wrap" },
-      btn: { width: tile, height: tile, border: "none", borderRadius: isMobile ? 14 : 18, background: "linear-gradient(135deg,#667eea,#764ba2)", color:"#fff", fontWeight:800, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", gap:10, textDecoration:"none", boxShadow:"0 16px 40px rgba(0,0,0,.2)", position: "relative" }, // NOUVEAU: position relative
-      // NOUVEAU: Style pour badge permissions étendues
+      btn: { width: tile, height: tile, border: "none", borderRadius: isMobile ? 14 : 18, background: "linear-gradient(135deg,#667eea,#764ba2)", color:"#fff", fontWeight:800, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", gap:10, textDecoration:"none", boxShadow:"0 16px 40px rgba(0,0,0,.2)", position: "relative" },
       extendedBadge: { position: "absolute", top: 8, right: 8, background: "linear-gradient(90deg, #ffd700, #ffed4a)", color: "#1a2332", fontSize: "10px", fontWeight: "bold", padding: "2px 6px", borderRadius: "8px", boxShadow: "0 2px 4px rgba(0,0,0,0.2)" },
       content: { padding: isMobile ? 18 : 34 },
       grid: { display: "grid", gridTemplateColumns: isMobile ? "1fr" : isTablet ? "1fr 1fr" : "repeat(5,1fr)", gap: isMobile ? 14 : 22, marginBottom: isMobile ? 16 : 24 },
@@ -411,17 +513,17 @@ export default function Dashboard() {
   const displayRole = roleDisplay(role);
   const initials = (displayName||"U").split(" ").map(p=>p.trim()[0]).filter(Boolean).slice(0,2).join("").toUpperCase();
 
-  // NOUVEAU : Déterminer quelles permissions sont étendues pour cette vendeuse
+  // Permissions étendues
   const extraPermissions = isVendeuse() && hasCustomPermissions() ? getExtraPermissions() : [];
-  const isAchatsExtended = extraPermissions.includes('voir_achats');
-  const isParametresExtended = extraPermissions.includes('parametres');
+  const isAchatsExtended = extraPermissions.includes("voir_achats");
+  const isParametresExtended = extraPermissions.includes("parametres");
 
   /* Render */
   return (
     <div style={styles.container}>
       <div style={styles.card}>
         <div style={styles.header}>
-          {/* Chip utilisateur MODIFIÉ */}
+          {/* Chip utilisateur */}
           <div style={styles.chipRow}>
             <div style={styles.chip} title={`${displayRole} — ${displayName}`}>
               <div style={styles.avatar}>{initials}</div>
@@ -429,7 +531,6 @@ export default function Dashboard() {
                 <div style={{fontWeight:800, fontSize:13}}>{displayName}</div>
                 <div style={{fontWeight:700, fontSize:12, opacity:.9}}>
                   {displayRole}
-                  {/* NOUVEAU : Indicateur permissions étendues */}
                   {isVendeuse() && extraPermissions.length > 0 && (
                     <span style={{
                       marginLeft: 6,
@@ -451,26 +552,22 @@ export default function Dashboard() {
           <h1 style={styles.title}>Tableau de Bord</h1>
           <div style={styles.subtitle}>{societeLoading ? "Chargement…" : (societeInfo?.nom || "Société")}</div>
 
-          {/* SECTION ACTIONS MODIFIÉE */}
+          {/* Actions */}
           <div style={styles.actions}>
-            {/* Nouvelle vente - accessible à tous les rôles ayant voir_ventes */}
             {can("voir_ventes") && (
               <Link to="/ventes" style={{...styles.btn, background:"linear-gradient(135deg,#22c55e,#16a34a)"}} title="Nouvelle vente">
                 <div style={{fontSize:isMobile?"2.1em":"2.4em"}}>🧾</div><div>Nouvelle vente</div>
               </Link>
             )}
 
-            {/* Stock - accessible avec voir_stock */}
             {can("voir_stock") && (
               <Link to="/stock" style={{...styles.btn, background:"linear-gradient(135deg,#06b6d4,#0891b2)"}} title="Gérer Stock & Lots">
                 <div style={{fontSize:isMobile?"2.1em":"2.4em"}}>📦</div><div>Gérer Stock & Lots</div>
               </Link>
             )}
 
-            {/* NOUVEAU : Achats - basé sur permission au lieu de rôle */}
             {can("voir_achats") && (
               <Link to="/achats" style={{...styles.btn, background:"linear-gradient(135deg,#4299e1,#3182ce)"}} title="Nouvel achat">
-                {/* NOUVEAU : Badge pour permissions étendues */}
                 {isAchatsExtended && (
                   <div style={styles.extendedBadge}>✨ Étendue</div>
                 )}
@@ -478,10 +575,8 @@ export default function Dashboard() {
               </Link>
             )}
 
-            {/* NOUVEAU : Paramètres - basé sur permission au lieu de rôle */}
             {can("parametres") && (
               <Link to="/parametres" style={{...styles.btn, background:"linear-gradient(135deg,#718096,#4a5568)"}} title="Paramètres & sauvegarde">
-                {/* NOUVEAU : Badge pour permissions étendues */}
                 {isParametresExtended && (
                   <div style={styles.extendedBadge}>✨ Étendue</div>
                 )}
@@ -500,7 +595,7 @@ export default function Dashboard() {
         </div>
 
         <div style={styles.content}>
-          {/* KPI cards - inchangés */}
+          {/* KPI cards */}
           <div style={styles.grid}>
             {/* VENTES: défaut S1, dbl-click => S1+S2 */}
             <div
@@ -526,15 +621,20 @@ export default function Dashboard() {
               <div>Achats ({periode})</div>
             </div>
 
-            {/* PAIEMENTS: TOUS */}
-            <div style={{...styles.kpiCard, cursor:"default"}} title="Somme des paiements ">
+            {/* PAIEMENTS: Fournisseurs (def) ⇄ Ventes (dbl-clic) */}
+            <div
+              style={styles.kpiCard}
+              onDoubleClick={() => setShowSalesPayments(v => !v)}
+              title="Double-clic: basculer Fournisseurs / Ventes (tous modes)"
+            >
+              <div style={styles.badge}>{showSalesPayments ? "VENTES" : "FOURNISSEURS"}</div>
               <div style={{fontSize:isMobile?"2.1em":"2.4em", marginBottom:10}}>💵</div>
               <div style={styles.kpiValue("#16a34a")}>{formatDH(totalPaiements)}</div>
-              <div>Paiements ({periode})</div>
+              <div>Paiements ({showSalesPayments ? "Ventes" : "Fournisseurs"})</div>
             </div>
 
-            {/* PRODUITS: total S1+S2 */}
-            <div style={{...styles.kpiCard, cursor:"default"}} title="Produits (stock + lots)">
+            {/* PRODUITS: total S1+S2 DÉDUPLIQUÉ */}
+            <div style={{...styles.kpiCard, cursor:"default"}} title="Produits (stock + lots) — dédupliqué">
               <div style={{fontSize:isMobile?"2.1em":"2.4em", marginBottom:10}}>📚</div>
               <div style={styles.kpiValue("#06b6d4")}>{produitsStock}</div>
               <div>Médicaments(Stock)</div>
@@ -548,20 +648,30 @@ export default function Dashboard() {
             </div>
           </div>
 
-          {/* Filtres période - inchangés */}
+          {/* Filtres période */}
           <div style={{ margin: "10px 0 20px", display: "flex", gap: 12, flexWrap: "wrap" }}>
-            <select value={periode} onChange={(e) => setPeriode(e.target.value)} style={{ padding: '8px', borderRadius: '6px', border: '1px solid #ccc' }}>
+            <select value={periode} onChange={(e) => setPeriode(e.target.value)} style={{ padding: "8px", borderRadius: "6px", border: "1px solid #ccc" }}>
               <option value="jour">Aujourd'hui</option>
               <option value="semaine">Cette Semaine</option>
               <option value="mois">Ce Mois</option>
               <option value="annee">Cette Année</option>
               <option value="toutes">Toutes les dates</option>
             </select>
-            <input type="date" value={dateMin} onChange={(e) => setDateMin(e.target.value)} style={{ padding: '8px', borderRadius: '6px', border: '1px solid #ccc' }} />
-            <input type="date" value={dateMax} onChange={(e) => setDateMax(e.target.value)} style={{ padding: '8px', borderRadius: '6px', border: '1px solid #ccc' }} />
+            <input
+              type="date"
+              value={dateMin}
+              onChange={(e) => setDateMin(e.target.value)}
+              style={{ padding: "8px", borderRadius: "6px", border: "1px solid #ccc" }}
+            />
+            <input
+              type="date"
+              value={dateMax}
+              onChange={(e) => setDateMax(e.target.value)}
+              style={{ padding: "8px", borderRadius: "6px", border: "1px solid #ccc" }}
+            />
           </div>
 
-          {/* Ruptures & péremptions - inchangés */}
+          {/* Ruptures & péremptions */}
           <h3 style={{fontWeight:800, fontSize:isMobile?"1.15em":"1.35em", margin:"16px 0 10px", color:"#2d3748"}}>
             Ruptures & péremptions (≤ {EXPIRY_THRESHOLD_DAYS} jours)
           </h3>
@@ -612,9 +722,7 @@ export default function Dashboard() {
       </div>
 
       {notification && (
-        <div
-          style={styles.notif(notification.type === "success")}
-        >
+        <div style={styles.notif(notification.type === "success")}>
           {notification.message}
         </div>
       )}
