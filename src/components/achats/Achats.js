@@ -139,6 +139,13 @@ export default function Achats() {
       .filters-shown{ max-height:900px; opacity:1; }
       .form-shown{ max-height:2000px; opacity:1; }
       .filters-badge{ background:#EEF2FF; color:#3730A3; border:1px solid #C7D2FE; border-radius:999px; padding:4px 10px; font-weight:800; font-size:12px; }
+
+      /* Lien "supprimer" inline dans la cellule fournisseur pour les transferts */
+      .inline-delete{
+        margin-left:8px; font-weight:800; font-size:12px; color:#DC2626; cursor:pointer;
+        background:transparent; border:none; padding:0;
+      }
+      .inline-delete:hover{ text-decoration:underline; }
     `;
     document.head.appendChild(style);
   }, []);
@@ -920,11 +927,10 @@ export default function Achats() {
       // 2) Calcul du montant transféré (pour gérer paiements/statut)
       const prixAchatUnit = Number(articleOriginal.recu.prixUnitaire || articleOriginal.recu.prixAchat || 0);
       const remiseItem = Number(articleOriginal.recu.remise || 0);
-      // S'il y a des remises article sur tout le lot original, on les applique proportionnellement (simple : par unité)
       const remiseParUnite = currentQty > 0 ? (remiseItem / currentQty) : 0;
       const montantTransfere = qtyToTransfer * prixAchatUnit - qtyToTransfer * remiseParUnite;
 
-      // 3) Récupérer paiements du bon original (pour reproduire l'état sur le nouveau)
+      // 3) Récupérer paiements du bon original
       let totalOriginal = getTotalBon(bonOriginal);
       if (totalOriginal < 0) totalOriginal = 0;
 
@@ -938,13 +944,9 @@ export default function Achats() {
       const paiementsOriginal = [];
       paysSnap.forEach((d) => paiementsOriginal.push({ id: d.id, ...d.data() }));
       const totalPayeOriginal = paiementsOriginal.reduce((s, p) => s + (Number(p.montant) || 0), 0);
-      // Mode de paiement à copier (dernier paiement connu, sinon "Espèces")
       const lastMode = (paiementsOriginal[0]?.mode) || (paiementsOriginal[paiementsOriginal.length - 1]?.mode) || "Espèces";
 
       // 4) Déterminer le paiement du nouveau bon
-      //    - "payé" : on paie 100% du montant transféré
-      //    - "partiel" : paiement proportionnel au ratio (totalPayeOriginal / totalOriginal)
-      //    - "impayé" : pas de paiement créé
       let montantPaiementNouveau = 0;
       let statutPaiementNouveau = "impayé";
 
@@ -963,17 +965,17 @@ export default function Achats() {
           statutPaiementNouveau = "partiel";
         }
       } else {
-        // impayé
         montantPaiementNouveau = 0;
         statutPaiementNouveau = "impayé";
       }
 
-      // 5) Créer le nouveau bon de transfert (Stock2) avec le statut de paiement calculé
+      // 5) Créer le nouveau bon de transfert (Stock2) — libellé TRANSFERT STOCK + suppression plus visible
+      const fournisseurTransfert = bonOriginal.fournisseur + " [TRANSFERT STOCK]";
       const nouveauBonRef = await addDoc(collection(db, "societe", societeId, "achats"), {
-        fournisseur: bonOriginal.fournisseur + " [TRANSFERT]",
+        fournisseur: fournisseurTransfert,
         date: Timestamp.now(),
         timestamp: Timestamp.now(),
-        statutPaiement: statutPaiementNouveau, // hérite/adapté
+        statutPaiement: statutPaiementNouveau,
         remiseGlobale: 0,
         articles: [articleTransfere],
         statutReception: "reçu",
@@ -988,14 +990,14 @@ export default function Achats() {
         stockSource: "stock2",
         magasin: "stock2",
         depot: "stock2",
-        // Marquer comme transfert
+        // flags
         isTransferred: true,
         originalBonId: transferBonId,
         transferNote: transferNote || "Transfert mensuel Stock1 → Stock2",
         transferDate: Timestamp.now()
       });
 
-      // 6) Si paiement à générer sur le nouveau bon, le créer (un seul, mode = dernier du bon d'origine)
+      // 6) Paiement éventuel sur le nouveau bon
       if (montantPaiementNouveau > 0.001) {
         await addDoc(collection(db, "societe", societeId, "paiements"), {
           docId: nouveauBonRef.id,
@@ -1017,7 +1019,7 @@ export default function Achats() {
             mode: lastMode || "Espèces",
             type: "achats",
             montant: Number(montantPaiementNouveau.toFixed(2)),
-            fournisseur: bonOriginal.fournisseur + " [TRANSFERT]",
+            fournisseur: fournisseurTransfert,
             paiementAuto: true,
             fromTransfer: true,
             originalBonId: transferBonId,
@@ -1026,7 +1028,7 @@ export default function Achats() {
         });
       }
 
-      // 7) Mettre à jour le bon original (diminuer la quantité)
+      // 7) Mise à jour du bon original (diminuer la quantité)
       const articlesOriginalUpdated = [...bonOriginal.articles];
       articlesOriginalUpdated[articleIndex] = {
         ...articleOriginal,
@@ -1043,10 +1045,10 @@ export default function Achats() {
         lastTransferNote: transferNote || "Transfert mensuel Stock1 → Stock2"
       });
 
-      // 8) Créer l'entrée stock pour le nouveau bon (Stock2)
+      // 8) Entrée stock pour le nouveau bon (Stock2)
       await updateStockOnAdd({
         id: nouveauBonRef.id,
-        fournisseur: bonOriginal.fournisseur + " [TRANSFERT]",
+        fournisseur: fournisseurTransfert,
         stock: "stock2",
         articles: [{ 
           produit: articleOriginal.produit, 
@@ -1742,8 +1744,18 @@ body{font-family:'Inter',Arial,sans-serif;margin:0;padding:${isMobileDevice ? "5
                   {filteredAchats.map((b) => (
                     <tr key={b.id} className={b.isTransferred ? "bon-transfere" : (b.originalBonId ? "bon-original" : "")}>
                       <td className="left">
+                        {/* Fournisseur + badge transfert + lien (supprimer) inline si TRANSFERT STOCK */}
                         {b.fournisseur}
                         {b.isTransferred && <span style={{ fontSize: "11px", color: "#06B6D4", marginLeft: 4 }}>🔄</span>}
+                        {b.isTransferred && (
+                          <button
+                            className="inline-delete"
+                            title="Supprimer ce bon de transfert"
+                            onClick={() => handleDeleteBon(b)}
+                          >
+                            (supprimer)
+                          </button>
+                        )}
                       </td>
                       <td>{formatDateDisplay(b.date || b.timestamp)}</td>
                       <td>{b.statutPaiement}</td>

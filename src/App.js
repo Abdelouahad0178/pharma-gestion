@@ -1,4 +1,4 @@
-// src/App.js - Version avec synchro temps réel globale Ventes -> Stock (CORRIGÉE)
+// src/App.js - Synchro ventes -> stock + Clients + Placeholders Commandes (lint clean)
 
 import React, { useState, useEffect, useRef } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate, useLocation } from 'react-router-dom';
@@ -24,6 +24,10 @@ import Homepage from './components/Homepage';
 import Protected from './components/Protected';
 import AddSocieteIdToAllUsers from './components/admin/AddSocieteIdToAllUsers';
 import InitOwner from './components/admin/InitOwner';
+import Clients from './components/clients/Clients';
+
+// 🆕 Page Abonnement (PayPal)
+import Abonnement from './pages/Abonnement';
 
 // Contexte & styles
 import { UserRoleProvider, useUserRole } from './contexts/UserRoleContext';
@@ -34,21 +38,59 @@ import { db } from './firebase/config';
 import { attachRealtimeSalesSync } from './lib/realtimeSalesSync';
 
 /* -------------------------------------------
+ * Placeholders Commandes (évite Module not found)
+ * -----------------------------------------*/
+// Quand tu auras créé :
+//   - src/components/commandes/Commandes.js
+//   - src/components/commandes/NouvelleCommande.js
+// supprime les deux composants ci-dessous et remets :
+// import Commandes from './components/commandes/Commandes';
+// import NouvelleCommande from './components/commandes/NouvelleCommande';
+const PlaceholderCard = ({ title, text, hint }) => (
+  <div style={{ minHeight: '60vh', display: 'grid', placeItems: 'center', background: '#f6f8fa', padding: 24 }}>
+    <div style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: 14, padding: 24, maxWidth: 720 }}>
+      <h2 style={{ margin: '0 0 8px' }}>{title}</h2>
+      <p style={{ margin: 0, color: '#6b7280' }}>{text}</p>
+      {hint && (
+        <div style={{ marginTop: 12 }}>
+          <code style={{ background: '#f3f4f6', padding: '6px 8px', borderRadius: 8, display: 'inline-block' }}>{hint}</code>
+        </div>
+      )}
+    </div>
+  </div>
+);
+const Commandes = () => (
+  <PlaceholderCard
+    title="Commandes (liste/gestion)"
+    text="Crée src/components/commandes/Commandes.js puis remets l'import dans App.js."
+    hint="src/components/commandes/Commandes.js"
+  />
+);
+const NouvelleCommande = () => (
+  <PlaceholderCard
+    title="Nouvelle commande"
+    text="Choisir un produit existant du stock ou créer un nouveau ; si le produit existe (même avec quantité 0), afficher la quantité en 'État stock'. Crée src/components/commandes/NouvelleCommande.js puis remets l'import."
+    hint="src/components/commandes/NouvelleCommande.js"
+  />
+);
+
+/* -------------------------------------------
  * Loader de démarrage (UI uniquement)
  * -----------------------------------------*/
 const AppLoader = ({ onLoadingComplete, minLoadingTime = 2500 }) => {
   const [progress, setProgress] = useState(0);
   const [loadingText, setLoadingText] = useState('Initialisation...');
 
-  const loadingSteps = [
-    { progress: 20, text: 'Chargement des ressources...' },
-    { progress: 40, text: 'Configuration Firebase...' },
-    { progress: 60, text: 'Synchronisation des données...' },
-    { progress: 80, text: 'Préparation de l\'interface...' },
-    { progress: 100, text: 'Prêt !' }
-  ];
-
   useEffect(() => {
+    // ✅ steps dans l’effet pour éviter le warning deps
+    const loadingSteps = [
+      { progress: 20, text: 'Chargement des ressources...' },
+      { progress: 40, text: 'Configuration Firebase...' },
+      { progress: 60, text: 'Synchronisation des données...' },
+      { progress: 80, text: "Préparation de l'interface..." },
+      { progress: 100, text: 'Prêt !' }
+    ];
+
     let currentStep = 0;
     const startTime = Date.now();
 
@@ -69,7 +111,7 @@ const AppLoader = ({ onLoadingComplete, minLoadingTime = 2500 }) => {
 
     const t = setTimeout(updateProgress, 300);
     return () => clearTimeout(t);
-  }, [minLoadingTime, onLoadingComplete, loadingSteps]);
+  }, [minLoadingTime, onLoadingComplete]);
 
   return (
     <div style={{
@@ -235,15 +277,15 @@ function BackupPage() {
             <div style={{ color: '#99b2d4', lineHeight: 1.8 }}>
               <div style={{ display: 'grid', gap: 12 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                  <span style={{ fontSize: '1.2rem' }}>Sécurité :</span>
+                  <span style={{ fontSize: '1.2rem' }}>🔒</span>
                   <span>Seul le propriétaire peut créer des sauvegardes complètes.</span>
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                  <span style={{ fontSize: '1.2rem' }}>Localisation :</span>
+                  <span style={{ fontSize: '1.2rem' }}>📁</span>
                   <span>Fichiers JSON téléchargés dans "Téléchargements".</span>
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                  <span style={{ fontSize: '1.2rem' }}>Fréquence :</span>
+                  <span style={{ fontSize: '1.2rem' }}>⏰</span>
                   <span>Sauvegarde complète hebdomadaire recommandée.</span>
                 </div>
               </div>
@@ -258,15 +300,15 @@ function BackupPage() {
             <div style={{ color: '#99b2d4', lineHeight: 1.8 }}>
               <div style={{ display: 'grid', gap: 12 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                  <span style={{ fontSize: '1.2rem' }}>Attention :</span>
+                  <span style={{ fontSize: '1.2rem' }}>⚠️</span>
                   <span>L'import modifie les données selon le mode choisi.</span>
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                  <span style={{ fontSize: '1.2rem' }}>Format :</span>
+                  <span style={{ fontSize: '1.2rem' }}>📄</span>
                   <span>Fichiers JSON générés par cette application.</span>
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                  <span style={{ fontSize: '1.2rem' }}>Recommandation :</span>
+                  <span style={{ fontSize: '1.2rem' }}>💾</span>
                   <span>Sauvegarde avant import en mode remplacement.</span>
                 </div>
               </div>
@@ -296,49 +338,36 @@ function GestionRolesPage() {
 
 /* -------------------------------------------
  * ✅ Démarrage GLOBAL de la synchro ventes→stock
- *  - S'attache UNE SEULE FOIS dès que user + societeId sont prêts
- *  - Utilise user?.uid comme dépendance (primitive stable)
- *  - Nettoyage automatique au changement de session
  * -----------------------------------------*/
 function RealtimeSyncBoot() {
   const { user, societeId, loading } = useUserRole();
   const detachRef = useRef(null);
-  const userId = user?.uid; // ✅ Extraction primitive stable
+  const userId = user?.uid;
 
   useEffect(() => {
-    // Cleanup immédiat si loading ou pas de session
     if (loading || !userId || !societeId) {
       if (detachRef.current) {
-        console.log('[App] 🔌 Détachement sync (session invalide)');
         try { detachRef.current(); } catch {}
         detachRef.current = null;
       }
       return;
     }
 
-    // Éviter double attachement
-    if (detachRef.current) {
-      console.log('[App] ⚠️ Listener déjà actif, skip re-attachment');
-      return;
-    }
+    if (detachRef.current) return;
 
-    // ✅ Attachement unique du listener global
-    console.log(`[App] 🔗 Démarrage sync ventes→stock (société: ${societeId.slice(0, 8)}...)`);
     detachRef.current = attachRealtimeSalesSync(db, {
       societeId,
-      user: { uid: userId, email: user?.email }, // Passer seulement ce qui est nécessaire
+      user: { uid: userId, email: user?.email },
       enabled: true
     });
 
-    // Cleanup au démontage
     return () => {
       if (detachRef.current) {
-        console.log('[App] 🔌 Détachement sync (unmount/session change)');
         try { detachRef.current(); } catch {}
         detachRef.current = null;
       }
     };
-  }, [userId, societeId, loading, user?.email]); // ✅ Dépendances primitives stables
+  }, [userId, societeId, loading, user?.email]);
 
   return null;
 }
@@ -348,7 +377,6 @@ function RealtimeSyncBoot() {
  * -----------------------------------------*/
 function AppWrapper() {
   const location = useLocation();
-
   const hideNavbar = [
     '/',
     '/login',
@@ -358,9 +386,7 @@ function AppWrapper() {
 
   return (
     <>
-      {/* ⚡️ Synchro ventes→stock attachée UNE SEULE FOIS pour toute l'app */}
       <RealtimeSyncBoot />
-
       {!hideNavbar && <Navbar />}
       <div style={{ minHeight: '100vh', background: hideNavbar && location.pathname === '/' ? 'transparent' : '#f6f8fa' }}>
         <Routes>
@@ -395,6 +421,7 @@ function AppWrapper() {
               </Protected>
             }
           />
+
           <Route
             path="/ventes"
             element={
@@ -414,6 +441,34 @@ function AppWrapper() {
             }
           />
 
+          {/* Clients */}
+          <Route
+            path="/clients"
+            element={
+              <Protected permission="voir_ventes">
+                <Clients />
+              </Protected>
+            }
+          />
+
+          {/* Commandes (placeholders) */}
+          <Route
+            path="/commandes"
+            element={
+              <Protected permission="voir_ventes">
+                <Commandes />
+              </Protected>
+            }
+          />
+          <Route
+            path="/commandes/nouveau"
+            element={
+              <Protected permission="voir_ventes">
+                <NouvelleCommande />
+              </Protected>
+            }
+          />
+
           <Route
             path="/devis-factures"
             element={
@@ -422,6 +477,7 @@ function AppWrapper() {
               </Protected>
             }
           />
+
           <Route
             path="/paiements"
             element={
@@ -475,6 +531,16 @@ function AppWrapper() {
             element={
               <Protected permission="parametres">
                 <UsersPage />
+              </Protected>
+            }
+          />
+
+          {/* 🆕 Abonnement (PayPal) */}
+          <Route
+            path="/abonnement"
+            element={
+              <Protected permission="voir_dashboard">
+                <Abonnement />
               </Protected>
             }
           />

@@ -82,49 +82,56 @@ export default function Navbar() {
   }, []);
 
   // ================= MENU MODIFIÉ ==================
-  // ANCIEN système : basé sur les rôles
-  // NOUVEAU système : basé sur les permissions avec can()
+  // Système basé sur les permissions avec can()
   const menuItems = [
     { 
       text: "Dashboard", 
       icon: <DashboardIcon />, 
       path: "/dashboard", 
-      permission: "voir_dashboard", // NOUVEAU
+      permission: "voir_dashboard",
       description: "Tableau de bord principal" 
     },
     { 
       text: "Achats", 
       icon: <ShoppingCartIcon />, 
       path: "/achats", 
-      permission: "voir_achats", // NOUVEAU
+      permission: "voir_achats",
       description: "Gestion des achats fournisseurs" 
     },
     { 
       text: "Ventes", 
       icon: <PointOfSaleIcon />, 
       path: "/ventes", 
-      permission: "voir_ventes", // NOUVEAU
+      permission: "voir_ventes",
       description: "Gestion des ventes clients" 
+    },
+    // ✅ NOUVEAU : Clients
+    { 
+      text: "Clients", 
+      icon: <PeopleIcon />, 
+      path: "/clients", 
+      permission: "voir_ventes", // on réutilise cette permission pour éviter de créer une nouvelle
+      description: "Gestion des clients, commandes & paiements" 
     },
     { 
       text: "Stock", 
       icon: <LocalPharmacyIcon />, 
       path: "/stock", 
-      permission: "voir_stock", // NOUVEAU
+      permission: "voir_stock",
       description: "Gestion du stock pharmacie" 
     },
     { 
       text: "Devis & Factures", 
       icon: <DescriptionIcon />, 
       path: "/devis-factures", 
-      permission: "voir_devis_factures", // NOUVEAU
+      permission: "voir_devis_factures",
       description: "Gestion devis et factures" 
     },
     { 
       text: "Paiements", 
       icon: <AttachMoneyIcon />, 
       path: "/paiements", 
-      permission: "voir_paiements", // NOUVEAU
+      permission: "voir_paiements",
       description: "Suivi des paiements" 
     },
     { 
@@ -140,7 +147,7 @@ export default function Navbar() {
       text: "Utilisateurs", 
       icon: <PeopleIcon />, 
       path: "/users", 
-      permission: "gerer_utilisateurs", // NOUVEAU
+      permission: "gerer_utilisateurs",
       description: "Gestion des invitations et utilisateurs", 
       isAdmin: true 
     },
@@ -148,7 +155,7 @@ export default function Navbar() {
       text: "👑 Gestion Rôles", 
       icon: <ManageAccountsIcon />, 
       path: "/gestion-utilisateurs", 
-      permission: "gerer_utilisateurs", // NOUVEAU
+      permission: "gerer_utilisateurs",
       ownerOnly: true, 
       description: "Promotion/rétrogradation des utilisateurs", 
       isOwnerSpecial: true 
@@ -157,7 +164,7 @@ export default function Navbar() {
       text: "Paramètres", 
       icon: <SettingsIcon />, 
       path: "/parametres", 
-      permission: "parametres", // NOUVEAU
+      permission: "parametres",
       description: "Configuration système" 
     },
   ];
@@ -280,18 +287,15 @@ export default function Navbar() {
       <List>
         {menuItems
           .filter(item => {
-            // NOUVELLE LOGIQUE : Utiliser can() au lieu de allowed
+            // Utiliser can() au lieu d'un mapping rôle→routes
             if (!can(item.permission)) return false;
             if (item.ownerOnly && !isOwner) return false;
             return true;
           })
           .map((item) => {
-            // NOUVEAU : Déterminer si c'est une permission supplémentaire pour cette vendeuse
+            // Indiquer si c'est une permission supplémentaire pour la vendeuse
             const isExtraPermission = role === "vendeuse" && 
-              extraPermissions.some(p => 
-                // Vérifier si cette permission fait partie des permissions qui permettent d'accéder à cet item
-                p === item.permission
-              );
+              extraPermissions.some(p => p === item.permission);
 
             return (
               <ListItemButton
@@ -306,7 +310,6 @@ export default function Navbar() {
                   mx: 1,
                   borderRadius: 2,
                   position: 'relative',
-                  // NOUVEAU : Bordure dorée pour permissions supplémentaires
                   ...(isExtraPermission && {
                     border: "1px solid #ffd700",
                     boxShadow: "0 0 8px rgba(255, 215, 0, 0.3)"
@@ -333,7 +336,6 @@ export default function Navbar() {
                       {item.icon}
                     </Badge>
                   ) : isExtraPermission ? (
-                    // NOUVEAU : Badge étoile pour permissions supplémentaires
                     <Badge
                       badgeContent="✨"
                       sx={{
@@ -356,7 +358,6 @@ export default function Navbar() {
                   primary={
                     <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
                       {item.text}
-                      {/* NOUVEAU : Indicateur pour permissions supplémentaires */}
                       {isExtraPermission && (
                         <Chip
                           label="Étendue"

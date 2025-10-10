@@ -55,6 +55,11 @@ const formatDateSafe = (dateInput) => {
   return d ? d.toLocaleDateString("fr-FR") : "";
 };
 
+const formatDateTimeSafe = (dateInput) => {
+  const d = safeParseDate(dateInput);
+  return d ? d.toLocaleString("fr-FR") : "";
+};
+
 const getDateInputValue = (dateInput) => {
   const d = safeParseDate(dateInput);
   if (!d) return "";
@@ -208,6 +213,18 @@ export default function StockManagement() {
   const [datePeremption, setDatePeremption] = useState("");
   const [codeBarre, setCodeBarre] = useState("");
 
+  // Historique retours/avoirs
+  const [showRetourHistory, setShowRetourHistory] = useState(false);
+  const [retourHistoryRows, setRetourHistoryRows] = useState([]);
+  const [historyLot, setHistoryLot] = useState(null);
+
+  // Vue globale des retours
+  const [showRetoursGlobaux, setShowRetoursGlobaux] = useState(false);
+  const [filterRetourStatut, setFilterRetourStatut] = useState("tous");
+  // 🆕 Filtres de date
+  const [filterDateDebut, setFilterDateDebut] = useState("");
+  const [filterDateFin, setFilterDateFin] = useState("");
+
   const [showScanner, setShowScanner] = useState(false);
 
   const [showTransferModal, setShowTransferModal] = useState(false);
@@ -319,7 +336,6 @@ export default function StockManagement() {
     return `LOT_${base.replace(/[^A-Za-z0-9_]/g, "").toUpperCase()}`;
   };
 
-  // ⚠️ Anti-double: n'applique que les DELTAS POSITIFS entre la quantité reçue actuelle et la base stockée
   const syncStockFromAchat = useCallback(
     async (achatData) => {
       if (!societeId || !user || !achatData?.articles?.length) return;
@@ -381,7 +397,7 @@ export default function StockManagement() {
               quantite: qte,
               stock1: isStock1 ? qte : 0,
               stock2: isStock1 ? 0 : qte,
-              quantiteInitiale: qte, // base de référence
+              quantiteInitiale: qte,
               prixAchat: pA,
               prixVente: pV,
               datePeremption: dateP,
@@ -420,7 +436,6 @@ export default function StockManagement() {
               };
 
               if (delta > 0) {
-                // ➕ On augmente du delta, on aligne la base
                 await updateDoc(d.ref, {
                   ...metaUpdates,
                   quantiteInitiale: qte,
@@ -428,11 +443,8 @@ export default function StockManagement() {
                   ...(isStock1 ? { stock1: increment(delta) } : { stock2: increment(delta) }),
                 });
               } else if (delta === 0) {
-                // Pas de changement de quantité — màj métadatas seulement
                 await updateDoc(d.ref, { ...metaUpdates });
               } else {
-                // ❌ delta négatif (souvent causé par un retour/avoir déjà appliqué côté stock)
-                // On ignore la déduction ici pour éviter la double opération
                 await updateDoc(d.ref, { ...metaUpdates });
               }
             }
@@ -734,12 +746,14 @@ export default function StockManagement() {
         beepErr();
         return;
       }
+      const cause = window.prompt("Cause du retour/avoir :", "");
       try {
         await updateDoc(doc(db, "societe", societeId, "stock_entries", lot.id), {
           retourEnCours: true,
           retourValide: false,
           avoirRegle: false,
           retourQuantite: q,
+          retourCause: cause || "",
           avoirMontant: montant,
           retourAt: Timestamp.now(),
           retourValideAt: null,
@@ -748,6 +762,27 @@ export default function StockManagement() {
           syncBlockedReason: "retour_en_cours",
           lastSyncAt: Timestamp.now(),
         });
+        try {
+          await addDoc(collection(db, "societe", societeId, "stock_entries", lot.id, "retours_avoir"), {
+            step: "demande",
+            lotId: lot.id,
+            produit: lot.nom || lot.produit || "",
+            numeroLot: lot.numeroLot || "",
+            quantite: q,
+            montant: montant,
+            cause: cause || "",
+            createdAt: Timestamp.now(),
+            createdBy: user.email || user.uid,
+            stockAvant: {
+              quantite: safeNumber(lot.quantite, 0),
+              stock1: safeNumber(lot.stock1, 0),
+              stock2: safeNumber(lot.stock2, 0),
+            },
+          });
+        } catch (e) {
+          console.warn("Journal retour/avoir (demande) impossible:", e);
+        }
+
         setSuccess("Retour/Avoir demandé");
         beepOk();
         setTimeout(() => setSuccess(""), 1500);
@@ -774,6 +809,22 @@ export default function StockManagement() {
           retourValideAt: Timestamp.now(),
           lastSyncAt: Timestamp.now(),
         });
+        try {
+          await addDoc(collection(db, "societe", societeId, "stock_entries", lot.id, "retours_avoir"), {
+            step: "validation",
+            lotId: lot.id,
+            produit: lot.nom || lot.produit || "",
+            numeroLot: lot.numeroLot || "",
+            quantite: safeNumber(lot.retourQuantite, 0),
+            montant: safeNumber(lot.avoirMontant, 0),
+            cause: lot.retourCause || "",
+            createdAt: Timestamp.now(),
+            createdBy: user.email || user.uid,
+          });
+        } catch (e) {
+          console.warn("Journal retour/avoir (validation) impossible:", e);
+        }
+
         setSuccess("Retour validé (en attente de règlement)");
         beepOk();
         setTimeout(() => setSuccess(""), 1500);
@@ -815,7 +866,6 @@ export default function StockManagement() {
 
           const qtyReturned = safeNumber(lot.retourQuantite, 0);
 
-          // 1) Ajustement stock (déduction réelle)
           transaction.update(lotRef, {
             avoirRegle: true,
             retourEnCours: false,
@@ -831,7 +881,6 @@ export default function StockManagement() {
             lastSyncAt: Timestamp.now(),
           });
 
-          // 2) Journal côté achats (sans rediminuer la quantité reçue)
           if (achatSnap && achatSnap.exists()) {
             transaction.update(achatRef, {
               lastReturn: {
@@ -845,6 +894,22 @@ export default function StockManagement() {
             });
           }
         });
+
+        try {
+          await addDoc(collection(db, "societe", societeId, "stock_entries", lot.id, "retours_avoir"), {
+            step: "avoir_regle",
+            lotId: lot.id,
+            produit: lot.nom || lot.produit || "",
+            numeroLot: lot.numeroLot || "",
+            quantite: safeNumber(lot.retourQuantite, 0),
+            montant: safeNumber(lot.avoirMontant, 0),
+            cause: lot.retourCause || "",
+            createdAt: Timestamp.now(),
+            createdBy: user.email || user.uid,
+          });
+        } catch (e) {
+          console.warn("Journal retour/avoir (avoir_regle) impossible:", e);
+        }
 
         setSuccess("Avoir réglé — stock ajusté (+ journal Achats)");
         beepOk();
@@ -894,7 +959,6 @@ export default function StockManagement() {
 
           const qtyReturned = safeNumber(lot.retourQuantite, 0);
 
-          // 1) Ajustement stock immédiat
           transaction.update(lotRef, {
             retourValide: true,
             retourValideAt: Timestamp.now(),
@@ -912,7 +976,6 @@ export default function StockManagement() {
             lastSyncAt: Timestamp.now(),
           });
 
-          // 2) Journal côté achats (sans réduire 'reçu')
           if (achatSnap && achatSnap.exists()) {
             transaction.update(achatRef, {
               lastReturn: {
@@ -927,6 +990,22 @@ export default function StockManagement() {
             });
           }
         });
+
+        try {
+          await addDoc(collection(db, "societe", societeId, "stock_entries", lot.id, "retours_avoir"), {
+            step: "validation_et_reglement",
+            lotId: lot.id,
+            produit: lot.nom || lot.produit || "",
+            numeroLot: lot.numeroLot || "",
+            quantite: safeNumber(lot.retourQuantite, 0),
+            montant: safeNumber(lot.avoirMontant, 0),
+            cause: lot.retourCause || "",
+            createdAt: Timestamp.now(),
+            createdBy: user.email || user.uid,
+          });
+        } catch (e) {
+          console.warn("Journal retour/avoir (validation_et_reglement) impossible:", e);
+        }
 
         setSuccess("Retour validé + stock ajusté (+ journal Achats)");
         beepOk();
@@ -958,6 +1037,22 @@ export default function StockManagement() {
           retourClotureAt: null,
           lastSyncAt: Timestamp.now(),
         });
+        try {
+          await addDoc(collection(db, "societe", societeId, "stock_entries", lot.id, "retours_avoir"), {
+            step: "annulation",
+            lotId: lot.id,
+            produit: lot.nom || lot.produit || "",
+            numeroLot: lot.numeroLot || "",
+            quantite: safeNumber(lot.retourQuantite, 0) || null,
+            montant: safeNumber(lot.avoirMontant, 0) || null,
+            cause: lot.retourCause || "",
+            createdAt: Timestamp.now(),
+            createdBy: user.email || user.uid,
+          });
+        } catch (e) {
+          console.warn("Journal retour/avoir (annulation) impossible:", e);
+        }
+
         setSuccess("Retour/Avoir annulé");
         beepOk();
         setTimeout(() => setSuccess(""), 1200);
@@ -969,6 +1064,67 @@ export default function StockManagement() {
     },
     [societeId, user, beepOk, beepErr]
   );
+
+  /* ================== VUE GLOBALE DES RETOURS AVEC FILTRES ================== */
+
+  const lotsAvecRetours = useMemo(() => {
+    let filteredLots = lots.filter((lot) => {
+      // Filtre par statut
+      if (filterRetourStatut === "tous") {
+        if (!(lot.retourEnCours || lot.retourValide || lot.avoirRegle)) return false;
+      } else if (filterRetourStatut === "demandes") {
+        if (!(lot.retourEnCours && !lot.retourValide)) return false;
+      } else if (filterRetourStatut === "valides") {
+        if (!(lot.retourValide && !lot.avoirRegle)) return false;
+      } else if (filterRetourStatut === "regles") {
+        if (!lot.avoirRegle) return false;
+      }
+
+      // 🆕 Filtre par date
+      if (filterDateDebut || filterDateFin) {
+        const retourDate = safeParseDate(lot.retourAt);
+        if (!retourDate) return false;
+
+        if (filterDateDebut) {
+          const dateDebut = new Date(filterDateDebut);
+          dateDebut.setHours(0, 0, 0, 0);
+          if (retourDate < dateDebut) return false;
+        }
+
+        if (filterDateFin) {
+          const dateFin = new Date(filterDateFin);
+          dateFin.setHours(23, 59, 59, 999);
+          if (retourDate > dateFin) return false;
+        }
+      }
+
+      return true;
+    });
+
+    return filteredLots;
+  }, [lots, filterRetourStatut, filterDateDebut, filterDateFin]);
+
+  const statsRetours = useMemo(() => {
+    const demandes = lots.filter((l) => l.retourEnCours && !l.retourValide).length;
+    const valides = lots.filter((l) => l.retourValide && !l.avoirRegle).length;
+    const regles = lots.filter((l) => l.avoirRegle).length;
+    const total = demandes + valides + regles;
+
+    const montantTotal = lots
+      .filter((l) => l.retourEnCours || l.retourValide || l.avoirRegle)
+      .reduce((sum, l) => sum + safeNumber(l.avoirMontant, 0), 0);
+
+    const quantiteTotal = lots
+      .filter((l) => l.retourEnCours || l.retourValide || l.avoirRegle)
+      .reduce((sum, l) => sum + safeNumber(l.retourQuantite, 0), 0);
+
+    return { demandes, valides, regles, total, montantTotal, quantiteTotal };
+  }, [lots]);
+
+  const resetFiltersDate = () => {
+    setFilterDateDebut("");
+    setFilterDateFin("");
+  };
 
   /* ================== FORMULAIRE ================== */
 
@@ -1176,6 +1332,25 @@ export default function StockManagement() {
     });
   }, [lots, search]);
 
+  const openRetourHistory = useCallback(
+    async (lot) => {
+      try {
+        if (!societeId) return;
+        const colRef = collection(db, "societe", societeId, "stock_entries", lot.id, "retours_avoir");
+        const snap = await getDocs(query(colRef, orderBy("createdAt", "desc")));
+        const rows = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+        setRetourHistoryRows(rows);
+        setHistoryLot(lot);
+        setShowRetourHistory(true);
+      } catch (e) {
+        console.error(e);
+        setError("Impossible de charger l'historique de retour/avoir.");
+        beepErr();
+      }
+    },
+    [societeId, beepErr]
+  );
+
   /* ================== UI ================== */
 
   if (waiting) {
@@ -1240,7 +1415,9 @@ export default function StockManagement() {
             <div style={{ display: "flex", gap: 12, alignItems: "center", marginTop: 8 }}>
               {lastSyncTime && (
                 <div style={{ fontSize: 12, color: "#059669" }}>
-                  {isSyncing ? "Synchronisation en cours..." : `Dernière sync: ${lastSyncTime.toLocaleTimeString("fr-FR")}`}
+                  {isSyncing
+                    ? "Synchronisation en cours..."
+                    : `Dernière sync: ${lastSyncTime.toLocaleTimeString("fr-FR")}`}
                 </div>
               )}
               <span
@@ -1274,6 +1451,51 @@ export default function StockManagement() {
                 outline: "none",
               }}
             />
+            <button
+              onClick={() => setShowRetoursGlobaux(!showRetoursGlobaux)}
+              style={{
+                background: showRetoursGlobaux
+                  ? "linear-gradient(135deg,#dc2626,#b91c1c)"
+                  : "linear-gradient(135deg,#fb7185,#f43f5e)",
+                color: "#ffffff",
+                border: "2px solid transparent",
+                borderRadius: 12,
+                padding: "12px 20px",
+                fontWeight: 700,
+                fontSize: "16px",
+                cursor: "pointer",
+                boxShadow: "0 4px 14px rgba(220, 38, 38, 0.3)",
+                transition: "all 0.2s ease-in-out",
+                minWidth: "200px",
+                whiteSpace: "nowrap",
+                textShadow: "0 1px 2px rgba(0,0,0,0.2)",
+                position: "relative",
+              }}
+            >
+              {showRetoursGlobaux ? "Masquer retours" : "Voir tous les retours"}
+              {statsRetours.total > 0 && (
+                <span
+                  style={{
+                    position: "absolute",
+                    top: -8,
+                    right: -8,
+                    background: "#fef3c7",
+                    color: "#92400e",
+                    borderRadius: "50%",
+                    width: 28,
+                    height: 28,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    fontSize: 12,
+                    fontWeight: 800,
+                    border: "2px solid #fff",
+                  }}
+                >
+                  {statsRetours.total}
+                </span>
+              )}
+            </button>
             <button
               onClick={() => {
                 resetForm();
@@ -1343,6 +1565,430 @@ export default function StockManagement() {
         </div>
       )}
 
+      {/* VUE GLOBALE DES RETOURS */}
+      {showRetoursGlobaux && (
+        <div
+          style={{
+            background: "rgba(255,255,255,.95)",
+            borderRadius: 20,
+            padding: 20,
+            marginBottom: 16,
+            boxShadow: "0 10px 30px rgba(0,0,0,.05)",
+            border: "2px solid #FED7AA",
+          }}
+        >
+          <div style={{ marginBottom: 16 }}>
+            <h2 style={{ margin: "0 0 8px 0", fontWeight: 800, color: "#c2410c", fontSize: 24 }}>
+              📦 Articles Retournés
+            </h2>
+            <p style={{ margin: 0, color: "#6b7280", fontSize: 14 }}>
+              Vue d'ensemble des retours et avoirs en cours
+            </p>
+          </div>
+
+          {/* Statistiques */}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 12, marginBottom: 20 }}>
+            <div
+              style={{
+                background: "linear-gradient(135deg, #fef3c7, #fde68a)",
+                padding: 16,
+                borderRadius: 12,
+                border: "2px solid #fcd34d",
+              }}
+            >
+              <div style={{ fontSize: 14, color: "#92400e", fontWeight: 600 }}>Total retours</div>
+              <div style={{ fontSize: 32, fontWeight: 800, color: "#b45309" }}>{statsRetours.total}</div>
+            </div>
+            <div
+              style={{
+                background: "linear-gradient(135deg, #fed7aa, #fdba74)",
+                padding: 16,
+                borderRadius: 12,
+                border: "2px solid #fb923c",
+              }}
+            >
+              <div style={{ fontSize: 14, color: "#9a3412", fontWeight: 600 }}>En demande</div>
+              <div style={{ fontSize: 32, fontWeight: 800, color: "#c2410c" }}>{statsRetours.demandes}</div>
+            </div>
+            <div
+              style={{
+                background: "linear-gradient(135deg, #bfdbfe, #93c5fd)",
+                padding: 16,
+                borderRadius: 12,
+                border: "2px solid #60a5fa",
+              }}
+            >
+              <div style={{ fontSize: 14, color: "#1e3a8a", fontWeight: 600 }}>Validés</div>
+              <div style={{ fontSize: 32, fontWeight: 800, color: "#1e40af" }}>{statsRetours.valides}</div>
+            </div>
+            <div
+              style={{
+                background: "linear-gradient(135deg, #d1fae5, #a7f3d0)",
+                padding: 16,
+                borderRadius: 12,
+                border: "2px solid #6ee7b7",
+              }}
+            >
+              <div style={{ fontSize: 14, color: "#065f46", fontWeight: 600 }}>Réglés</div>
+              <div style={{ fontSize: 32, fontWeight: 800, color: "#047857" }}>{statsRetours.regles}</div>
+            </div>
+            <div
+              style={{
+                background: "linear-gradient(135deg, #e0e7ff, #c7d2fe)",
+                padding: 16,
+                borderRadius: 12,
+                border: "2px solid #a5b4fc",
+              }}
+            >
+              <div style={{ fontSize: 14, color: "#3730a3", fontWeight: 600 }}>Quantité totale</div>
+              <div style={{ fontSize: 32, fontWeight: 800, color: "#4338ca" }}>{statsRetours.quantiteTotal}</div>
+            </div>
+            <div
+              style={{
+                background: "linear-gradient(135deg, #fce7f3, #fbcfe8)",
+                padding: 16,
+                borderRadius: 12,
+                border: "2px solid #f9a8d4",
+              }}
+            >
+              <div style={{ fontSize: 14, color: "#831843", fontWeight: 600 }}>Montant total</div>
+              <div style={{ fontSize: 32, fontWeight: 800, color: "#9f1239" }}>
+                {statsRetours.montantTotal.toFixed(2)} DH
+              </div>
+            </div>
+          </div>
+
+          {/* 🆕 Filtres de date */}
+          <div
+            style={{
+              background: "#f9fafb",
+              padding: 16,
+              borderRadius: 12,
+              marginBottom: 16,
+              border: "1px solid #e5e7eb",
+            }}
+          >
+            <div style={{ display: "flex", gap: 12, alignItems: "end", flexWrap: "wrap" }}>
+              <div style={{ flex: 1, minWidth: 200 }}>
+                <label style={{ display: "block", marginBottom: 6, fontWeight: 600, fontSize: 14, color: "#374151" }}>
+                  📅 Date de début
+                </label>
+                <input
+                  type="date"
+                  value={filterDateDebut}
+                  onChange={(e) => setFilterDateDebut(e.target.value)}
+                  style={{
+                    width: "100%",
+                    padding: "10px 12px",
+                    borderRadius: 10,
+                    border: "2px solid #e5e7eb",
+                    fontSize: 14,
+                    outline: "none",
+                  }}
+                />
+              </div>
+              <div style={{ flex: 1, minWidth: 200 }}>
+                <label style={{ display: "block", marginBottom: 6, fontWeight: 600, fontSize: 14, color: "#374151" }}>
+                  📅 Date de fin
+                </label>
+                <input
+                  type="date"
+                  value={filterDateFin}
+                  onChange={(e) => setFilterDateFin(e.target.value)}
+                  style={{
+                    width: "100%",
+                    padding: "10px 12px",
+                    borderRadius: 10,
+                    border: "2px solid #e5e7eb",
+                    fontSize: 14,
+                    outline: "none",
+                  }}
+                />
+              </div>
+              <button
+                onClick={resetFiltersDate}
+                disabled={!filterDateDebut && !filterDateFin}
+                style={{
+                  padding: "10px 20px",
+                  borderRadius: 10,
+                  border: "1px solid #d1d5db",
+                  background: filterDateDebut || filterDateFin ? "#fff" : "#f3f4f6",
+                  color: filterDateDebut || filterDateFin ? "#374151" : "#9ca3af",
+                  fontWeight: 600,
+                  fontSize: 14,
+                  cursor: filterDateDebut || filterDateFin ? "pointer" : "not-allowed",
+                  transition: "all 0.2s",
+                }}
+              >
+                🔄 Réinitialiser dates
+              </button>
+            </div>
+            {(filterDateDebut || filterDateFin) && (
+              <div
+                style={{
+                  marginTop: 12,
+                  padding: "8px 12px",
+                  background: "#dbeafe",
+                  borderRadius: 8,
+                  fontSize: 13,
+                  color: "#1e40af",
+                }}
+              >
+                <strong>Filtrage actif :</strong>{" "}
+                {filterDateDebut && `Du ${new Date(filterDateDebut).toLocaleDateString("fr-FR")}`}
+                {filterDateDebut && filterDateFin && " "}
+                {filterDateFin && `au ${new Date(filterDateFin).toLocaleDateString("fr-FR")}`}
+              </div>
+            )}
+          </div>
+
+          {/* Filtres par statut */}
+          <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
+            <button
+              onClick={() => setFilterRetourStatut("tous")}
+              style={{
+                padding: "8px 16px",
+                borderRadius: 10,
+                border: filterRetourStatut === "tous" ? "2px solid #c2410c" : "1px solid #e5e7eb",
+                background: filterRetourStatut === "tous" ? "#fed7aa" : "#fff",
+                color: filterRetourStatut === "tous" ? "#9a3412" : "#6b7280",
+                fontWeight: filterRetourStatut === "tous" ? 700 : 500,
+                cursor: "pointer",
+              }}
+            >
+              Tous ({statsRetours.total})
+            </button>
+            <button
+              onClick={() => setFilterRetourStatut("demandes")}
+              style={{
+                padding: "8px 16px",
+                borderRadius: 10,
+                border: filterRetourStatut === "demandes" ? "2px solid #fb923c" : "1px solid #e5e7eb",
+                background: filterRetourStatut === "demandes" ? "#fed7aa" : "#fff",
+                color: filterRetourStatut === "demandes" ? "#c2410c" : "#6b7280",
+                fontWeight: filterRetourStatut === "demandes" ? 700 : 500,
+                cursor: "pointer",
+              }}
+            >
+              Demandes ({statsRetours.demandes})
+            </button>
+            <button
+              onClick={() => setFilterRetourStatut("valides")}
+              style={{
+                padding: "8px 16px",
+                borderRadius: 10,
+                border: filterRetourStatut === "valides" ? "2px solid #60a5fa" : "1px solid #e5e7eb",
+                background: filterRetourStatut === "valides" ? "#bfdbfe" : "#fff",
+                color: filterRetourStatut === "valides" ? "#1e40af" : "#6b7280",
+                fontWeight: filterRetourStatut === "valides" ? 700 : 500,
+                cursor: "pointer",
+              }}
+            >
+              Validés ({statsRetours.valides})
+            </button>
+            <button
+              onClick={() => setFilterRetourStatut("regles")}
+              style={{
+                padding: "8px 16px",
+                borderRadius: 10,
+                border: filterRetourStatut === "regles" ? "2px solid #6ee7b7" : "1px solid #e5e7eb",
+                background: filterRetourStatut === "regles" ? "#d1fae5" : "#fff",
+                color: filterRetourStatut === "regles" ? "#047857" : "#6b7280",
+                fontWeight: filterRetourStatut === "regles" ? 700 : 500,
+                cursor: "pointer",
+              }}
+            >
+              Réglés ({statsRetours.regles})
+            </button>
+          </div>
+
+          {/* Tableau des retours */}
+          <div style={{ overflowX: "auto", borderRadius: 12, border: "1px solid #e5e7eb" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead style={{ background: "#f9fafb" }}>
+                <tr>
+                  <th style={{ padding: 12, textAlign: "left", borderBottom: "2px solid #e5e7eb" }}>Produit</th>
+                  <th style={{ padding: 12, textAlign: "left", borderBottom: "2px solid #e5e7eb" }}>N° Lot</th>
+                  <th style={{ padding: 12, textAlign: "center", borderBottom: "2px solid #e5e7eb" }}>Qté retour</th>
+                  <th style={{ padding: 12, textAlign: "right", borderBottom: "2px solid #e5e7eb" }}>Montant avoir</th>
+                  <th style={{ padding: 12, textAlign: "left", borderBottom: "2px solid #e5e7eb" }}>Cause</th>
+                  <th style={{ padding: 12, textAlign: "center", borderBottom: "2px solid #e5e7eb" }}>Statut</th>
+                  <th style={{ padding: 12, textAlign: "center", borderBottom: "2px solid #e5e7eb" }}>Date demande</th>
+                  <th style={{ padding: 12, textAlign: "center", borderBottom: "2px solid #e5e7eb", width: 320 }}>
+                    Actions
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {lotsAvecRetours.length === 0 ? (
+                  <tr>
+                    <td colSpan={8} style={{ padding: 24, textAlign: "center", color: "#6b7280" }}>
+                      {filterDateDebut || filterDateFin
+                        ? "Aucun retour pour la période sélectionnée"
+                        : "Aucun retour pour le filtre sélectionné"}
+                    </td>
+                  </tr>
+                ) : (
+                  lotsAvecRetours.map((lot, idx) => {
+                    const statutBadge =
+                      lot.retourEnCours && !lot.retourValide
+                        ? { bg: "#fed7aa", color: "#9a3412", text: "En demande" }
+                        : lot.retourValide && !lot.avoirRegle
+                        ? { bg: "#bfdbfe", color: "#1e40af", text: "Validé" }
+                        : lot.avoirRegle
+                        ? { bg: "#d1fae5", color: "#047857", text: "Réglé" }
+                        : { bg: "#f3f4f6", color: "#6b7280", text: "—" };
+
+                    return (
+                      <tr
+                        key={lot.id}
+                        style={{
+                          background: idx % 2 ? "#fff" : "#f9fafb",
+                          borderBottom: "1px solid #e5e7eb",
+                        }}
+                      >
+                        <td style={{ padding: 12, fontWeight: 600 }}>{lot.nom}</td>
+                        <td style={{ padding: 12, fontFamily: "monospace", fontSize: 13 }}>{lot.numeroLot}</td>
+                        <td style={{ padding: 12, textAlign: "center", fontWeight: 700 }}>
+                          {safeNumber(lot.retourQuantite)}
+                        </td>
+                        <td style={{ padding: 12, textAlign: "right", fontWeight: 600 }}>
+                          {safeNumber(lot.avoirMontant).toFixed(2)} DH
+                        </td>
+                        <td style={{ padding: 12, fontSize: 13, color: "#6b7280", maxWidth: 200 }}>
+                          {lot.retourCause || "—"}
+                        </td>
+                        <td style={{ padding: 12, textAlign: "center" }}>
+                          <span
+                            style={{
+                              background: statutBadge.bg,
+                              color: statutBadge.color,
+                              padding: "4px 12px",
+                              borderRadius: 8,
+                              fontSize: 13,
+                              fontWeight: 700,
+                            }}
+                          >
+                            {statutBadge.text}
+                          </span>
+                        </td>
+                        <td style={{ padding: 12, textAlign: "center", fontSize: 13 }}>
+                          {formatDateTimeSafe(lot.retourAt)}
+                        </td>
+                        <td style={{ padding: 12 }}>
+                          <div style={{ display: "flex", gap: 6, justifyContent: "center", flexWrap: "wrap" }}>
+                            <button
+                              onClick={() => openRetourHistory(lot)}
+                              style={{
+                                background: "#e5e7eb",
+                                color: "#111827",
+                                border: "none",
+                                borderRadius: 8,
+                                padding: "6px 10px",
+                                fontSize: 13,
+                                cursor: "pointer",
+                                fontWeight: 600,
+                              }}
+                            >
+                              Historique
+                            </button>
+
+                            {lot.retourEnCours && !lot.retourValide && (
+                              <>
+                                <button
+                                  onClick={() => validateReturn(lot)}
+                                  style={{
+                                    background: "linear-gradient(135deg,#22c55e,#16a34a)",
+                                    color: "#fff",
+                                    border: "none",
+                                    borderRadius: 8,
+                                    padding: "6px 10px",
+                                    fontSize: 13,
+                                    cursor: "pointer",
+                                    fontWeight: 600,
+                                  }}
+                                >
+                                  Valider
+                                </button>
+                                <button
+                                  onClick={() => validateAndSettleReturn(lot)}
+                                  style={{
+                                    background: "linear-gradient(135deg,#34d399,#10b981)",
+                                    color: "#fff",
+                                    border: "none",
+                                    borderRadius: 8,
+                                    padding: "6px 10px",
+                                    fontSize: 13,
+                                    cursor: "pointer",
+                                    fontWeight: 600,
+                                  }}
+                                >
+                                  Valider + Déduire
+                                </button>
+                                <button
+                                  onClick={() => cancelReturn(lot)}
+                                  style={{
+                                    background: "linear-gradient(135deg,#6b7280,#4b5563)",
+                                    color: "#fff",
+                                    border: "none",
+                                    borderRadius: 8,
+                                    padding: "6px 10px",
+                                    fontSize: 13,
+                                    cursor: "pointer",
+                                    fontWeight: 600,
+                                  }}
+                                >
+                                  Annuler
+                                </button>
+                              </>
+                            )}
+
+                            {lot.retourValide && !lot.avoirRegle && (
+                              <button
+                                onClick={() => approveReturn(lot)}
+                                style={{
+                                  background: "linear-gradient(135deg,#22c55e,#16a34a)",
+                                  color: "#fff",
+                                  border: "none",
+                                  borderRadius: 8,
+                                  padding: "6px 10px",
+                                  fontSize: 13,
+                                  cursor: "pointer",
+                                  fontWeight: 600,
+                                }}
+                              >
+                                Avoir réglé
+                              </button>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
+
+          {lotsAvecRetours.length > 0 && (
+            <div
+              style={{
+                marginTop: 12,
+                padding: "8px 12px",
+                background: "#f9fafb",
+                borderRadius: 8,
+                fontSize: 13,
+                color: "#6b7280",
+                textAlign: "center",
+              }}
+            >
+              Affichage de <strong>{lotsAvecRetours.length}</strong> retour(s)
+              {(filterDateDebut || filterDateFin) && " pour la période sélectionnée"}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Transferts */}
       <div
         style={{
@@ -1393,7 +2039,8 @@ export default function StockManagement() {
                 fontWeight: 600,
               }}
             >
-              ⚠️ Ce transfert créera un NOUVEAU lot pour Stock2, diminuera le stock1 du lot original ET synchronisera avec les achats correspondants.
+              ⚠️ Ce transfert créera un NOUVEAU lot pour Stock2, diminuera le stock1 du lot original ET synchronisera
+              avec les achats correspondants.
             </div>
 
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 12 }}>
@@ -1565,13 +2212,14 @@ export default function StockManagement() {
                   const expSoon = d && !expired && d <= new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
 
                   const qRet = safeNumber(lot.retourQuantite, 0);
-                  const badgeRetour = lot.retourEnCours && !lot.retourValide
-                    ? `Retour/Avoir demandé (Qté: ${qRet})`
-                    : lot.retourValide && !lot.avoirRegle
-                    ? `Retour validé (Qté: ${qRet})`
-                    : lot.avoirRegle
-                    ? `Retour réglé`
-                    : "";
+                  const badgeRetour =
+                    lot.retourEnCours && !lot.retourValide
+                      ? `Retour/Avoir demandé (Qté: ${qRet})`
+                      : lot.retourValide && !lot.avoirRegle
+                      ? `Retour validé (Qté: ${qRet})`
+                      : lot.avoirRegle
+                      ? `Retour réglé`
+                      : "";
 
                   const showRowActions = hasFilter && selectedLotId === lot.id;
 
@@ -1735,6 +2383,24 @@ export default function StockManagement() {
                           >
                             Retour/Avoir
                           </button>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              openRetourHistory(lot);
+                            }}
+                            style={{
+                              background: "#e5e7eb",
+                              color: "#111827",
+                              border: "1px solid #e5e7eb",
+                              borderRadius: 10,
+                              padding: "8px 12px",
+                              cursor: "pointer",
+                              marginLeft: 8,
+                            }}
+                            title="Voir l'historique détaillé des retours/avoirs pour ce lot"
+                          >
+                            Historique
+                          </button>
 
                           {lot.retourEnCours && !lot.retourValide && (
                             <>
@@ -1827,6 +2493,86 @@ export default function StockManagement() {
         </div>
       </div>
 
+      {/* Historique retours/avoirs */}
+      {showRetourHistory && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(0,0,0,0.4)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 2000,
+          }}
+          onClick={() => setShowRetourHistory(false)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              background: "#fff",
+              width: "95%",
+              maxWidth: 900,
+              maxHeight: "80vh",
+              overflow: "auto",
+              borderRadius: 16,
+              padding: 20,
+              boxShadow: "0 10px 25px rgba(0,0,0,0.15)",
+            }}
+          >
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+              <h3 style={{ fontSize: 20, fontWeight: 800 }}>
+                Historique — {historyLot?.nom || historyLot?.produit || "Lot"} (N°: {historyLot?.numeroLot || ""})
+              </h3>
+              <button
+                onClick={() => setShowRetourHistory(false)}
+                style={{ background: "transparent", border: "none", fontSize: 24, cursor: "pointer" }}
+                aria-label="Fermer"
+              >
+                ×
+              </button>
+            </div>
+
+            {retourHistoryRows.length === 0 ? (
+              <div style={{ padding: 16, background: "#f9fafb", border: "1px dashed #e5e7eb", borderRadius: 12 }}>
+                Aucun événement pour ce lot.
+              </div>
+            ) : (
+              <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                <thead>
+                  <tr style={{ background: "#f3f4f6" }}>
+                    <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid #e5e7eb" }}>Date</th>
+                    <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid #e5e7eb" }}>Étape</th>
+                    <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid #e5e7eb" }}>Qté</th>
+                    <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid #e5e7eb" }}>Montant</th>
+                    <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid #e5e7eb" }}>Cause</th>
+                    <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid #e5e7eb" }}>Par</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {retourHistoryRows.map((row) => (
+                    <tr key={row.id}>
+                      <td style={{ padding: 8, borderBottom: "1px solid #f1f5f9" }}>
+                        {row.createdAt?.toDate
+                          ? new Date(row.createdAt.toDate()).toLocaleString()
+                          : row.createdAt?.seconds
+                          ? new Date(row.createdAt.seconds * 1000).toLocaleString()
+                          : ""}
+                      </td>
+                      <td style={{ padding: 8, borderBottom: "1px solid #f1f5f9" }}>{row.step}</td>
+                      <td style={{ padding: 8, borderBottom: "1px solid #f1f5f9" }}>{row.quantite ?? ""}</td>
+                      <td style={{ padding: 8, borderBottom: "1px solid #f1f5f9" }}>{row.montant ?? ""}</td>
+                      <td style={{ padding: 8, borderBottom: "1px solid #f1f5f9" }}>{row.cause ?? ""}</td>
+                      <td style={{ padding: 8, borderBottom: "1px solid #f1f5f9" }}>{row.createdBy ?? ""}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Modales */}
       {showForm && (
         <div
@@ -1905,7 +2651,7 @@ export default function StockManagement() {
                         padding: "10px 14px",
                         borderRadius: 10,
                         border: "1px solid #e5e7eb",
-                        background: "#fff",
+                        
                         cursor: "pointer",
                       }}
                     >
@@ -2004,7 +2750,7 @@ export default function StockManagement() {
                     padding: "10px 16px",
                     borderRadius: 10,
                     border: "1px solid #e5e7eb",
-                    background: "#fff",
+                   
                     cursor: "pointer",
                   }}
                 >

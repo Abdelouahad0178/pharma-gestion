@@ -137,24 +137,32 @@ export default function OrderManagement() {
   const [groupCommercial, setGroupCommercial] = useState({});
   const [lineStatus, setLineStatus] = useState({});
 
-  // ✅ On ne persiste QUE les opérations ignorées (pas de bannissement par clé)
+  // Lignes manuelles persistées
+  const [manualLines, setManualLines] = useState([]);
+
+  // Opérations ignorées (par id vente#index), persistées
   const [dismissedOps, setDismissedOps] = useState(new Set());
 
   const [manualSuppliers, setManualSuppliers] = useState({});
-  const [manualLines, setManualLines] = useState([]);
 
   const ORDER_STATUS_COLL = "order_status";
   const DISMISSED_COLL = "order_dismissed";
+  const MANUAL_LINES_COLL = "order_manual_lines";
 
+  // Refs de listeners temps réel
   const ventesListenerRef = useRef(null);
   const stockListenerRef = useRef(null);
+  const orderStatusListenerRef = useRef(null);
+  const manualLinesListenerRef = useRef(null);
+  const dismissedListenerRef = useRef(null);
+
   const isProcessingRef = useRef(false);
 
   useEffect(() => {
     setWaiting(loading || !societeId || !user);
   }, [loading, societeId, user]);
 
-  /* ================== LISTENERS ================== */
+  /* ================== LISTENERS TEMPS RÉEL ================== */
 
   const setupVentesListener = useCallback(() => {
     if (!societeId || ventesListenerRef.current) return;
@@ -192,6 +200,78 @@ export default function OrderManagement() {
       },
       (err) => {
         console.error("Erreur listener stock:", err);
+      }
+    );
+  }, [societeId]);
+
+  const setupOrderStatusListener = useCallback(() => {
+    if (!societeId || orderStatusListenerRef.current) return;
+    orderStatusListenerRef.current = onSnapshot(
+      collection(db, "societe", societeId, ORDER_STATUS_COLL),
+      (snap) => {
+        const obj = {};
+        snap.forEach((d) => {
+          const st = d.data() || {};
+          obj[d.id] = {
+            sent: !!st.sent,
+            validated: !!st.validated,
+            sentAt: st.sentAt || null,
+            validatedAt: st.validatedAt || null,
+            frozenOps: Array.isArray(st.frozenOps) ? st.frozenOps : [],
+            frozenQuantity: st.frozenQuantity || 0,
+            frozenDate: st.frozenDate || null,
+            frozenRemise: st.frozenRemise || 0,
+            frozenUrgent: !!st.frozenUrgent,
+            frozenName: st.frozenName || null,
+            frozenLot: st.frozenLot || null,
+            frozenSupplier: st.frozenSupplier || null,
+          };
+        });
+        setLineStatus(obj);
+      },
+      (err) => {
+        console.error("Erreur listener order_status:", err);
+      }
+    );
+  }, [societeId]);
+
+  const setupManualLinesListener = useCallback(() => {
+    if (!societeId || manualLinesListenerRef.current) return;
+    manualLinesListenerRef.current = onSnapshot(
+      query(collection(db, "societe", societeId, MANUAL_LINES_COLL), orderBy("createdAt", "desc")),
+      (snap) => {
+        const arr = [];
+        snap.forEach((d) => {
+          const x = d.data() || {};
+          arr.push({
+            ...x,
+            key: x.key || d.id,
+            manualId: d.id,
+            isManual: true,
+          });
+        });
+        setManualLines(arr);
+      },
+      (err) => {
+        console.error("Erreur listener order_manual_lines:", err);
+      }
+    );
+  }, [societeId]);
+
+  const setupDismissedOpsListener = useCallback(() => {
+    if (!societeId || dismissedListenerRef.current) return;
+    dismissedListenerRef.current = onSnapshot(
+      collection(db, "societe", societeId, DISMISSED_COLL),
+      (snap) => {
+        const s = new Set();
+        snap.forEach((d) => {
+          const data = d.data();
+          if (data?.dismissed) s.add(d.id);
+        });
+        setDismissedOps(s);
+      },
+      (err) => {
+        console.error("Erreur listener order_dismissed:", err);
       }
     );
   }, [societeId]);
@@ -252,57 +332,15 @@ export default function OrderManagement() {
     }
   }, [societeId]);
 
-  const fetchOrderStatus = useCallback(async () => {
-    if (!societeId) return;
-    try {
-      const snap = await getDocs(collection(db, "societe", societeId, ORDER_STATUS_COLL));
-      const obj = {};
-      snap.forEach((d) => {
-        const st = d.data() || {};
-        obj[d.id] = {
-          sent: !!st.sent,
-          validated: !!st.validated,
-          sentAt: st.sentAt || null,
-          validatedAt: st.validatedAt || null,
-          frozenOps: Array.isArray(st.frozenOps) ? st.frozenOps : [],
-          frozenQuantity: st.frozenQuantity || 0,
-          frozenDate: st.frozenDate || null,
-          frozenRemise: st.frozenRemise || 0,
-          frozenUrgent: !!st.frozenUrgent,
-          frozenName: st.frozenName || null,
-          frozenLot: st.frozenLot || null,
-          frozenSupplier: st.frozenSupplier || null,
-        };
-      });
-      setLineStatus(obj);
-    } catch (e) {
-      console.error(e);
-    }
-  }, [societeId]);
-
-  const fetchDismissedOps = useCallback(async () => {
-    if (!societeId) return;
-    try {
-      const snap = await getDocs(collection(db, "societe", societeId, DISMISSED_COLL));
-      const s = new Set();
-      snap.forEach((d) => {
-        const data = d.data();
-        if (data?.dismissed) s.add(d.id);
-      });
-      setDismissedOps(s);
-    } catch (e) {
-      console.error(e);
-    }
-  }, [societeId]);
-
   useEffect(() => {
     if (!waiting) {
       setupVentesListener();
       setupStockListener();
+      setupOrderStatusListener();   // ⏱️ temps réel
+      setupManualLinesListener();   // ⏱️ temps réel
+      setupDismissedOpsListener();  // ⏱️ temps réel
       fetchFournisseurs();
       fetchAchatsIndex();
-      fetchOrderStatus();
-      fetchDismissedOps();
     }
     return () => {
       if (ventesListenerRef.current) {
@@ -313,15 +351,28 @@ export default function OrderManagement() {
         stockListenerRef.current();
         stockListenerRef.current = null;
       }
+      if (orderStatusListenerRef.current) {
+        orderStatusListenerRef.current();
+        orderStatusListenerRef.current = null;
+      }
+      if (manualLinesListenerRef.current) {
+        manualLinesListenerRef.current();
+        manualLinesListenerRef.current = null;
+      }
+      if (dismissedListenerRef.current) {
+        dismissedListenerRef.current();
+        dismissedListenerRef.current = null;
+      }
     };
   }, [
     waiting,
     setupVentesListener,
     setupStockListener,
+    setupOrderStatusListener,
+    setupManualLinesListener,
+    setupDismissedOpsListener,
     fetchFournisseurs,
     fetchAchatsIndex,
-    fetchOrderStatus,
-    fetchDismissedOps,
   ]);
 
   /* ================== INDEX FOURNISSEURS ================== */
@@ -380,7 +431,7 @@ export default function OrderManagement() {
       const rows = extractVenteArticles(v);
       rows.forEach((a, idx) => {
         const opId = `${v.id}#${idx}`;
-        if (dismissedOps.has(opId)) return; // ignorée définitivement (par op)
+        if (dismissedOps.has(opId)) return;
         const nomA = (extractArticleName(a) || "").trim();
         if (!nomA) return;
         const lotA = (extractArticleLot(a) || "").trim();
@@ -452,7 +503,6 @@ export default function OrderManagement() {
     fromSales.forEach((x) => {
       const normalizedLot = normalizeLotNumber(x.numeroLot);
       const productKey = `${normalize(x.nom)}|${normalize(normalizedLot)}`;
-
       const hasLockedLine = lockedProductKeys.has(productKey);
       const newOps = (x.sourceOps || []).filter((op) => !allFrozenOps.has(op) && !dismissedOps.has(op));
 
@@ -472,7 +522,6 @@ export default function OrderManagement() {
           const supplementCount = supplementCounts.get(productKey) || 0;
           const versionNumber = supplementCount + 1;
           supplementCounts.set(productKey, versionNumber);
-
           const supplementKey = `${x.key}|supplement-v${versionNumber}-${Date.now()}`;
 
           allLines.push({
@@ -491,7 +540,6 @@ export default function OrderManagement() {
           processedKeys.add(supplementKey);
         } else {
           const fournisseurFinal = manualSuppliers[x.key] || x.fournisseur || "";
-
           allLines.push({
             key: x.key,
             nom: x.nom,
@@ -509,7 +557,7 @@ export default function OrderManagement() {
       }
     });
 
-    // reconstruction des lignes envoyées/verrouillées
+    // reconstruction lignes envoyées/verrouillées
     Object.entries(lineStatus).forEach(([key, status]) => {
       if ((status.sent || status.validated) && !processedKeys.has(key)) {
         const [baseKey] = key.split("|supplement");
@@ -534,25 +582,32 @@ export default function OrderManagement() {
       }
     });
 
+    // Injecter les lignes manuelles persistées non envoyées/validées
+    const manualPending = (manualLines || []).filter((ml) => {
+      const st = lineStatus[ml.key] || {};
+      return !st?.sent && !st?.validated;
+    });
+
+    const newStateCandidate = [...allLines, ...manualPending];
+
     setToOrder((prev) => {
-      const manualLinesStill = prev.filter(
+      const previousManual = prev.filter(
         (l) =>
-          (!l.sourceOps || l.sourceOps.length === 0) &&
-          !processedKeys.has(l.key) &&
-          !lineStatus[l.key]?.sent &&
-          !lineStatus[l.key]?.validated
+          l.isManual &&
+          !(lineStatus[l.key]?.sent || lineStatus[l.key]?.validated) &&
+          !newStateCandidate.find((x) => x.key === l.key)
       );
-      const newState = [...allLines, ...manualLinesStill];
+      const newState = [...newStateCandidate, ...previousManual];
 
       setTimeout(() => {
         isProcessingRef.current = false;
-      }, 100);
+      }, 50);
 
       return newState;
     });
-  }, [ventesAggregate, lineStatus, manualSuppliers, ventes, dismissedOps]);
+  }, [ventesAggregate, lineStatus, manualSuppliers, ventes, dismissedOps, manualLines]);
 
-  // Nettoyer les lignes orphelines
+  // Nettoyer les lignes orphelines si la vente disparait
   useEffect(() => {
     setToOrder((prev) =>
       prev.filter((line) => {
@@ -596,48 +651,37 @@ export default function OrderManagement() {
     });
   }, [groups, findSupplierRecord]);
 
-  /* ================== ACTIONS LIGNES ================== */
+  /* ================== ACTIONS LIGNES (écriture → reflétée en temps réel) ================== */
 
   const setLineStatusPartial = useCallback(
-    (key, patch, persist = true) => {
-      setLineStatus((prev) => {
-        const cur = prev[key] || {};
-        return { ...prev, [key]: { ...cur, ...patch } };
-      });
-      if (persist && societeId) {
-        const ref = doc(db, "societe", societeId, ORDER_STATUS_COLL, key);
-        const payload = {
-          ...(patch.sent !== undefined ? { sent: !!patch.sent } : {}),
-          ...(patch.validated !== undefined ? { validated: !!patch.validated } : {}),
-          ...(patch.sentAt ? { sentAt: patch.sentAt } : {}),
-          ...(patch.validatedAt ? { validatedAt: patch.validatedAt } : {}),
-          ...(Array.isArray(patch.frozenOps) ? { frozenOps: patch.frozenOps } : {}),
-          ...(patch.frozenQuantity !== undefined ? { frozenQuantity: patch.frozenQuantity } : {}),
-          ...(patch.frozenDate !== undefined ? { frozenDate: patch.frozenDate } : {}),
-          ...(patch.frozenRemise !== undefined ? { frozenRemise: patch.frozenRemise } : {}),
-          ...(patch.frozenUrgent !== undefined ? { frozenUrgent: patch.frozenUrgent } : {}),
-          ...(patch.frozenName !== undefined ? { frozenName: patch.frozenName } : {}),
-          ...(patch.frozenLot !== undefined ? { frozenLot: patch.frozenLot } : {}),
-          ...(patch.frozenSupplier !== undefined ? { frozenSupplier: patch.frozenSupplier } : {}),
-          updatedAt: Timestamp.now(),
-        };
-        setDoc(ref, payload, { merge: true }).catch((e) => console.error(e));
-      }
+    (key, patch) => {
+      // On laisse la source de vérité à Firestore → le listener mettra à jour `lineStatus` en temps réel
+      if (!societeId) return;
+      const ref = doc(db, "societe", societeId, ORDER_STATUS_COLL, key);
+      const payload = {
+        ...(patch.sent !== undefined ? { sent: !!patch.sent } : {}),
+        ...(patch.validated !== undefined ? { validated: !!patch.validated } : {}),
+        ...(patch.sentAt ? { sentAt: patch.sentAt } : {}),
+        ...(patch.validatedAt ? { validatedAt: patch.validatedAt } : {}),
+        ...(Array.isArray(patch.frozenOps) ? { frozenOps: patch.frozenOps } : {}),
+        ...(patch.frozenQuantity !== undefined ? { frozenQuantity: patch.frozenQuantity } : {}),
+        ...(patch.frozenDate !== undefined ? { frozenDate: patch.frozenDate } : {}),
+        ...(patch.frozenRemise !== undefined ? { frozenRemise: patch.frozenRemise } : {}),
+        ...(patch.frozenUrgent !== undefined ? { frozenUrgent: patch.frozenUrgent } : {}),
+        ...(patch.frozenName !== undefined ? { frozenName: patch.frozenName } : {}),
+        ...(patch.frozenLot !== undefined ? { frozenLot: patch.frozenLot } : {}),
+        ...(patch.frozenSupplier !== undefined ? { frozenSupplier: patch.frozenSupplier } : {}),
+        updatedAt: Timestamp.now(),
+      };
+      setDoc(ref, payload, { merge: true }).catch((e) => console.error(e));
     },
     [societeId]
   );
 
   const clearLineStatus = useCallback(
-    (key, removeFromFirestore = true) => {
-      setLineStatus((prev) => {
-        if (!prev[key]) return prev;
-        const next = { ...prev };
-        delete next[key];
-        return next;
-      });
-      if (removeFromFirestore && societeId) {
-        deleteDoc(doc(db, "societe", societeId, ORDER_STATUS_COLL, key)).catch(() => {});
-      }
+    (key) => {
+      if (!societeId) return;
+      deleteDoc(doc(db, "societe", societeId, ORDER_STATUS_COLL, key)).catch(() => {});
     },
     [societeId]
   );
@@ -654,18 +698,25 @@ export default function OrderManagement() {
           ).catch(() => {})
         )
       );
-      setDismissedOps((prev) => {
-        const s = new Set(prev);
-        opIds.forEach((id) => s.add(id));
-        return s;
-      });
     },
     [societeId]
   );
 
-  const setLineField = useCallback((key, field, val) => {
-    setToOrder((prev) => prev.map((l) => (l.key === key ? { ...l, [field]: val } : l)));
-  }, []);
+  const setLineField = useCallback(
+    (key, field, val) => {
+      setToOrder((prev) => prev.map((l) => (l.key === key ? { ...l, [field]: val } : l)));
+      // miroir en base si c'est une ligne manuelle persistée
+      const ml = manualLines.find((m) => m.key === key);
+      if (ml?.manualId && societeId) {
+        setDoc(
+          doc(db, "societe", societeId, MANUAL_LINES_COLL, ml.manualId),
+          { [field]: val, updatedAt: Timestamp.now() },
+          { merge: true }
+        ).catch(() => {});
+      }
+    },
+    [manualLines, societeId]
+  );
 
   const duplicateLine = useCallback((key) => {
     setToOrder((prev) => {
@@ -679,6 +730,7 @@ export default function OrderManagement() {
         urgent: false,
         sourceOps: [],
         isNewAfterSent: false,
+        isManual: l.isManual || false,
       };
       return [...prev, copy];
     });
@@ -689,19 +741,23 @@ export default function OrderManagement() {
       const key = line.key;
       const ops = Array.isArray(line.sourceOps) ? line.sourceOps : [];
 
-      // 👉 Persister l’ignorance des opérations qui ont généré cette ligne
-      if (ops.length) {
-        await persistDismissOps(ops);
+      // 1) ignorer définitivement les opérations ventes (si existantes)
+      if (ops.length) await persistDismissOps(ops);
+
+      // 2) si ligne manuelle → suppression du doc (listener mettra l'UI à jour)
+      if (line.isManual && line.manualId && societeId) {
+        await deleteDoc(doc(db, "societe", societeId, MANUAL_LINES_COLL, line.manualId)).catch(() => {});
       }
 
-      // Nettoyer le statut gelé et retirer de l’UI
-      clearLineStatus(key, true);
-      setToOrder((prev) => prev.filter((l) => l.key !== key));
+      // 3) nettoyer statut
+      clearLineStatus(key);
 
-      setSuccess("Ligne supprimée (les opérations correspondantes sont ignorées définitivement).");
+      // UI : optimiste
+      setToOrder((prev) => prev.filter((l) => l.key !== key));
+      setSuccess("Ligne supprimée.");
       setTimeout(() => setSuccess(""), 1200);
     },
-    [persistDismissOps, clearLineStatus]
+    [persistDismissOps, clearLineStatus, societeId]
   );
 
   /* ================== FOURNISSEURS & COMMERCIAUX ================== */
@@ -840,8 +896,8 @@ export default function OrderManagement() {
         const st = lineStatus[l.key] || {};
         const isToday = l.date === todayString;
         const notSent = !st.sent;
-        const isNewSupplement = l.isNewAfterSent === true;
-        return (isToday && notSent) || (isNewSupplement && notSent);
+        const isNewAfterSent = l.isNewAfterSent === true;
+        return (isToday && notSent) || (isNewAfterSent && notSent);
       });
 
       if (!lines.length) {
@@ -891,29 +947,32 @@ export default function OrderManagement() {
       window.open(url, "_blank", "noopener,noreferrer");
 
       const now = Timestamp.now();
+
+      // Geler le statut (écritures -> reflétées instantanément par le listener order_status)
       await Promise.all(
         lines.map(async (l) => {
           const frozenOps = Array.isArray(l.sourceOps) ? l.sourceOps : [];
-          setLineStatusPartial(
-            l.key,
-            {
-              sent: true,
-              sentAt: now,
-              frozenOps,
-              frozenQuantity: l.quantite,
-              frozenDate: l.date,
-              frozenRemise: l.remise,
-              frozenUrgent: l.urgent,
-              frozenName: l.nom,
-              frozenLot: l.numeroLot,
-              frozenSupplier: l.fournisseur || supplierName,
-            },
-            true
-          );
+          setLineStatusPartial(l.key, {
+            sent: true,
+            sentAt: now,
+            frozenOps,
+            frozenQuantity: l.quantite,
+            frozenDate: l.date,
+            frozenRemise: l.remise,
+            frozenUrgent: l.urgent,
+            frozenName: l.nom,
+            frozenLot: l.numeroLot,
+            frozenSupplier: l.fournisseur || supplierName,
+          });
+
+          // si ligne manuelle, on la retire de la collection (le listener mettra l'UI à jour)
+          if (l.isManual && l.manualId && societeId) {
+            await deleteDoc(doc(db, "societe", societeId, MANUAL_LINES_COLL, l.manualId)).catch(() => {});
+          }
         })
       );
 
-      setSuccess("Message WhatsApp prêt — lignes verrouillées.");
+      setSuccess("Message WhatsApp prêt — lignes verrouillées (temps réel).");
       setTimeout(() => setSuccess(""), 1500);
     },
     [
@@ -926,19 +985,21 @@ export default function OrderManagement() {
       addCommercial,
       buildWhatsAppMessage,
       setLineStatusPartial,
+      societeId,
     ]
   );
 
   const markLineValidated = useCallback(
     (key) => {
       const now = Timestamp.now();
-      setLineStatusPartial(key, { validated: true, validatedAt: now, sent: true, sentAt: now }, true);
+      // L’UI se mettra à jour via le listener temps réel
+      setLineStatusPartial(key, { validated: true, validatedAt: now, sent: true, sentAt: now });
     },
     [setLineStatusPartial]
   );
 
-  // ========= Formulaire Ligne manuelle =========
-  const addManualLine = useCallback(() => {
+  // ========= Formulaire Ligne manuelle (persistée pour temps réel/reload) =========
+  const addManualLine = useCallback(async () => {
     const nom = window.prompt("Nom du médicament :");
     if (!nom) return;
     const lot = window.prompt("Numéro de lot (optionnel) :") || "-";
@@ -971,10 +1032,22 @@ export default function OrderManagement() {
       isManual: true,
     };
 
-    setToOrder((prev) => [...prev, newLine]);
-    setSuccess("Ligne manuelle ajoutée");
-    setTimeout(() => setSuccess(""), 1200);
-  }, [fournisseurs]);
+    try {
+      if (!societeId) throw new Error("Société inconnue");
+      // Création -> le listener manual_lines chargera automatiquement l’UI
+      await addDoc(collection(db, "societe", societeId, MANUAL_LINES_COLL), {
+        ...newLine,
+        societeId,
+        createdAt: Timestamp.now(),
+        updatedAt: Timestamp.now(),
+      });
+      setSuccess("Ligne manuelle ajoutée (temps réel).");
+      setTimeout(() => setSuccess(""), 1200);
+    } catch (e) {
+      console.error("addManualLine:", e);
+      setError("Impossible d’enregistrer la ligne manuelle.");
+    }
+  }, [fournisseurs, societeId]);
 
   /* ================== UI ================== */
 
@@ -1034,8 +1107,7 @@ export default function OrderManagement() {
               Gestion des Commandes (Fournisseurs)
             </h1>
             <p style={{ margin: "6px 0 0", color: "#6b7280" }}>
-              Supprimer = on ignore définitivement les ventes qui ont généré cette ligne. 
-              De nouvelles ventes réapparaîtront normalement.
+              Tout est synchronisé en temps réel : envoi et validation apparaissent instantanément.
             </p>
           </div>
         </div>
@@ -1121,18 +1193,7 @@ export default function OrderManagement() {
               await Promise.all(
                 keysToClean.map((k) => deleteDoc(doc(db, "societe", societeId, ORDER_STATUS_COLL, k)).catch(() => {}))
               );
-              setLineStatus((prev) => {
-                const next = { ...prev };
-                keysToClean.forEach((k) => delete next[k]);
-                return next;
-              });
-              setToOrder((prev) =>
-                prev.filter((l) => {
-                  const st = lineStatus[l.key];
-                  return !st?.validated;
-                })
-              );
-              setSuccess("Nettoyage effectué : opérations validées retirées.");
+              setSuccess("Nettoyage effectué : opérations validées retirées (temps réel).");
               setTimeout(() => setSuccess(""), 1400);
             }}
             style={{
@@ -1568,7 +1629,7 @@ export default function OrderManagement() {
                                       padding: "6px 10px",
                                       cursor: "pointer",
                                     }}
-                                    title="Supprimer (ignore définitivement les ventes concernées)"
+                                    title="Supprimer"
                                   >
                                     Supprimer
                                   </button>
@@ -1594,6 +1655,7 @@ export default function OrderManagement() {
             );
           })
         )}
+        
       </div>
     </div>
   );

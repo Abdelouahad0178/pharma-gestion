@@ -296,7 +296,7 @@ export default function Dashboard() {
     // Collections
     const qVentes = query(collection(db, "societe", societeId, "ventes"), orderBy("date", "desc"));
     const qAchats = query(collection(db, "societe", societeId, "achats"), orderBy("timestamp", "desc"));
-    const qStock = collection(db, "societe", societeId, "stock"); // (fix) pas de parenthèse en trop
+    const qStock = collection(db, "societe", societeId, "stock");
     const qStockEntries = query(collection(db, "societe", societeId, "stock_entries"), orderBy("nom"));
     const qPaiements = query(collection(db, "societe", societeId, "paiements"), orderBy("date", "desc"));
 
@@ -424,7 +424,7 @@ export default function Dashboard() {
     (Array.isArray(stockEntries) ? stockEntries : []).forEach((lot) => {
       const nom = lot?.nom || "";
       const lotNum = normalizeLotNumber(lot?.numeroLot);
-      const qty = (Number(lot?.stock1) || 0) + (Number(lot?.stock2) || 0);
+      const qty = (Number(lot?.stock1) || 0) + (Number(lot?.stock2) || 0); // ✅ correction parenthèses
       const key = `l|${norm(nom)}|${norm(lotNum)}`;
       if (qty > 0 && nom) uniqueIds.add(key);
     });
@@ -574,6 +574,16 @@ export default function Dashboard() {
                 <div style={{fontSize:isMobile?"2.1em":"2.4em"}}>🛒</div><div>Nouvel Achat</div>
               </Link>
             )}
+
+            {/* 🔔 Abonnement (PayPal) */}
+            <Link
+              to="/abonnement"
+              style={{...styles.btn, background:"linear-gradient(135deg,#f59e0b,#d97706)"}}
+              title="Souscrire un abonnement annuel"
+            >
+              <div style={{fontSize:isMobile?"2.1em":"2.4em"}}>🎟️</div>
+              <div>Abonnement</div>
+            </Link>
 
             {can("parametres") && (
               <Link to="/parametres" style={{...styles.btn, background:"linear-gradient(135deg,#718096,#4a5568)"}} title="Paramètres & sauvegarde">

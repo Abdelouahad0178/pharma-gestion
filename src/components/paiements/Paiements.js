@@ -9,6 +9,7 @@ import {
   where,
   addDoc,
   updateDoc,
+  deleteDoc,
   Timestamp,
 } from "firebase/firestore";
 import { useUserRole } from "../../contexts/UserRoleContext";
@@ -26,10 +27,26 @@ const toDateSafe = (v) => {
   }
   return null;
 };
+
 const formatDate = (v, locale = "fr-FR") => {
   const d = toDateSafe(v);
   return d ? d.toLocaleDateString(locale) : "—";
 };
+
+const formatDateTime = (v, locale = "fr-FR") => {
+  const d = toDateSafe(v);
+  return d ? `${d.toLocaleDateString(locale)} ${d.toLocaleTimeString(locale, { hour: '2-digit', minute: '2-digit' })}` : "—";
+};
+
+const getDateInputValue = (timestamp) => {
+  const d = toDateSafe(timestamp);
+  if (!d) return "";
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+};
+
 const fmtDH = (n) => `${(Number(n) || 0).toFixed(2)} DH`;
 const norm = (s) =>
   String(s || "")
@@ -43,6 +60,7 @@ const isModeWanted = (mode, wanted) => {
   const m = norm(mode);
   const w = norm(wanted);
   if (w === "cheque" || w === "chèque") return m === "cheque" || m === "chèque";
+  if (w === "especes" || w === "espèces") return m === "especes" || m === "espèces";
   return m === w;
 };
 
@@ -59,6 +77,22 @@ const labelInstruments = (list = []) => {
   return `${n} chèques/traites`;
 };
 
+const getModeIcon = (mode) => {
+  const m = norm(mode);
+  if (m === "especes" || m === "espèces") return "💵";
+  if (m === "cheque" || m === "chèque") return "🏦";
+  if (m === "traite") return "📝";
+  return "💳";
+};
+
+const getModeColor = (mode) => {
+  const m = norm(mode);
+  if (m === "especes" || m === "espèces") return "#10b981";
+  if (m === "cheque" || m === "chèque") return "#3b82f6";
+  if (m === "traite") return "#8b5cf6";
+  return "#6b7280";
+};
+
 /* ================= Styles (injection) ================= */
 const useInjectStyles = () => {
   useEffect(() => {
@@ -73,14 +107,18 @@ const useInjectStyles = () => {
       .hdr{ background:linear-gradient(135deg,var(--p),var(--p2)); color:#fff; border-radius:16px; padding:16px; margin-bottom:16px; box-shadow:0 12px 30px rgba(99,102,241,.25); }
       .card{ background:var(--card); border:1px solid var(--border); border-radius:14px; padding:16px; box-shadow:0 6px 20px rgba(99,102,241,.06); }
       .controls{ display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
-      .btn{ padding:8px 12px; border-radius:10px; border:1px solid var(--border); cursor:pointer; font-weight:700; }
+      .btn{ padding:8px 12px; border-radius:10px; border:1px solid var(--border); cursor:pointer; font-weight:700; transition:all 0.2s ease; }
+      .btn:hover{ transform:translateY(-1px); box-shadow:0 4px 12px rgba(0,0,0,0.1); }
       .btn.on{ background:#10b981; color:#fff; border-color:#10b981; }
       .btn.primary{ background:linear-gradient(135deg,var(--p),var(--p2)); color:#fff; border:0; }
       .btn.warn{ background:#f59e0b; color:#fff; border:0; }
+      .btn.danger{ background:#ef4444; color:#fff; border:0; }
+      .btn.secondary{ background:#6b7280; color:#fff; border:0; }
       .select,.field{ padding:8px 10px; border-radius:10px; border:1px solid var(--border); background:#fff; }
       .notice{ border-radius:12px; padding:12px; font-weight:600; margin-bottom:12px; }
       .notice.success{ background:#dcfce7; color:#065f46; }
       .notice.error{ background:#fee2e2; color:#7f1d1d; }
+      .notice.warning{ background:#fef3c7; color:#92400e; }
       .tbl-wrap{ width:100%; overflow-x:auto; -webkit-overflow-scrolling:touch; border:1px solid var(--border); border-radius:12px; background:#fff; }
       table.tbl{ width:100%; min-width:1100px; border-collapse:collapse; }
       .tbl thead th{ position:sticky; top:0; background:linear-gradient(135deg,#f8fafc,#eef2ff); color:#111827; font-weight:800; font-size:12px; letter-spacing:.5px; border-bottom:1px solid var(--border); padding:10px; text-align:center; z-index:1; }
@@ -89,12 +127,24 @@ const useInjectStyles = () => {
       .chip{ padding:4px 8px; border-radius:8px; background:#eef2ff; color:var(--p); font-weight:800; display:inline-block; }
       .soft{ color:#6b7280; }
       .money{ color:var(--p); font-weight:800; }
-      .rowbtn{ background:transparent; border:0; cursor:pointer; font-weight:800; color:#4b5563; }
-      .rowbtn:hover{ color:#1f2937; text-decoration:underline; }
+      .rowbtn{ background:transparent; border:0; cursor:pointer; font-weight:800; color:#4b5563; padding:4px 8px; border-radius:6px; }
+      .rowbtn:hover{ color:#1f2937; background:#f3f4f6; }
       .subcard{ background:#f8fafc; border:1px solid var(--border); border-radius:12px; padding:12px; }
+      .payment-group{ background:#fff; border:1px solid var(--border); border-radius:10px; padding:12px; margin-bottom:8px; }
+      .payment-badge{ display:inline-flex; align-items:center; gap:6px; padding:6px 12px; border-radius:8px; font-size:13px; font-weight:700; }
       .grid-add{ display:grid; grid-template-columns: 130px 1fr 140px 150px 1fr 130px 1fr auto; gap:8px; }
       @media (max-width:1100px){ .grid-add{ grid-template-columns: 1fr 1fr; } }
       .tbl tfoot td{ padding:12px 10px; font-weight:900; border-top:2px solid var(--border); background:#f8fafc; }
+      .mode-summary{ display:inline-flex; align-items:center; gap:4px; padding:3px 8px; border-radius:6px; font-size:11px; font-weight:700; margin:2px; }
+      .modal-overlay{ position:fixed; inset:0; background:rgba(0,0,0,0.5); display:flex; align-items:center; justify-content:center; z-index:1000; padding:16px; backdrop-filter:blur(4px); }
+      .modal-content{ background:#fff; border-radius:16px; padding:24px; max-width:800px; width:100%; max-height:90vh; overflow-y:auto; box-shadow:0 20px 60px rgba(0,0,0,0.3); }
+      .modal-header{ display:flex; justify-content:space-between; align-items:center; margin-bottom:20px; padding-bottom:12px; border-bottom:2px solid var(--border); }
+      .modal-close{ background:transparent; border:0; font-size:28px; cursor:pointer; color:#6b7280; padding:0; width:32px; height:32px; display:flex; align-items:center; justify-content:center; border-radius:8px; }
+      .modal-close:hover{ background:#f3f4f6; color:#1f2937; }
+      .form-group{ margin-bottom:16px; }
+      .form-label{ display:block; font-size:13px; font-weight:700; color:#374151; margin-bottom:6px; }
+      .form-input{ width:100%; padding:10px 14px; border-radius:10px; border:2px solid var(--border); font-size:14px; transition:all 0.2s ease; }
+      .form-input:focus{ outline:none; border-color:var(--p); box-shadow:0 0 0 3px rgba(99,102,241,0.1); }
       @media print { .no-print{ display:none !important; } }
     `;
     document.head.appendChild(style);
@@ -106,39 +156,33 @@ export default function Paiements() {
   useInjectStyles();
   const { societeId, user, loading } = useUserRole();
 
-  // Vue : ventes | achats
   const [relatedTo, setRelatedTo] = useState("ventes");
   const [notification, setNotification] = useState(null);
-
-  // Données
   const [documents, setDocuments] = useState([]);
   const [paiements, setPaiements] = useState([]);
-
-  // Filtres
   const [filterName, setFilterName] = useState("");
-  const [filterStatus, setFilterStatus] = useState("all"); // all | paid | due
+  const [filterStatus, setFilterStatus] = useState("all");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
-  const [filterMode, setFilterMode] = useState("all"); // all | Espèces | Cheque | Traite
-
-  // Dépliage
+  const [filterMode, setFilterMode] = useState("all");
   const [expandedDocId, setExpandedDocId] = useState(null);
-
-  // Création paiement (VENTES & ACHATS)
   const [selectedDocPay, setSelectedDocPay] = useState("");
-  const [payMode, setPayMode] = useState("Espèces"); // Espèces | Chèque | Traite
+  const [payMode, setPayMode] = useState("Espèces");
   const [cashAmount, setCashAmount] = useState("");
-
-  // Instruments (création & édition)
   const [createInstr, setCreateInstr] = useState([]);
   const [editingInstrumentsFor, setEditingInstrumentsFor] = useState(null);
   const [draftInstruments, setDraftInstruments] = useState([]);
 
-  // Unsubs
+  // 🆕 États pour l'édition de paiement
+  const [editingPayment, setEditingPayment] = useState(null);
+  const [editPaymentDate, setEditPaymentDate] = useState("");
+  const [editPaymentMode, setEditPaymentMode] = useState("Espèces");
+  const [editPaymentAmount, setEditPaymentAmount] = useState("");
+  const [editPaymentInstruments, setEditPaymentInstruments] = useState([]);
+
   const unsubDocsRef = useRef(null);
   const unsubPaysRef = useRef(null);
 
-  /* ------------ Helpers UI ------------ */
   const showNote = useCallback((message, type = "success") => {
     setNotification({ message, type });
     setTimeout(() => setNotification(null), 2800);
@@ -148,7 +192,6 @@ export default function Paiements() {
     (d) => {
       if (!d || !Array.isArray(d.articles) || d.articles.length === 0) return 0;
       if (relatedTo === "achats") {
-        // seulement lignes reçues
         const recues = d.articles
           .map((a) => a?.recu || null)
           .filter((r) => r && Number(r.quantite || 0) > 0);
@@ -160,7 +203,6 @@ export default function Paiements() {
         }, 0);
         return total - (Number(d.remiseGlobale) || 0);
       }
-      // ventes
       const total = d.articles.reduce((s, a) => {
         const q = Number(a.quantite || 0);
         const pv = Number(a.prixUnitaire || a.prixVente || 0);
@@ -193,11 +235,13 @@ export default function Paiements() {
         (s, p) => s + (Number(p.montant) || 0),
         0
       );
-
-      // >>> FIX ANTI-SOLDE NÉGATIF (transferts, etc.)
-      // On ne laisse jamais un solde < 0 s'afficher.
       const rawSolde = total - paid;
       const solde = rawSolde > 0.01 ? rawSolde : 0;
+
+      const paymentModes = new Set();
+      (paiementsByDoc[d.id] || []).forEach(p => {
+        if (p.mode) paymentModes.add(p.mode);
+      });
 
       idx[d.id] = {
         id: d.id,
@@ -205,6 +249,7 @@ export default function Paiements() {
         total,
         paid,
         solde,
+        paymentModes: Array.from(paymentModes),
         dateStr:
           (d.date && formatDate(d.date)) ||
           (d.timestamp && formatDate(d.timestamp)) ||
@@ -216,7 +261,6 @@ export default function Paiements() {
     return idx;
   }, [documents, paiementsByDoc, getTotalDoc, relatedTo]);
 
-  /* ------------ Listeners ------------ */
   const loadDocuments = useCallback(() => {
     if (!societeId) return;
     if (unsubDocsRef.current) unsubDocsRef.current();
@@ -284,7 +328,6 @@ export default function Paiements() {
     };
   }, [societeId, relatedTo, loadDocuments, loadPaiements]);
 
-  /* ------------ Filtres ------------ */
   const filteredDocs = useMemo(() => {
     const nameTerm = norm(filterName);
     const from = dateFrom ? new Date(`${dateFrom}T00:00:00`) : null;
@@ -294,14 +337,12 @@ export default function Paiements() {
       const meta = docIndex[d.id];
       if (!meta) return false;
 
-      // Nom client/fournisseur ou N°
       if (nameTerm) {
         const inName = norm(meta.name).includes(nameTerm);
         const inNum = norm(meta.numberStr).includes(nameTerm);
         if (!inName && !inNum) return false;
       }
 
-      // Filtre sur paiements (mode/date)
       if (filterMode !== "all" || from || to) {
         const pays = paiementsByDoc[d.id] || [];
         const matchAny = pays.some((p) => {
@@ -314,7 +355,6 @@ export default function Paiements() {
         if (!matchAny) return false;
       }
 
-      // Statut
       if (filterStatus === "paid" && meta.solde > 0.01) return false;
       if (filterStatus === "due" && meta.solde <= 0.01) return false;
 
@@ -331,7 +371,6 @@ export default function Paiements() {
     filterStatus,
   ]);
 
-  /* ------------ Totaux des documents visibles ------------ */
   const docsTotals = useMemo(() => {
     let sumTotal = 0;
     let sumPaid = 0;
@@ -341,7 +380,7 @@ export default function Paiements() {
       if (!meta) continue;
       sumTotal += Number(meta.total) || 0;
       sumPaid += Number(meta.paid) || 0;
-      sumSolde += Number(meta.solde) || 0; // solde déjà clampé à 0
+      sumSolde += Number(meta.solde) || 0;
     }
     return {
       count: filteredDocs.length,
@@ -351,13 +390,11 @@ export default function Paiements() {
     };
   }, [filteredDocs, docIndex]);
 
-  /* ------------ Ensemble des docIds filtrés (pour recaps) ------------ */
   const filteredDocIds = useMemo(
     () => new Set(filteredDocs.map((d) => d.id)),
     [filteredDocs]
   );
 
-  /* ------------ Totaux des paiements restreints aux DOCS FILTRÉS ------------ */
   const paymentsTotals = useMemo(() => {
     const from = dateFrom ? new Date(`${dateFrom}T00:00:00`) : null;
     const to = dateTo ? new Date(`${dateTo}T23:59:59`) : null;
@@ -368,10 +405,8 @@ export default function Paiements() {
     let count = 0;
 
     for (const p of paiements) {
-      // 1) le paiement doit appartenir à un document filtré
       if (!filteredDocIds.has(p.docId)) continue;
 
-      // 2) respecter la période et le mode
       const pd = toDateSafe(p.date) || new Date(0);
       if (from && pd < from) continue;
       if (to && pd > to) continue;
@@ -395,10 +430,9 @@ export default function Paiements() {
     };
   }, [paiements, filterMode, dateFrom, dateTo, filteredDocIds]);
 
-  /* ------------ Paiements filtrés par doc (pour impression) ------------ */
   const filteredPaymentsForDoc = useCallback(
     (docId) => {
-      if (!filteredDocIds.has(docId)) return []; // sécurité
+      if (!filteredDocIds.has(docId)) return [];
       const from = dateFrom ? new Date(`${dateFrom}T00:00:00`) : null;
       const to = dateTo ? new Date(`${dateTo}T23:59:59`) : null;
       const pays = paiementsByDoc[docId] || [];
@@ -413,7 +447,6 @@ export default function Paiements() {
     [paiementsByDoc, filterMode, dateFrom, dateTo, filteredDocIds]
   );
 
-  /* ------------ MAJ statut doc ------------ */
   const updateDocStatus = useCallback(
     async (docId, newPaidTotal, docTotal) => {
       if (!societeId || !user) return;
@@ -436,7 +469,6 @@ export default function Paiements() {
     [societeId, user, relatedTo]
   );
 
-  /* ------------ Sélection doc à régler ------------ */
   const handleSelectDocPay = useCallback(
     (docId) => {
       setSelectedDocPay(docId);
@@ -449,14 +481,13 @@ export default function Paiements() {
       if (payMode === "Espèces") {
         setCashAmount(meta.solde > 0 ? String(meta.solde.toFixed(2)) : "");
       } else {
-        setCashAmount(""); // non utilisé pour chèque/traite
+        setCashAmount("");
       }
       setCreateInstr([]);
     },
     [docIndex, payMode]
   );
 
-  /* ------------ Création paiement (VENTES & ACHATS) ------------ */
   const addCreateInstrument = useCallback(() => {
     setCreateInstr((prev) => [
       ...prev,
@@ -523,12 +554,11 @@ export default function Paiements() {
       if (amount > meta.solde + 0.001)
         return showNote("Montant > solde restant", "error");
 
-      // Créer le paiement
       await addDoc(collection(db, "societe", societeId, "paiements"), {
         docId: selectedDocPay,
         montant: amount,
         mode: payMode,
-        type: relatedTo, // "ventes" ou "achats"
+        type: relatedTo,
         date: Timestamp.now(),
         creePar: user.uid,
         creeParEmail: user.email,
@@ -537,11 +567,9 @@ export default function Paiements() {
         ...payloadExtra,
       });
 
-      // MAJ statut
       const newPaid = (meta.paid || 0) + amount;
       await updateDocStatus(selectedDocPay, newPaid, meta.total);
 
-      // Reset
       setSelectedDocPay("");
       setCashAmount("");
       setCreateInstr([]);
@@ -563,11 +591,174 @@ export default function Paiements() {
     showNote,
   ]);
 
-  /* ------------ Instruments (édition paiements existants) ------------ */
+  // 🆕 ÉDITION DE PAIEMENT
+  const handleEditPayment = useCallback((payment) => {
+    setEditingPayment(payment);
+    setEditPaymentDate(getDateInputValue(payment.date));
+    setEditPaymentMode(payment.mode || "Espèces");
+    
+    const isCheque = norm(payment.mode) === "cheque" || norm(payment.mode) === "chèque";
+    const isTraite = norm(payment.mode) === "traite";
+    
+    if (isCheque || isTraite) {
+      setEditPaymentAmount("");
+      setEditPaymentInstruments(Array.isArray(payment.instruments) ? payment.instruments : []);
+    } else {
+      setEditPaymentAmount(String(payment.montant || ""));
+      setEditPaymentInstruments([]);
+    }
+  }, []);
+
+  const handleCancelEditPayment = useCallback(() => {
+    setEditingPayment(null);
+    setEditPaymentDate("");
+    setEditPaymentMode("Espèces");
+    setEditPaymentAmount("");
+    setEditPaymentInstruments([]);
+  }, []);
+
+  const handleSaveEditPayment = useCallback(async () => {
+    if (!societeId || !user || !editingPayment) return;
+
+    try {
+      let newAmount = 0;
+      let updateData = {
+        mode: editPaymentMode,
+        date: Timestamp.fromDate(new Date(editPaymentDate)),
+        modifieLe: Timestamp.now(),
+        modifiePar: user.uid,
+        modifieParEmail: user.email,
+      };
+
+      const isCheque = norm(editPaymentMode) === "cheque" || norm(editPaymentMode) === "chèque";
+      const isTraite = norm(editPaymentMode) === "traite";
+
+      if (isCheque || isTraite) {
+        const clean = editPaymentInstruments
+          .map((x) => ({
+            type: norm(editPaymentMode) === "traite" ? "traite" : "chèque",
+            banque: String(x?.banque || "").trim(),
+            numero: String(x?.numero || "").trim(),
+            echeance: x?.echeance || "",
+            montant: Number(x?.montant || 0) || 0,
+            titulaire: String(x?.titulaire || "").trim(),
+          }))
+          .filter((x) => x.montant > 0 && (x.numero || x.banque));
+
+        newAmount = clean.reduce((s, it) => s + (Number(it.montant) || 0), 0);
+        if (!(newAmount > 0))
+          return showNote("Saisir au moins un instrument valide", "error");
+
+        updateData.instruments = clean;
+      } else {
+        newAmount = Number(editPaymentAmount);
+        if (!(newAmount > 0))
+          return showNote("Montant espèces invalide", "error");
+        updateData.instruments = [];
+      }
+
+      updateData.montant = newAmount;
+
+      await updateDoc(
+        doc(db, "societe", societeId, "paiements", editingPayment.id),
+        updateData
+      );
+
+      // Recalculer le total payé pour le document
+      const docId = editingPayment.docId;
+      const allPayments = paiementsByDoc[docId] || [];
+      const oldAmount = Number(editingPayment.montant) || 0;
+      const currentPaid = allPayments.reduce((s, p) => s + (Number(p.montant) || 0), 0);
+      const newPaidTotal = currentPaid - oldAmount + newAmount;
+
+      const meta = docIndex[docId];
+      if (meta) {
+        await updateDocStatus(docId, newPaidTotal, meta.total);
+      }
+
+      showNote("Paiement modifié ✅");
+      handleCancelEditPayment();
+    } catch (e) {
+      console.error(e);
+      showNote("Erreur lors de la modification", "error");
+    }
+  }, [
+    societeId,
+    user,
+    editingPayment,
+    editPaymentMode,
+    editPaymentDate,
+    editPaymentAmount,
+    editPaymentInstruments,
+    paiementsByDoc,
+    docIndex,
+    updateDocStatus,
+    handleCancelEditPayment,
+    showNote,
+  ]);
+
+  const addEditInstrument = useCallback(() => {
+    const baseType = norm(editPaymentMode) === "traite" ? "traite" : "chèque";
+    setEditPaymentInstruments((prev) => [
+      ...prev,
+      {
+        type: baseType,
+        banque: "",
+        numero: "",
+        echeance: "",
+        montant: "",
+        titulaire: "",
+      },
+    ]);
+  }, [editPaymentMode]);
+
+  const updateEditInstrument = useCallback((idx, key, val) => {
+    setEditPaymentInstruments((prev) => {
+      const copy = [...prev];
+      copy[idx] = { ...copy[idx], [key]: val };
+      return copy;
+    });
+  }, []);
+
+  const removeEditInstrument = useCallback((idx) => {
+    setEditPaymentInstruments((prev) => prev.filter((_, i) => i !== idx));
+  }, []);
+
+  // 🆕 SUPPRESSION DE PAIEMENT
+  const handleDeletePayment = useCallback(async (payment) => {
+    if (!societeId || !user || !payment) return;
+
+    const confirmMsg = `Supprimer ce paiement de ${fmtDH(payment.montant)} (${payment.mode}) ?\n\nLe statut du document sera mis à jour automatiquement.`;
+    if (!window.confirm(confirmMsg)) return;
+
+    try {
+      // Supprimer le paiement
+      await deleteDoc(doc(db, "societe", societeId, "paiements", payment.id));
+
+      // Recalculer le total payé pour le document
+      const docId = payment.docId;
+      const allPayments = paiementsByDoc[docId] || [];
+      const deletedAmount = Number(payment.montant) || 0;
+      const currentPaid = allPayments.reduce((s, p) => s + (Number(p.montant) || 0), 0);
+      const newPaidTotal = Math.max(0, currentPaid - deletedAmount);
+
+      const meta = docIndex[docId];
+      if (meta) {
+        await updateDocStatus(docId, newPaidTotal, meta.total);
+      }
+
+      showNote("Paiement supprimé ✅");
+    } catch (e) {
+      console.error(e);
+      showNote("Erreur lors de la suppression", "error");
+    }
+  }, [societeId, user, paiementsByDoc, docIndex, updateDocStatus, showNote]);
+
   const openInstrumentsEditor = useCallback((p) => {
     setEditingInstrumentsFor(p);
     setDraftInstruments(Array.isArray(p.instruments) ? p.instruments : []);
   }, []);
+  
   const closeInstrumentsEditor = useCallback(() => {
     setEditingInstrumentsFor(null);
     setDraftInstruments([]);
@@ -614,19 +805,39 @@ export default function Paiements() {
           titulaire: String(x?.titulaire || "").trim(),
         }))
         .filter((x) => x.montant > 0 && (x.numero || x.banque));
+
+      // Calculer le nouveau montant total
+      const newTotal = clean.reduce((s, it) => s + it.montant, 0);
+
       await updateDoc(
         doc(db, "societe", societeId, "paiements", editingInstrumentsFor.id),
-        { instruments: clean, modifieLe: Timestamp.now() }
+        { 
+          instruments: clean, 
+          montant: newTotal,
+          modifieLe: Timestamp.now() 
+        }
       );
+
+      // Recalculer le solde du document
+      const docId = editingInstrumentsFor.docId;
+      const allPayments = paiementsByDoc[docId] || [];
+      const oldAmount = Number(editingInstrumentsFor.montant) || 0;
+      const currentPaid = allPayments.reduce((s, p) => s + (Number(p.montant) || 0), 0);
+      const newPaidTotal = currentPaid - oldAmount + newTotal;
+
+      const meta = docIndex[docId];
+      if (meta) {
+        await updateDocStatus(docId, newPaidTotal, meta.total);
+      }
+
       showNote("Instruments enregistrés ✅");
       closeInstrumentsEditor();
     } catch (e) {
       console.error(e);
       showNote("Erreur d'enregistrement des instruments", "error");
     }
-  }, [societeId, draftInstruments, editingInstrumentsFor, closeInstrumentsEditor, showNote]);
+  }, [societeId, draftInstruments, editingInstrumentsFor, paiementsByDoc, docIndex, updateDocStatus, closeInstrumentsEditor, showNote]);
 
-  /* ------------ Listes dérivées ------------ */
   const docsWithBalance = useMemo(() => {
     return documents
       .filter((d) => {
@@ -650,7 +861,6 @@ export default function Paiements() {
     setExpandedDocId((prev) => (prev === docId ? null : docId));
   }, []);
 
-  /* ------------ Impression : builder + ouverture via Blob/iframe ------------ */
   const buildFilterSummary = () => {
     const parts = [];
     parts.push(`Type: ${relatedTo === "ventes" ? "Ventes" : "Achats"}`);
@@ -669,12 +879,14 @@ export default function Paiements() {
       "Etat " + (relatedTo === "ventes" ? "Ventes" : "Achats") + " — Filtré";
     const filterSummary = buildFilterSummary();
 
-    // Section tableau docs
     const rowsDocs = filteredDocs
       .map((d) => {
         const meta = docIndex[d.id];
         if (!meta) return "";
         const statut = meta.solde > 0.01 ? "Partiel/Impayé" : "Payé";
+        const modesList = meta.paymentModes.length > 0 
+          ? meta.paymentModes.map(m => `${getModeIcon(m)} ${m}`).join(", ")
+          : "—";
         return `
           <tr>
             <td class="left">${escapeHtml(meta.name)}</td>
@@ -684,12 +896,12 @@ export default function Paiements() {
             <td>${fmtDH(meta.paid)}</td>
             <td class="${meta.solde > 0.01 ? "neg" : "pos"}">${fmtDH(meta.solde)}</td>
             <td>${statut}</td>
+            <td style="font-size:11px">${modesList}</td>
           </tr>
         `;
       })
       .join("");
 
-    // Section détail paiements par doc (filtrés)
     const details = filteredDocs
       .map((d) => {
         const meta = docIndex[d.id];
@@ -715,8 +927,8 @@ export default function Paiements() {
                         : "—";
                       return `
                         <tr>
-                          <td class="left">${escapeHtml(formatDate(p.date))}</td>
-                          <td>${escapeHtml(p.mode || "—")}</td>
+                          <td class="left">${escapeHtml(formatDateTime(p.date))}</td>
+                          <td>${getModeIcon(p.mode)} ${escapeHtml(p.mode || "—")}</td>
                           <td class="money">${fmtDH(p.montant)}</td>
                           <td>${escapeHtml(lab)}</td>
                         </tr>
@@ -735,12 +947,11 @@ export default function Paiements() {
       })
       .join("");
 
-    // Récap paiements (docs filtrés seulement)
     const recap = `
       <div class="recap">
-        <div><span class="muted">Espèces</span><b>${fmtDH(paymentsTotals.especes)}</b></div>
-        <div><span class="muted">Chèque</span><b>${fmtDH(paymentsTotals.cheque)}</b></div>
-        <div><span class="muted">Traite</span><b>${fmtDH(paymentsTotals.traite)}</b></div>
+        <div><span class="muted">💵 Espèces</span><b>${fmtDH(paymentsTotals.especes)}</b></div>
+        <div><span class="muted">🏦 Chèque</span><b>${fmtDH(paymentsTotals.cheque)}</b></div>
+        <div><span class="muted">📝 Traite</span><b>${fmtDH(paymentsTotals.traite)}</b></div>
         <div><span class="muted">Grand total</span><b>${fmtDH(paymentsTotals.total)}</b></div>
         <div><span class="muted"># paiements</span><b>${paymentsTotals.count}</b></div>
       </div>
@@ -797,10 +1008,11 @@ export default function Paiements() {
           <th>Payé</th>
           <th>Solde</th>
           <th>Statut</th>
+          <th>Modes</th>
         </tr>
       </thead>
       <tbody>
-        ${rowsDocs || `<tr><td colspan="7" class="muted" style="text-align:center;padding:12px">Aucun document</td></tr>`}
+        ${rowsDocs || `<tr><td colspan="8" class="muted" style="text-align:center;padding:12px">Aucun document</td></tr>`}
       </tbody>
       <tfoot>
         <tr>
@@ -809,7 +1021,7 @@ export default function Paiements() {
           <td class="money">${fmtDH(docsTotals.total)}</td>
           <td>${fmtDH(docsTotals.paid)}</td>
           <td class="${docsTotals.solde > 0.01 ? "neg" : "pos"}">${fmtDH(docsTotals.solde)}</td>
-          <td>—</td>
+          <td colspan="2">—</td>
         </tr>
       </tfoot>
     </table>
@@ -832,7 +1044,6 @@ export default function Paiements() {
 </html>
     `;
 
-    // OUVERTURE via URL Blob
     try {
       const blob = new Blob([html], { type: "text/html" });
       const url = URL.createObjectURL(blob);
@@ -879,7 +1090,6 @@ export default function Paiements() {
     buildFilterSummary
   ]);
 
-// util secu HTML
   function escapeHtml(str) {
     return String(str || "")
       .replaceAll("&", "&amp;")
@@ -889,20 +1099,18 @@ export default function Paiements() {
       .replaceAll("'", "&#039;");
   }
 
-  /* ------------ Guards ------------ */
   if (loading) return <div style={{ padding: 16 }}>Chargement…</div>;
   if (!user) return <div style={{ padding: 16, color: "#e11d48" }}>Non connecté.</div>;
   if (!societeId) return <div style={{ padding: 16, color: "#e11d48" }}>Aucune société.</div>;
 
-  /* ------------ UI ------------ */
   return (
     <div className="paie-wrap">
       <div className="hdr">
-        <h1 style={{ margin: 0, fontWeight: 900 }}>Gestion des Paiements</h1>
+        <h1 style={{ margin: 0, fontWeight: 900 }}>💰 Gestion des Paiements (CRUD)</h1>
         <div style={{ opacity: 0.9, marginTop: 6 }}>
           {relatedTo === "ventes"
-            ? "Encaissement (Espèces / Chèque / Traite) & historique — Ventes"
-            : "Règlement (Espèces / Chèque / Traite) & historique — Achats"}
+            ? "Encaissement complet : Créer, Modifier, Supprimer — Ventes"
+            : "Règlement complet : Créer, Modifier, Supprimer — Achats"}
         </div>
       </div>
 
@@ -912,7 +1120,6 @@ export default function Paiements() {
         </div>
       )}
 
-      {/* Filtres + Encaissement */}
       <div className="card" style={{ marginBottom: 16 }}>
         <div className="controls" style={{ marginBottom: 10 }}>
           <button
@@ -926,7 +1133,7 @@ export default function Paiements() {
               setCreateInstr([]);
             }}
           >
-            Ventes
+            📊 Ventes
           </button>
           <button
             className={`btn ${relatedTo === "achats" ? "on" : ""}`}
@@ -939,7 +1146,7 @@ export default function Paiements() {
               setCreateInstr([]);
             }}
           >
-            Achats
+            🛒 Achats
           </button>
 
           <input
@@ -974,9 +1181,9 @@ export default function Paiements() {
             title="Mode paiement (filtre sur paiements)"
           >
             <option value="all">Tous modes</option>
-            <option value="Espèces">Espèces</option>
-            <option value="Cheque">Chèque</option>
-            <option value="Traite">Traite</option>
+            <option value="Espèces">💵 Espèces</option>
+            <option value="Cheque">🏦 Chèque</option>
+            <option value="Traite">📝 Traite</option>
           </select>
 
           <select
@@ -990,16 +1197,14 @@ export default function Paiements() {
             <option value="due">Avec solde</option>
           </select>
 
-          {/* Bouton d'impression */}
           <button className="btn primary" onClick={handlePrint} title="Imprimer l'état filtré">
-            Imprimer l’état filtré
+            🖨️ Imprimer
           </button>
         </div>
 
-        {/* Encaissement / Règlement */}
         <div className="subcard">
           <h3 style={{ margin: "0 0 10px 0" }}>
-            {relatedTo === "ventes" ? "Régler une vente" : "Régler un achat"}
+            {relatedTo === "ventes" ? "➕ Régler une vente" : "➕ Régler un achat"}
           </h3>
 
           <div className="controls" style={{ marginBottom: 8 }}>
@@ -1060,25 +1265,24 @@ export default function Paiements() {
                   style={{ width: 160 }}
                 />
                 <button className="btn primary" onClick={handleCreatePayment}>
-                  Enregistrer (Espèces)
+                  ✅ Enregistrer (Espèces)
                 </button>
               </>
             ) : (
               <>
                 <button className="btn" onClick={addCreateInstrument}>
-                  + Ajouter {payMode.toLowerCase()}
+                  ➕ Ajouter {payMode.toLowerCase()}
                 </button>
                 <div className="soft">
                   Total instruments : <b>{fmtDH(createInstrTotal)}</b>
                 </div>
                 <button className="btn primary" onClick={handleCreatePayment}>
-                  Enregistrer ({payMode})
+                  ✅ Enregistrer ({payMode})
                 </button>
               </>
             )}
           </div>
 
-          {/* Grille instruments pour création */}
           {payMode !== "Espèces" && createInstr.length > 0 && (
             <div style={{ width: "100%", overflowX: "auto" }}>
               <div className="grid-add" style={{ minWidth: 900 }}>
@@ -1147,7 +1351,7 @@ export default function Paiements() {
 
                     <div>
                       <button className="btn warn" onClick={() => removeCreateInstrument(i)}>
-                        Supprimer
+                        🗑️ Supprimer
                       </button>
                     </div>
                   </React.Fragment>
@@ -1158,10 +1362,9 @@ export default function Paiements() {
         </div>
       </div>
 
-      {/* Tableau documents */}
       <div className="card">
         <h3 style={{ margin: "0 0 10px 0" }}>
-          {relatedTo === "ventes" ? "Documents de Vente" : "Bons d'Achat (Reçus)"}
+          {relatedTo === "ventes" ? "📋 Documents de Vente" : "📋 Bons d'Achat (Reçus)"}
         </h3>
         <div className="tbl-wrap">
           <table className="tbl">
@@ -1176,7 +1379,8 @@ export default function Paiements() {
                 <th>Payé</th>
                 <th>Solde</th>
                 <th>Statut</th>
-                <th>Historique</th>
+                <th>Modes paiement</th>
+                <th>Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -1213,90 +1417,129 @@ export default function Paiements() {
                         </span>
                       </td>
                       <td>
+                        {meta.paymentModes.length > 0 ? (
+                          <div style={{ display: "flex", gap: 4, flexWrap: "wrap", justifyContent: "center" }}>
+                            {meta.paymentModes.map((mode, idx) => (
+                              <span 
+                                key={idx}
+                                className="mode-summary"
+                                style={{ 
+                                  background: getModeColor(mode),
+                                  color: "#fff"
+                                }}
+                              >
+                                {getModeIcon(mode)} {mode}
+                              </span>
+                            ))}
+                          </div>
+                        ) : (
+                          <span className="soft">—</span>
+                        )}
+                      </td>
+                      <td>
                         <button
                           className="rowbtn"
                           onClick={() => toggleExpand(d.id)}
                           title="Voir paiements"
                         >
-                          {expanded ? "Cacher" : "Voir"} paiements
+                          {expanded ? "⬆️ Masquer" : "⬇️ Voir"} ({pays.length})
                         </button>
                       </td>
                     </tr>
 
                     {expanded && (
                       <tr>
-                        <td colSpan={8} style={{ padding: 12 }}>
+                        <td colSpan={9} style={{ padding: 12 }}>
                           <div className="subcard">
-                            <h4 style={{ margin: "0 0 10px 0", textAlign: "left" }}>
-                              Paiements de {meta.name} • {meta.numberStr}
+                            <h4 style={{ margin: "0 0 12px 0", textAlign: "left", display: "flex", alignItems: "center", gap: 8 }}>
+                              💳 Paiements de <strong>{meta.name}</strong> • {meta.numberStr}
+                              <span style={{ background: "#eef2ff", color: "#4f46e5", padding: "3px 10px", borderRadius: 16, fontSize: 12, fontWeight: 700 }}>
+                                {pays.length} paiement{pays.length > 1 ? "s" : ""}
+                              </span>
                             </h4>
 
                             {pays.length === 0 ? (
                               <div className="soft">Aucun paiement enregistré.</div>
                             ) : (
-                              <table
-                                style={{
-                                  width: "100%",
-                                  borderCollapse: "collapse",
-                                  background: "#fff",
-                                  borderRadius: 8,
-                                  overflow: "hidden",
-                                  border: "1px solid var(--border)",
-                                }}
-                              >
-                                <thead>
-                                  <tr style={{ background: "#f8fafc" }}>
-                                    <th style={{ padding: 8, textAlign: "left" }}>Date</th>
-                                    <th style={{ padding: 8 }}>Mode</th>
-                                    <th style={{ padding: 8 }}>Montant</th>
-                                    <th style={{ padding: 8 }}>Instruments</th>
-                                    <th style={{ padding: 8, width: 180 }}>Actions</th>
-                                  </tr>
-                                </thead>
-                                <tbody>
-                                  {pays.map((p) => {
-                                    const isCheque =
-                                      norm(p.mode) === "cheque" ||
-                                      norm(p.mode) === "chèque";
-                                    const isTraite = norm(p.mode) === "traite";
-                                    const canEditInstr = isCheque || isTraite;
-                                    const label =
-                                      canEditInstr && Array.isArray(p.instruments)
-                                        ? labelInstruments(p.instruments)
-                                        : canEditInstr
-                                        ? "Aucun — à compléter"
-                                        : "—";
+                              <div style={{ display: "grid", gap: 12 }}>
+                                {pays.map((p, pIdx) => {
+                                  const isCheque =
+                                    norm(p.mode) === "cheque" ||
+                                    norm(p.mode) === "chèque";
+                                  const isTraite = norm(p.mode) === "traite";
+                                  const canEditInstr = isCheque || isTraite;
+                                  const label =
+                                    canEditInstr && Array.isArray(p.instruments)
+                                      ? labelInstruments(p.instruments)
+                                      : canEditInstr
+                                      ? "Aucun — à compléter"
+                                      : "—";
 
-                                    return (
-                                      <tr
-                                        key={p.id}
-                                        style={{ borderTop: "1px solid var(--border)" }}
-                                      >
-                                        <td style={{ padding: 8, textAlign: "left" }}>
-                                          {formatDate(p.date)}
-                                        </td>
-                                        <td style={{ padding: 8 }}>{p.mode || "—"}</td>
-                                        <td style={{ padding: 8, fontWeight: 800 }}>
-                                          {fmtDH(p.montant)}
-                                        </td>
-                                        <td style={{ padding: 8 }}>{label}</td>
-                                        <td style={{ padding: 8 }}>
-                                          {canEditInstr ? (
+                                  return (
+                                    <div key={p.id} className="payment-group">
+                                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                                        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                                          <span 
+                                            className="payment-badge"
+                                            style={{ 
+                                              background: getModeColor(p.mode),
+                                              color: "#fff"
+                                            }}
+                                          >
+                                            {getModeIcon(p.mode)} {p.mode || "—"}
+                                          </span>
+                                          <span style={{ fontSize: 20, fontWeight: 800, color: "#059669" }}>
+                                            {fmtDH(p.montant)}
+                                          </span>
+                                        </div>
+                                        <div style={{ display: "flex", gap: 6 }}>
+                                          <button
+                                            className="btn secondary"
+                                            onClick={() => handleEditPayment(p)}
+                                            style={{ fontSize: 12 }}
+                                            title="Modifier ce paiement"
+                                          >
+                                            ✏️ Modifier
+                                          </button>
+                                          {canEditInstr && (
                                             <button
                                               className="btn"
                                               onClick={() => openInstrumentsEditor(p)}
+                                              style={{ fontSize: 12 }}
+                                              title="Gérer les instruments"
                                             >
-                                              Gérer instruments
+                                              ⚙️ Instruments
                                             </button>
-                                          ) : (
-                                            <span className="soft">—</span>
                                           )}
-                                        </td>
-                                      </tr>
-                                    );
-                                  })}
-                                </tbody>
-                              </table>
+                                          <button
+                                            className="btn danger"
+                                            onClick={() => handleDeletePayment(p)}
+                                            style={{ fontSize: 12 }}
+                                            title="Supprimer ce paiement"
+                                          >
+                                            🗑️
+                                          </button>
+                                        </div>
+                                      </div>
+
+                                      <div style={{ fontSize: 12, color: "#6b7280", marginBottom: canEditInstr && label !== "—" ? 8 : 0 }}>
+                                        📅 {formatDateTime(p.date)}
+                                        {p.creeParEmail && (
+                                          <span style={{ marginLeft: 12 }}>
+                                            👤 Par: {p.creeParEmail}
+                                          </span>
+                                        )}
+                                      </div>
+
+                                      {canEditInstr && label !== "—" && (
+                                        <div style={{ background: "#f0f9ff", border: "1px solid #bfdbfe", borderRadius: 8, padding: 8, fontSize: 13 }}>
+                                          <strong style={{ color: "#1e40af" }}>📎 Instruments:</strong> {label}
+                                        </div>
+                                      )}
+                                    </div>
+                                  );
+                                })}
+                              </div>
                             )}
                           </div>
                         </td>
@@ -1308,14 +1551,13 @@ export default function Paiements() {
 
               {filteredDocs.length === 0 && (
                 <tr>
-                  <td colSpan={8} style={{ padding: 16, textAlign: "center" }}>
+                  <td colSpan={9} style={{ padding: 16, textAlign: "center" }}>
                     <span className="soft">Aucun document pour ces filtres.</span>
                   </td>
                 </tr>
               )}
             </tbody>
 
-            {/* Totaux documents */}
             <tfoot>
               <tr>
                 <td className="left" colSpan={2}>
@@ -1325,29 +1567,28 @@ export default function Paiements() {
                 <td className="money">{fmtDH(docsTotals.total)}</td>
                 <td>{fmtDH(docsTotals.paid)}</td>
                 <td style={{ fontWeight: 900 }}>{fmtDH(docsTotals.solde)}</td>
-                <td colSpan={2}>—</td>
+                <td colSpan={3}>—</td>
               </tr>
             </tfoot>
           </table>
         </div>
       </div>
 
-      {/* Récap des paiements — aligné sur les DOCS FILTRÉS */}
       <div className="card" style={{ marginTop: 16 }}>
         <h3 style={{ marginTop: 0 }}>
-          Totaux des paiements — {relatedTo === "ventes" ? "Ventes" : "Achats"} (docs filtrés)
+          📊 Totaux des paiements — {relatedTo === "ventes" ? "Ventes" : "Achats"} (docs filtrés)
         </h3>
         <div className="controls" style={{ flexWrap: "wrap" }}>
           <div className="subcard" style={{ minWidth: 240 }}>
-            <div className="soft">Espèces</div>
+            <div className="soft">💵 Espèces</div>
             <div className="money" style={{ fontSize: 18 }}>{fmtDH(paymentsTotals.especes)}</div>
           </div>
           <div className="subcard" style={{ minWidth: 240 }}>
-            <div className="soft">Chèque</div>
+            <div className="soft">🏦 Chèque</div>
             <div className="money" style={{ fontSize: 18 }}>{fmtDH(paymentsTotals.cheque)}</div>
           </div>
           <div className="subcard" style={{ minWidth: 240 }}>
-            <div className="soft">Traite</div>
+            <div className="soft">📝 Traite</div>
             <div className="money" style={{ fontSize: 18 }}>{fmtDH(paymentsTotals.traite)}</div>
           </div>
           <div className="subcard" style={{ minWidth: 260 }}>
@@ -1360,7 +1601,169 @@ export default function Paiements() {
         </div>
       </div>
 
-      {/* ÉDITEUR D'INSTRUMENTS */}
+      {/* 🆕 MODAL D'ÉDITION DE PAIEMENT */}
+      {editingPayment && (
+        <div className="modal-overlay" onClick={(e) => { if (e.target === e.currentTarget) handleCancelEditPayment(); }}>
+          <div className="modal-content">
+            <div className="modal-header">
+              <h3 style={{ margin: 0, fontSize: 20, fontWeight: 700 }}>
+                ✏️ Modifier le paiement
+              </h3>
+              <button className="modal-close" onClick={handleCancelEditPayment}>×</button>
+            </div>
+
+            <div style={{ marginBottom: 16 }}>
+              <div style={{ background: "#f0f9ff", border: "1px solid #bfdbfe", borderRadius: 10, padding: 12 }}>
+                <strong>Document:</strong> {docIndex[editingPayment.docId]?.name} • {docIndex[editingPayment.docId]?.numberStr}
+              </div>
+            </div>
+
+            <div className="form-group">
+              <label className="form-label">Date du paiement</label>
+              <input
+                type="date"
+                className="form-input"
+                value={editPaymentDate}
+                onChange={(e) => setEditPaymentDate(e.target.value)}
+              />
+            </div>
+
+            <div className="form-group">
+              <label className="form-label">Mode de paiement</label>
+              <select
+                className="form-input"
+                value={editPaymentMode}
+                onChange={(e) => {
+                  const newMode = e.target.value;
+                  setEditPaymentMode(newMode);
+                  if (newMode === "Espèces") {
+                    setEditPaymentAmount(String(editingPayment.montant || ""));
+                    setEditPaymentInstruments([]);
+                  } else {
+                    setEditPaymentAmount("");
+                    setEditPaymentInstruments(Array.isArray(editingPayment.instruments) ? editingPayment.instruments : []);
+                  }
+                }}
+              >
+                <option>Espèces</option>
+                <option>Chèque</option>
+                <option>Traite</option>
+              </select>
+            </div>
+
+            {editPaymentMode === "Espèces" ? (
+              <div className="form-group">
+                <label className="form-label">Montant (DH)</label>
+                <input
+                  type="number"
+                  step="0.01"
+                  className="form-input"
+                  value={editPaymentAmount}
+                  onChange={(e) => setEditPaymentAmount(e.target.value)}
+                  placeholder="0.00"
+                />
+              </div>
+            ) : (
+              <div className="form-group">
+                <label className="form-label">Instruments ({editPaymentMode})</label>
+                <button className="btn" onClick={addEditInstrument} style={{ marginBottom: 8 }}>
+                  ➕ Ajouter un instrument
+                </button>
+
+                {editPaymentInstruments.length > 0 && (
+                  <div style={{ width: "100%", overflowX: "auto" }}>
+                    <div className="grid-add" style={{ minWidth: 900 }}>
+                      <div style={{ fontWeight: 800 }}>Type</div>
+                      <div style={{ fontWeight: 800 }}>Banque</div>
+                      <div style={{ fontWeight: 800 }}>N°</div>
+                      <div style={{ fontWeight: 800 }}>Échéance</div>
+                      <div style={{ fontWeight: 800 }}>Titulaire</div>
+                      <div style={{ fontWeight: 800 }}>Montant</div>
+                      <div style={{ fontWeight: 800 }}>Résumé</div>
+                      <div style={{ fontWeight: 800 }}>—</div>
+
+                      {editPaymentInstruments.map((it, i) => (
+                        <React.Fragment key={i}>
+                          <select
+                            className="select"
+                            value={it.type}
+                            onChange={(e) => updateEditInstrument(i, "type", e.target.value)}
+                          >
+                            <option value="chèque">Chèque</option>
+                            <option value="traite">Traite</option>
+                          </select>
+
+                          <input
+                            className="field"
+                            placeholder="Banque"
+                            value={it.banque || ""}
+                            onChange={(e) => updateEditInstrument(i, "banque", e.target.value)}
+                          />
+
+                          <input
+                            className="field"
+                            placeholder="Numéro"
+                            value={it.numero || ""}
+                            onChange={(e) => updateEditInstrument(i, "numero", e.target.value)}
+                          />
+
+                          <input
+                            className="field"
+                            type="date"
+                            value={it.echeance || ""}
+                            onChange={(e) => updateEditInstrument(i, "echeance", e.target.value)}
+                          />
+
+                          <input
+                            className="field"
+                            placeholder="Titulaire"
+                            value={it.titulaire || ""}
+                            onChange={(e) => updateEditInstrument(i, "titulaire", e.target.value)}
+                          />
+
+                          <input
+                            className="field"
+                            type="number"
+                            step="0.01"
+                            placeholder="Montant"
+                            value={it.montant || ""}
+                            onChange={(e) => updateEditInstrument(i, "montant", e.target.value)}
+                          />
+
+                          <div className="soft">
+                            {`${(it.type || "chèque").toUpperCase()} • ${it.numero || "—"} • ${it.banque || "—"}`}
+                          </div>
+
+                          <div>
+                            <button className="btn warn" onClick={() => removeEditInstrument(i)}>
+                              🗑️
+                            </button>
+                          </div>
+                        </React.Fragment>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                <div style={{ marginTop: 8, fontSize: 14, color: "#6b7280" }}>
+                  <strong>Total instruments:</strong> {fmtDH(editPaymentInstruments.reduce((s, it) => s + (Number(it.montant) || 0), 0))}
+                </div>
+              </div>
+            )}
+
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 20 }}>
+              <button className="btn secondary" onClick={handleCancelEditPayment}>
+                ❌ Annuler
+              </button>
+              <button className="btn primary" onClick={handleSaveEditPayment}>
+                ✅ Enregistrer les modifications
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ÉDITEUR D'INSTRUMENTS (Gérer instruments) */}
       {editingInstrumentsFor && (
         <div
           className="card"
@@ -1371,7 +1774,7 @@ export default function Paiements() {
           }}
         >
           <h3 style={{ marginTop: 0 }}>
-            Instruments pour {editingInstrumentsFor.mode} —{" "}
+            🔧 Instruments pour {editingInstrumentsFor.mode} —{" "}
             <span style={{ color: "#6b7280" }}>
               Paiement de {docIndex[editingInstrumentsFor.docId]?.name || "—"} •{" "}
               {docIndex[editingInstrumentsFor.docId]?.numberStr || "—"}
@@ -1380,7 +1783,7 @@ export default function Paiements() {
 
           <div className="controls" style={{ margin: "8px 0 12px 0" }}>
             <button className="btn" onClick={() => addInstrument()}>
-              + Ajouter instrument
+              ➕ Ajouter instrument
             </button>
             <span className="soft">
               Saisissez plusieurs chèques/traites si nécessaire.
@@ -1388,7 +1791,7 @@ export default function Paiements() {
           </div>
 
           {draftInstruments.length === 0 ? (
-            <div className="soft">Aucun instrument. Cliquez sur “Ajouter”.</div>
+            <div className="soft">Aucun instrument. Cliquez sur "Ajouter".</div>
           ) : (
             <div style={{ width: "100%", overflowX: "auto" }}>
               <div className="grid-add" style={{ minWidth: 900 }}>
@@ -1457,7 +1860,7 @@ export default function Paiements() {
 
                     <div>
                       <button className="btn warn" onClick={() => removeInstrument(i)}>
-                        Supprimer
+                        🗑️ Supprimer
                       </button>
                     </div>
                   </React.Fragment>
@@ -1468,10 +1871,10 @@ export default function Paiements() {
 
           <div className="controls" style={{ marginTop: 12 }}>
             <button className="btn" onClick={closeInstrumentsEditor}>
-              Fermer
+              ❌ Fermer
             </button>
             <button className="btn primary" onClick={saveInstruments}>
-              Enregistrer les instruments
+              ✅ Enregistrer les instruments
             </button>
           </div>
         </div>
