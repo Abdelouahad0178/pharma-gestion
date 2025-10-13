@@ -1,4 +1,4 @@
-// src/App.js - Synchro ventes -> stock + Clients + Placeholders Commandes (lint clean)
+// src/App.js - Synchro ventes -> stock + Clients + Analytics + Legal (complet)
 
 import React, { useState, useEffect, useRef } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate, useLocation } from 'react-router-dom';
@@ -26,6 +26,12 @@ import AddSocieteIdToAllUsers from './components/admin/AddSocieteIdToAllUsers';
 import InitOwner from './components/admin/InitOwner';
 import Clients from './components/clients/Clients';
 
+// 🆕 Analytics - Graphiques et statistiques
+import Analytics from './components/analytics/Analytics';
+
+// 🆕 Documents Légaux
+import LegalDocuments from './components/legal/LegalDocuments';
+
 // 🆕 Page Abonnement (PayPal)
 import Abonnement from './pages/Abonnement';
 
@@ -38,14 +44,8 @@ import { db } from './firebase/config';
 import { attachRealtimeSalesSync } from './lib/realtimeSalesSync';
 
 /* -------------------------------------------
- * Placeholders Commandes (évite Module not found)
+ * Placeholders Commandes
  * -----------------------------------------*/
-// Quand tu auras créé :
-//   - src/components/commandes/Commandes.js
-//   - src/components/commandes/NouvelleCommande.js
-// supprime les deux composants ci-dessous et remets :
-// import Commandes from './components/commandes/Commandes';
-// import NouvelleCommande from './components/commandes/NouvelleCommande';
 const PlaceholderCard = ({ title, text, hint }) => (
   <div style={{ minHeight: '60vh', display: 'grid', placeItems: 'center', background: '#f6f8fa', padding: 24 }}>
     <div style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: 14, padding: 24, maxWidth: 720 }}>
@@ -59,6 +59,7 @@ const PlaceholderCard = ({ title, text, hint }) => (
     </div>
   </div>
 );
+
 const Commandes = () => (
   <PlaceholderCard
     title="Commandes (liste/gestion)"
@@ -66,23 +67,23 @@ const Commandes = () => (
     hint="src/components/commandes/Commandes.js"
   />
 );
+
 const NouvelleCommande = () => (
   <PlaceholderCard
     title="Nouvelle commande"
-    text="Choisir un produit existant du stock ou créer un nouveau ; si le produit existe (même avec quantité 0), afficher la quantité en 'État stock'. Crée src/components/commandes/NouvelleCommande.js puis remets l'import."
+    text="Choisir un produit existant du stock ou créer un nouveau ; si le produit existe (même avec quantité 0), afficher la quantité en 'État stock'."
     hint="src/components/commandes/NouvelleCommande.js"
   />
 );
 
 /* -------------------------------------------
- * Loader de démarrage (UI uniquement)
+ * Loader de démarrage
  * -----------------------------------------*/
 const AppLoader = ({ onLoadingComplete, minLoadingTime = 2500 }) => {
   const [progress, setProgress] = useState(0);
   const [loadingText, setLoadingText] = useState('Initialisation...');
 
   useEffect(() => {
-    // ✅ steps dans l’effet pour éviter le warning deps
     const loadingSteps = [
       { progress: 20, text: 'Chargement des ressources...' },
       { progress: 40, text: 'Configuration Firebase...' },
@@ -124,8 +125,7 @@ const AppLoader = ({ onLoadingComplete, minLoadingTime = 2500 }) => {
         <div style={{
           fontSize: window.innerWidth < 768 ? 28 : 42, fontWeight: 800,
           background: 'linear-gradient(45deg,#fff,#f0f9ff)', WebkitBackgroundClip: 'text',
-          WebkitTextFillColor: 'transparent', backgroundClip: 'text', marginBottom: 8,
-          textShadow: '0 2px 4px rgba(0,0,0,.1)'
+          WebkitTextFillColor: 'transparent', backgroundClip: 'text', marginBottom: 8
         }}>
           Stock & Gestion
         </div>
@@ -146,7 +146,7 @@ const AppLoader = ({ onLoadingComplete, minLoadingTime = 2500 }) => {
         }} />
       </div>
 
-      <div style={{ fontSize: 18, fontWeight: 600, marginBottom: 20, minHeight: 25, opacity: .95, textAlign: 'center' }}>
+      <div style={{ fontSize: 18, fontWeight: 600, marginBottom: 20, minHeight: 25, opacity: .95 }}>
         {loadingText}
       </div>
 
@@ -156,13 +156,13 @@ const AppLoader = ({ onLoadingComplete, minLoadingTime = 2500 }) => {
       }}>
         <div style={{
           height: '100%', background: 'linear-gradient(90deg,#fff,#f0f9ff)', borderRadius: 3,
-          width: `${progress}%`, transition: 'width .5s ease-out', boxShadow: '0 0 10px rgba(255,255,255,.3)'
+          width: `${progress}%`, transition: 'width .5s ease-out'
         }} />
       </div>
 
       <div style={{ fontSize: 14, opacity: .8, marginBottom: 30 }}>{progress}%</div>
 
-      <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+      <div style={{ display: 'flex', gap: 12 }}>
         {[0, 1, 2].map(i => (
           <div key={i} style={{
             width: 10, height: 10, background: 'rgba(255,255,255,.7)', borderRadius: '50%',
@@ -171,15 +171,11 @@ const AppLoader = ({ onLoadingComplete, minLoadingTime = 2500 }) => {
         ))}
       </div>
 
-      <style
-        dangerouslySetInnerHTML={{
-          __html: `
-          @keyframes spin { 0%{transform:rotate(0)} 100%{transform:rotate(360deg)} }
-          @keyframes spinReverse { 0%{transform:translate(-50%,-50%) rotate(360deg)} 100%{transform:translate(-50%,-50%) rotate(0)} }
-          @keyframes pulse { 0%,100%{transform:scale(1);opacity:.7} 50%{transform:scale(1.3);opacity:1} }
-        `
-        }}
-      />
+      <style dangerouslySetInnerHTML={{__html: `
+        @keyframes spin { 0%{transform:rotate(0)} 100%{transform:rotate(360deg)} }
+        @keyframes spinReverse { 0%{transform:translate(-50%,-50%) rotate(360deg)} 100%{transform:translate(-50%,-50%) rotate(0)} }
+        @keyframes pulse { 0%,100%{transform:scale(1);opacity:.7} 50%{transform:scale(1.3);opacity:1} }
+      `}} />
     </div>
   );
 };
@@ -192,22 +188,17 @@ function StockPage() {
 
   return (
     <div style={{ minHeight: '100vh' }}>
-      <div
-        style={{
-          background: 'linear-gradient(135deg,#1f2937,#111827)', padding: '16px 20px',
-          display: 'flex', gap: 12, boxShadow: '0 4px 6px rgba(0,0,0,.1)', position: 'sticky', top: 0, zIndex: 100
-        }}
-      >
+      <div style={{
+        background: 'linear-gradient(135deg,#1f2937,#111827)', padding: '16px 20px',
+        display: 'flex', gap: 12, position: 'sticky', top: 0, zIndex: 100
+      }}>
         <button
           onClick={() => setActiveTab('stock')}
           style={{
-            padding: '12px 24px', borderRadius: 12, border: '2px solid transparent',
+            padding: '12px 24px', borderRadius: 12,
             background: activeTab === 'stock' ? 'linear-gradient(135deg,#6366f1,#a855f7)' : 'rgba(255,255,255,.1)',
-            color: '#fff', fontWeight: 700, cursor: 'pointer', transition: 'all .2s',
-            fontSize: window.innerWidth < 768 ? 14 : 16
+            color: '#fff', fontWeight: 700, cursor: 'pointer', border: 'none'
           }}
-          onMouseEnter={(e) => { if (activeTab !== 'stock') e.currentTarget.style.background = 'rgba(255,255,255,.15)'; }}
-          onMouseLeave={(e) => { if (activeTab !== 'stock') e.currentTarget.style.background = 'rgba(255,255,255,.1)'; }}
         >
           Gestion du Stock
         </button>
@@ -215,13 +206,10 @@ function StockPage() {
         <button
           onClick={() => setActiveTab('orders')}
           style={{
-            padding: '12px 24px', borderRadius: 12, border: '2px solid transparent',
+            padding: '12px 24px', borderRadius: 12,
             background: activeTab === 'orders' ? 'linear-gradient(135deg,#6366f1,#a855f7)' : 'rgba(255,255,255,.1)',
-            color: '#fff', fontWeight: 700, cursor: 'pointer', transition: 'all .2s',
-            fontSize: window.innerWidth < 768 ? 14 : 16
+            color: '#fff', fontWeight: 700, cursor: 'pointer', border: 'none'
           }}
-          onMouseEnter={(e) => { if (activeTab !== 'orders') e.currentTarget.style.background = 'rgba(255,255,255,.15)'; }}
-          onMouseLeave={(e) => { if (activeTab !== 'orders') e.currentTarget.style.background = 'rgba(255,255,255,.1)'; }}
         >
           Commandes à Passer
         </button>
@@ -242,80 +230,25 @@ function BackupPage() {
   return (
     <div className="fullscreen-table-wrap">
       <div className="fullscreen-table-title">Gestion des Sauvegardes</div>
-
       <div style={{
         display: 'flex', justifyContent: 'center', marginBottom: 20,
         background: '#2d3748', borderRadius: 10, padding: 5, maxWidth: 400, margin: '0 auto 20px'
       }}>
-        <button
-          onClick={() => setCurrentTab('export')}
-          style={{
-            flex: 1, padding: '12px 20px', background: currentTab === 'export' ? '#4CAF50' : 'transparent',
-            color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer',
-            fontWeight: currentTab === 'export' ? 'bold' : 'normal', transition: 'all .3s ease'
-          }}
-        >
-          Export
-        </button>
-        <button
-          onClick={() => setCurrentTab('import')}
-          style={{
-            flex: 1, padding: '12px 20px', background: currentTab === 'import' ? '#2196F3' : 'transparent',
-            color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer',
-            fontWeight: currentTab === 'import' ? 'bold' : 'normal', transition: 'all .3s ease'
-          }}
-        >
-          Import
-        </button>
+        <button onClick={() => setCurrentTab('export')} style={{
+          flex: 1, padding: '12px 20px',
+          background: currentTab === 'export' ? '#4CAF50' : 'transparent',
+          color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer',
+          fontWeight: currentTab === 'export' ? 'bold' : 'normal'
+        }}>Export</button>
+        <button onClick={() => setCurrentTab('import')} style={{
+          flex: 1, padding: '12px 20px',
+          background: currentTab === 'import' ? '#2196F3' : 'transparent',
+          color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer',
+          fontWeight: currentTab === 'import' ? 'bold' : 'normal'
+        }}>Import</button>
       </div>
 
-      {currentTab === 'export' ? (
-        <>
-          <BackupExport />
-          <div className="paper-card" style={{ maxWidth: 700, margin: '20px auto' }}>
-            <h4 style={{ color: '#e4edfa', marginBottom: 15 }}>Guide Export</h4>
-            <div style={{ color: '#99b2d4', lineHeight: 1.8 }}>
-              <div style={{ display: 'grid', gap: 12 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                  <span style={{ fontSize: '1.2rem' }}>🔒</span>
-                  <span>Seul le propriétaire peut créer des sauvegardes complètes.</span>
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                  <span style={{ fontSize: '1.2rem' }}>📁</span>
-                  <span>Fichiers JSON téléchargés dans "Téléchargements".</span>
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                  <span style={{ fontSize: '1.2rem' }}>⏰</span>
-                  <span>Sauvegarde complète hebdomadaire recommandée.</span>
-                </div>
-              </div>
-            </div>
-          </div>
-        </>
-      ) : (
-        <>
-          <ImportBackup />
-          <div className="paper-card" style={{ maxWidth: 700, margin: '20px auto' }}>
-            <h4 style={{ color: '#e4edfa', marginBottom: 15 }}>Guide Import</h4>
-            <div style={{ color: '#99b2d4', lineHeight: 1.8 }}>
-              <div style={{ display: 'grid', gap: 12 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                  <span style={{ fontSize: '1.2rem' }}>⚠️</span>
-                  <span>L'import modifie les données selon le mode choisi.</span>
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                  <span style={{ fontSize: '1.2rem' }}>📄</span>
-                  <span>Fichiers JSON générés par cette application.</span>
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                  <span style={{ fontSize: '1.2rem' }}>💾</span>
-                  <span>Sauvegarde avant import en mode remplacement.</span>
-                </div>
-              </div>
-            </div>
-          </div>
-        </>
-      )}
+      {currentTab === 'export' ? <BackupExport /> : <ImportBackup />}
     </div>
   );
 }
@@ -337,7 +270,7 @@ function GestionRolesPage() {
 }
 
 /* -------------------------------------------
- * ✅ Démarrage GLOBAL de la synchro ventes→stock
+ * Synchro ventes→stock
  * -----------------------------------------*/
 function RealtimeSyncBoot() {
   const { user, societeId, loading } = useUserRole();
@@ -381,169 +314,48 @@ function AppWrapper() {
     '/',
     '/login',
     '/register',
-    '/accept-invitation'
+    '/accept-invitation',
+    '/legal' // 🆕 Pas de navbar sur la page légale
   ].includes(location.pathname) || location.pathname.startsWith('/admin-');
 
   return (
     <>
       <RealtimeSyncBoot />
       {!hideNavbar && <Navbar />}
-      <div style={{ minHeight: '100vh', background: hideNavbar && location.pathname === '/' ? 'transparent' : '#f6f8fa' }}>
+      <div style={{ 
+        minHeight: '100vh', 
+        background: hideNavbar && (location.pathname === '/' || location.pathname === '/legal') ? 'transparent' : '#f6f8fa' 
+      }}>
         <Routes>
-          <Route
-            path="/"
-            element={
-              <Homepage
-                onLogin={() => (window.location.href = '/login')}
-                onRegister={() => (window.location.href = '/register')}
-              />
-            }
-          />
-
+          <Route path="/" element={<Homepage onLogin={() => (window.location.href = '/login')} onRegister={() => (window.location.href = '/register')} />} />
           <Route path="/login" element={<Login />} />
           <Route path="/register" element={<Register />} />
           <Route path="/accept-invitation" element={<AcceptInvitation />} />
 
-          <Route
-            path="/dashboard"
-            element={
-              <Protected permission="voir_dashboard">
-                <Dashboard />
-              </Protected>
-            }
-          />
+          {/* 🆕 Documents Légaux - accessible SANS connexion */}
+          <Route path="/legal" element={<LegalDocuments />} />
 
-          <Route
-            path="/achats"
-            element={
-              <Protected permission="voir_achats">
-                <Achats />
-              </Protected>
-            }
-          />
-
-          <Route
-            path="/ventes"
-            element={
-              <Protected permission="voir_ventes">
-                <Ventes />
-              </Protected>
-            }
-          />
-
-          {/* Stock avec onglets */}
-          <Route
-            path="/stock"
-            element={
-              <Protected permission="ajouter_stock">
-                <StockPage />
-              </Protected>
-            }
-          />
-
-          {/* Clients */}
-          <Route
-            path="/clients"
-            element={
-              <Protected permission="voir_ventes">
-                <Clients />
-              </Protected>
-            }
-          />
-
-          {/* Commandes (placeholders) */}
-          <Route
-            path="/commandes"
-            element={
-              <Protected permission="voir_ventes">
-                <Commandes />
-              </Protected>
-            }
-          />
-          <Route
-            path="/commandes/nouveau"
-            element={
-              <Protected permission="voir_ventes">
-                <NouvelleCommande />
-              </Protected>
-            }
-          />
-
-          <Route
-            path="/devis-factures"
-            element={
-              <Protected permission="voir_ventes">
-                <DevisFactures />
-              </Protected>
-            }
-          />
-
-          <Route
-            path="/paiements"
-            element={
-              <Protected permission="voir_ventes">
-                <Paiements />
-              </Protected>
-            }
-          />
-
-          <Route
-            path="/parametres"
-            element={
-              <Protected permission="parametres">
-                <Parametres />
-              </Protected>
-            }
-          />
-
-          <Route
-            path="/backup"
-            element={
-              <Protected permission="voir_dashboard">
-                <BackupPage />
-              </Protected>
-            }
-          />
-
-          <Route
-            path="/import"
-            element={
-              <Protected permission="voir_dashboard">
-                <div className="fullscreen-table-wrap">
-                  <div className="fullscreen-table-title">Import de Sauvegarde</div>
-                  <ImportBackup />
-                </div>
-              </Protected>
-            }
-          />
-
-          <Route
-            path="/gestion-utilisateurs"
-            element={
-              <Protected permission="gerer_utilisateurs">
-                <GestionRolesPage />
-              </Protected>
-            }
-          />
-
-          <Route
-            path="/users"
-            element={
-              <Protected permission="parametres">
-                <UsersPage />
-              </Protected>
-            }
-          />
-
-          {/* 🆕 Abonnement (PayPal) */}
-          <Route
-            path="/abonnement"
-            element={
-              <Protected permission="voir_dashboard">
-                <Abonnement />
-              </Protected>
-            }
-          />
+          <Route path="/dashboard" element={<Protected permission="voir_dashboard"><Dashboard /></Protected>} />
+          <Route path="/achats" element={<Protected permission="voir_achats"><Achats /></Protected>} />
+          <Route path="/ventes" element={<Protected permission="voir_ventes"><Ventes /></Protected>} />
+          <Route path="/stock" element={<Protected permission="ajouter_stock"><StockPage /></Protected>} />
+          <Route path="/clients" element={<Protected permission="voir_ventes"><Clients /></Protected>} />
+          <Route path="/commandes" element={<Protected permission="voir_ventes"><Commandes /></Protected>} />
+          <Route path="/commandes/nouveau" element={<Protected permission="voir_ventes"><NouvelleCommande /></Protected>} />
+          <Route path="/devis-factures" element={<Protected permission="voir_ventes"><DevisFactures /></Protected>} />
+          <Route path="/paiements" element={<Protected permission="voir_ventes"><Paiements /></Protected>} />
+          
+          {/* 🆕 Analytics - Statistiques */}
+          <Route path="/analytics" element={<Protected permission="voir_dashboard"><Analytics /></Protected>} />
+          
+          <Route path="/parametres" element={<Protected permission="parametres"><Parametres /></Protected>} />
+          <Route path="/backup" element={<Protected permission="voir_dashboard"><BackupPage /></Protected>} />
+          <Route path="/import" element={<Protected permission="voir_dashboard"><div className="fullscreen-table-wrap"><div className="fullscreen-table-title">Import de Sauvegarde</div><ImportBackup /></div></Protected>} />
+          <Route path="/gestion-utilisateurs" element={<Protected permission="gerer_utilisateurs"><GestionRolesPage /></Protected>} />
+          <Route path="/users" element={<Protected permission="parametres"><UsersPage /></Protected>} />
+          
+          {/* 🆕 Abonnement */}
+          <Route path="/abonnement" element={<Protected permission="voir_dashboard"><Abonnement /></Protected>} />
 
           <Route path="/admin-init-owner" element={<InitOwner />} />
           <Route path="/admin-update-societe" element={<AddSocieteIdToAllUsers />} />

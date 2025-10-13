@@ -270,7 +270,7 @@ form {
   align-items: center;
   justify-content: flex-start;
   margin-bottom: var(--spacing-md);
-  margin-top:20% ;
+  margin-top:3% ;
 }
 
 input, select, textarea,

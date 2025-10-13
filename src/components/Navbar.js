@@ -1,5 +1,4 @@
-// src/components/Navbar.js - Version complète avec gestion permissions personnalisées
-
+// src/components/Navbar.js - Version complète avec gestion permissions personnalisées + Analytics
 import React, { useState, useEffect } from "react";
 import { Link, useNavigate, useLocation } from "react-router-dom";
 import {
@@ -32,13 +31,15 @@ import {
   People as PeopleIcon,
   SupervisorAccount as SupervisorAccountIcon,
   ManageAccounts as ManageAccountsIcon,
-  Star as StarIcon
+  Star as StarIcon,
+  BarChart as BarChartIcon, // Analytics
+  Gavel as GavelIcon        // Documents légaux
 } from "@mui/icons-material";
 
 import { signOut } from "firebase/auth";
 import { auth } from "../firebase/config";
 import { useUserRole } from "../contexts/UserRoleContext";
-import { usePermissions } from "./hooks/usePermissions"; // NOUVEAU IMPORT
+import { usePermissions } from "./hooks/usePermissions";
 
 export default function Navbar() {
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -57,119 +58,43 @@ export default function Navbar() {
     isOwner,
     getUserRoleDisplay,
     getOwnershipStatus,
-    hasCustomPermissions, // NOUVEAU
-    getExtraPermissions   // NOUVEAU
+    hasCustomPermissions,
+    getExtraPermissions
   } = useUserRole();
 
-  // NOUVEAU : Utiliser le hook permissions
   const { can } = usePermissions();
 
-  // Mise à jour de l'heure actuelle en temps réel
   useEffect(() => {
     const updateClock = () => {
       const now = new Date();
-      const formattedTime = now.toLocaleTimeString("fr-FR", {
-        hour: "2-digit",
-        minute: "2-digit",
-        second: "2-digit"
-      });
-      setCurrentTime(formattedTime);
+      setCurrentTime(
+        now.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit", second: "2-digit" })
+      );
     };
-
     updateClock();
-    const interval = setInterval(updateClock, 1000);
-    return () => clearInterval(interval);
+    const id = setInterval(updateClock, 1000);
+    return () => clearInterval(id);
   }, []);
 
-  // ================= MENU MODIFIÉ ==================
-  // Système basé sur les permissions avec can()
+  // ================= MENU (Documents légaux déplacé sous Paramètres) ==================
   const menuItems = [
-    { 
-      text: "Dashboard", 
-      icon: <DashboardIcon />, 
-      path: "/dashboard", 
-      permission: "voir_dashboard",
-      description: "Tableau de bord principal" 
-    },
-    { 
-      text: "Achats", 
-      icon: <ShoppingCartIcon />, 
-      path: "/achats", 
-      permission: "voir_achats",
-      description: "Gestion des achats fournisseurs" 
-    },
-    { 
-      text: "Ventes", 
-      icon: <PointOfSaleIcon />, 
-      path: "/ventes", 
-      permission: "voir_ventes",
-      description: "Gestion des ventes clients" 
-    },
-    // ✅ NOUVEAU : Clients
-    { 
-      text: "Clients", 
-      icon: <PeopleIcon />, 
-      path: "/clients", 
-      permission: "voir_ventes", // on réutilise cette permission pour éviter de créer une nouvelle
-      description: "Gestion des clients, commandes & paiements" 
-    },
-    { 
-      text: "Stock", 
-      icon: <LocalPharmacyIcon />, 
-      path: "/stock", 
-      permission: "voir_stock",
-      description: "Gestion du stock pharmacie" 
-    },
-    { 
-      text: "Devis & Factures", 
-      icon: <DescriptionIcon />, 
-      path: "/devis-factures", 
-      permission: "voir_devis_factures",
-      description: "Gestion devis et factures" 
-    },
-    { 
-      text: "Paiements", 
-      icon: <AttachMoneyIcon />, 
-      path: "/paiements", 
-      permission: "voir_paiements",
-      description: "Suivi des paiements" 
-    },
-    { 
-      text: "Sauvegardes", 
-      icon: <BackupIcon />, 
-      path: "/backup", 
-      permission: "voir_dashboard", // Accessible à tous (utilise permission dashboard)
-      description: "Sauvegarde des données", 
-      isNew: true, 
-      hasOwnerBonus: true 
-    },
-    { 
-      text: "Utilisateurs", 
-      icon: <PeopleIcon />, 
-      path: "/users", 
-      permission: "gerer_utilisateurs",
-      description: "Gestion des invitations et utilisateurs", 
-      isAdmin: true 
-    },
-    { 
-      text: "👑 Gestion Rôles", 
-      icon: <ManageAccountsIcon />, 
-      path: "/gestion-utilisateurs", 
-      permission: "gerer_utilisateurs",
-      ownerOnly: true, 
-      description: "Promotion/rétrogradation des utilisateurs", 
-      isOwnerSpecial: true 
-    },
-    { 
-      text: "Paramètres", 
-      icon: <SettingsIcon />, 
-      path: "/parametres", 
-      permission: "parametres",
-      description: "Configuration système" 
-    },
+    { text: "Dashboard", icon: <DashboardIcon />, path: "/dashboard", permission: "voir_dashboard", description: "Tableau de bord principal" },
+    { text: "Achats", icon: <ShoppingCartIcon />, path: "/achats", permission: "voir_achats", description: "Gestion des achats fournisseurs" },
+    { text: "Ventes", icon: <PointOfSaleIcon />, path: "/ventes", permission: "voir_ventes", description: "Gestion des ventes clients" },
+    { text: "Clients", icon: <PeopleIcon />, path: "/clients", permission: "voir_ventes", description: "Gestion des clients, commandes & paiements" },
+    { text: "Stock", icon: <LocalPharmacyIcon />, path: "/stock", permission: "voir_stock", description: "Gestion du stock pharmacie" },
+    { text: "Devis & Factures", icon: <DescriptionIcon />, path: "/devis-factures", permission: "voir_devis_factures", description: "Gestion devis et factures" },
+    { text: "Paiements", icon: <AttachMoneyIcon />, path: "/paiements", permission: "voir_paiements", description: "Suivi des paiements" },
+    { text: "Statistiques", icon: <BarChartIcon />, path: "/analytics", permission: "voir_dashboard", description: "Analyses et graphiques de performance", isNew: true },
+    { text: "Sauvegardes", icon: <BackupIcon />, path: "/backup", permission: "voir_dashboard", description: "Sauvegarde des données", isNew: true, hasOwnerBonus: true },
+    { text: "Utilisateurs", icon: <PeopleIcon />, path: "/users", permission: "gerer_utilisateurs", description: "Gestion des invitations et utilisateurs", isAdmin: true },
+    { text: "👑 Gestion Rôles", icon: <ManageAccountsIcon />, path: "/gestion-utilisateurs", permission: "gerer_utilisateurs", ownerOnly: true, description: "Promotion/rétrogradation des utilisateurs", isOwnerSpecial: true },
+    { text: "Paramètres", icon: <SettingsIcon />, path: "/parametres", permission: "parametres", description: "Configuration système" },
+
+    // 👇👇 Déplacé ici : juste après Paramètres
+    { text: "Documents légaux", icon: <GavelIcon />, path: "/legal", permission: "voir_dashboard", description: "CGU, Confidentialité, Mentions, SLA" },
   ];
 
-  // Déconnexion
   const handleLogout = async () => {
     try {
       await signOut(auth);
@@ -182,10 +107,8 @@ export default function Navbar() {
   if (loading || !authReady) return null;
   if (!canAccessApp()) return null;
 
-  // Calculer les permissions supplémentaires pour l'affichage
   const extraPermissions = hasCustomPermissions() ? getExtraPermissions() : [];
 
-  // ================= DRAWER MODIFIÉ ==================
   const drawer = (
     <Box
       sx={{
@@ -198,51 +121,51 @@ export default function Navbar() {
       onClick={() => setDrawerOpen(false)}
       onKeyDown={() => setDrawerOpen(false)}
     >
-      {/* En-tête application */}
+      {/* En-tête */}
       <Typography
         variant="h6"
         align="center"
         sx={{
           my: 2,
-          fontFamily: "'Montserrat', 'Segoe UI', Arial, sans-serif",
+          fontFamily: "'Montserrat','Segoe UI',Arial,sans-serif",
           fontWeight: 700,
-          letterSpacing: "2px"
+          letterSpacing: "2px",
         }}
       >
         💊 Pharma Gestion
       </Typography>
-      
-      {/* Statut utilisateur principal */}
+
+      {/* Statut rôle */}
       <Box sx={{ textAlign: "center", mb: 2, px: 2 }}>
         {isOwner ? (
           <Chip
             icon={<SupervisorAccountIcon />}
             label="👑 PROPRIÉTAIRE"
             sx={{
-              background: "linear-gradient(90deg, #ffd700, #ffed4a)",
+              background: "linear-gradient(90deg,#ffd700,#ffed4a)",
               color: "#1a2332",
               fontWeight: "bold",
               fontSize: "0.75rem",
               height: "30px",
-              "& .MuiChip-icon": { color: "#1a2332" }
+              "& .MuiChip-icon": { color: "#1a2332" },
             }}
           />
         ) : (
           <Chip
             label={getUserRoleDisplay()}
             sx={{
-              background: role === "docteur" 
-                ? "linear-gradient(90deg, #4caf50, #81c784)" 
-                : "linear-gradient(90deg, #2196f3, #64b5f6)",
+              background:
+                role === "docteur"
+                  ? "linear-gradient(90deg,#4caf50,#81c784)"
+                  : "linear-gradient(90deg,#2196f3,#64b5f6)",
               color: "white",
-              fontWeight: "600",
+              fontWeight: 600,
               fontSize: "0.75rem",
-              height: "28px"
+              height: "28px",
             }}
           />
         )}
-        
-        {/* NOUVEAU : Affichage permissions supplémentaires */}
+
         {role === "vendeuse" && extraPermissions.length > 0 && (
           <Box sx={{ mt: 1 }}>
             <Chip
@@ -250,52 +173,47 @@ export default function Navbar() {
               label={`+${extraPermissions.length} permissions étendues`}
               size="small"
               sx={{
-                background: "linear-gradient(90deg, #ff9800, #ffb74d)",
+                background: "linear-gradient(90deg,#ff9800,#ffb74d)",
                 color: "white",
-                fontWeight: "600",
+                fontWeight: 600,
                 fontSize: "0.7rem",
                 height: "24px",
-                "& .MuiChip-icon": { color: "white", fontSize: "12px" }
+                "& .MuiChip-icon": { color: "white", fontSize: "12px" },
               }}
             />
           </Box>
         )}
       </Box>
 
-      {/* Indicateurs d'état */}
       {(isDeleted || isLocked || !isActive) && (
         <Box sx={{ textAlign: "center", mb: 1, px: 2 }}>
           <Chip
             label={
-              isDeleted ? "🗑️ Supprimé" 
-              : isLocked ? "🔒 Verrouillé" 
-              : "⏸️ Désactivé"
+              isDeleted ? "🗑️ Supprimé" : isLocked ? "🔒 Verrouillé" : "⏸️ Désactivé"
             }
             size="small"
             sx={{
-              background: "linear-gradient(90deg, #f44336, #e57373)",
+              background: "linear-gradient(90deg,#f44336,#e57373)",
               color: "white",
-              fontSize: "0.7rem"
+              fontSize: "0.7rem",
             }}
           />
         </Box>
       )}
-      
+
       <Divider sx={{ bgcolor: "#fff3", mb: 2 }} />
-      
-      {/* Menu principal MODIFIÉ */}
+
+      {/* Menu */}
       <List>
         {menuItems
-          .filter(item => {
-            // Utiliser can() au lieu d'un mapping rôle→routes
+          .filter((item) => {
             if (!can(item.permission)) return false;
             if (item.ownerOnly && !isOwner) return false;
             return true;
           })
           .map((item) => {
-            // Indiquer si c'est une permission supplémentaire pour la vendeuse
-            const isExtraPermission = role === "vendeuse" && 
-              extraPermissions.some(p => p === item.permission);
+            const isExtra =
+              role === "vendeuse" && extraPermissions.some((p) => p === item.permission);
 
             return (
               <ListItemButton
@@ -309,15 +227,17 @@ export default function Navbar() {
                   my: 0.5,
                   mx: 1,
                   borderRadius: 2,
-                  position: 'relative',
-                  ...(isExtraPermission && {
+                  position: "relative",
+                  ...(isExtra && {
                     border: "1px solid #ffd700",
-                    boxShadow: "0 0 8px rgba(255, 215, 0, 0.3)"
+                    boxShadow: "0 0 8px rgba(255,215,0,0.3)",
                   }),
                   "&:hover": {
-                    background: location.pathname === item.path ? "#fff" : "#fff3",
-                    color: location.pathname === item.path ? "#1976d2" : "#1c3db1"
-                  }
+                    background:
+                      location.pathname === item.path ? "#fff" : "#fff3",
+                    color:
+                      location.pathname === item.path ? "#1976d2" : "#1c3db1",
+                  },
                 }}
               >
                 <ListItemIcon sx={{ color: "inherit" }}>
@@ -329,13 +249,13 @@ export default function Navbar() {
                           fontSize: "10px",
                           height: "16px",
                           minWidth: "16px",
-                          background: "transparent"
-                        }
+                          background: "transparent",
+                        },
                       }}
                     >
                       {item.icon}
                     </Badge>
-                  ) : isExtraPermission ? (
+                  ) : isExtra ? (
                     <Badge
                       badgeContent="✨"
                       sx={{
@@ -343,8 +263,25 @@ export default function Navbar() {
                           fontSize: "8px",
                           height: "14px",
                           minWidth: "14px",
-                          background: "transparent"
-                        }
+                          background: "transparent",
+                        },
+                      }}
+                    >
+                      {item.icon}
+                    </Badge>
+                  ) : item.isNew ? (
+                    <Badge
+                      badgeContent="NEW"
+                      sx={{
+                        "& .MuiBadge-badge": {
+                          fontSize: "7px",
+                          height: "14px",
+                          minWidth: "28px",
+                          background:
+                            "linear-gradient(90deg,#10b981,#059669)",
+                          color: "white",
+                          fontWeight: "bold",
+                        },
                       }}
                     >
                       {item.icon}
@@ -353,65 +290,70 @@ export default function Navbar() {
                     item.icon
                   )}
                 </ListItemIcon>
-                
-                <ListItemText 
+
+                <ListItemText
                   primary={
-                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                    <Box sx={{ display: "flex", alignItems: "center", gap: 0.5 }}>
                       {item.text}
-                      {isExtraPermission && (
+                      {isExtra && (
                         <Chip
                           label="Étendue"
                           size="small"
                           sx={{
-                            background: "linear-gradient(90deg, #ffd700, #ffed4a)",
+                            background:
+                              "linear-gradient(90deg,#ffd700,#ffed4a)",
                             color: "#1a2332",
                             fontSize: "0.6rem",
                             height: "16px",
                             fontWeight: "bold",
-                            "& .MuiChip-label": { px: 0.5 }
+                            "& .MuiChip-label": { px: 0.5 },
                           }}
                         />
                       )}
                     </Box>
                   }
                   secondary={item.description}
-                  sx={{ 
-                    "& .MuiTypography-root": { 
+                  sx={{
+                    "& .MuiTypography-root": {
                       fontSize: item.isOwnerSpecial ? "0.95rem" : "1rem",
-                      fontWeight: item.isOwnerSpecial ? "700" : "500"
+                      fontWeight: item.isOwnerSpecial ? 700 : 500,
                     },
                     "& .MuiListItemText-secondary": {
                       color: "rgba(255,255,255,0.7)",
-                      fontSize: "0.7rem"
-                    }
+                      fontSize: "0.7rem",
+                    },
                   }}
                 />
               </ListItemButton>
             );
           })}
       </List>
-      
+
       <Divider sx={{ bgcolor: "#fff3", mt: 3, mb: 2 }} />
-      
-      {/* Infos utilisateur MODIFIÉE */}
+
+      {/* Infos + Déconnexion */}
       <Box sx={{ px: 2, mb: 2 }}>
         <Typography variant="caption" sx={{ color: "#b3c5d7", display: "block" }}>
           Statut: {getOwnershipStatus()}
         </Typography>
         {isOwner && (
-          <Typography variant="caption" sx={{ color: "#ffd700", display: "block", fontWeight: "bold" }}>
+          <Typography
+            variant="caption"
+            sx={{ color: "#ffd700", display: "block", fontWeight: "bold" }}
+          >
             ⚡ Droits étendus activés
           </Typography>
         )}
-        {/* NOUVEAU : Info permissions personnalisées */}
         {role === "vendeuse" && extraPermissions.length > 0 && (
-          <Typography variant="caption" sx={{ color: "#ffd700", display: "block", fontWeight: "bold" }}>
+          <Typography
+            variant="caption"
+            sx={{ color: "#ffd700", display: "block", fontWeight: "bold" }}
+          >
             ✨ {extraPermissions.length} permission(s) supplémentaire(s)
           </Typography>
         )}
       </Box>
-      
-      {/* Bouton déconnexion */}
+
       <Box sx={{ textAlign: "center", mb: 2 }}>
         <Button
           variant="contained"
@@ -423,7 +365,7 @@ export default function Navbar() {
             boxShadow: "0 2px 16px #d32f2f30",
             borderRadius: 2,
             minWidth: 140,
-            py: 1
+            py: 1,
           }}
         >
           Déconnexion
@@ -432,17 +374,17 @@ export default function Navbar() {
     </Box>
   );
 
-  // ================= RENDU FINAL ==================
+  // ================= APP BAR =================
   return (
     <>
       <AppBar
         position="sticky"
         elevation={6}
         sx={{
-          background: "linear-gradient(90deg, #122058 60%, #3366ff 130%)",
+          background: "linear-gradient(90deg,#122058 60%,#3366ff 130%)",
           color: "#fff",
-          fontFamily: "'Montserrat', 'Segoe UI', Arial, sans-serif",
-          boxShadow: "0 8px 32px #2030a425"
+          fontFamily: "'Montserrat','Segoe UI',Arial,sans-serif",
+          boxShadow: "0 8px 32px #2030a425",
         }}
       >
         <Toolbar>
@@ -455,15 +397,18 @@ export default function Navbar() {
           >
             <MenuIcon />
           </IconButton>
-          
+
           <Typography
             variant="h6"
             sx={{
               flexGrow: 1,
-              fontFamily: "'Montserrat', 'Segoe UI', Arial, sans-serif",
+              fontFamily: "'Montserrat','Segoe UI',Arial,sans-serif",
               fontWeight: 700,
               letterSpacing: "1.5px",
-              textShadow: "0 1px 10px #0003"
+              textShadow: "0 1px 10px #0003",
+              display: "flex",
+              alignItems: "center",
+              gap: 1.5,
             }}
           >
             💊 Pharma Gestion
@@ -473,67 +418,59 @@ export default function Navbar() {
                 label="👑 PROPRIÉTAIRE"
                 size="small"
                 sx={{
-                  marginLeft: "16px",
-                  background: "linear-gradient(90deg, #ffd700, #ffed4a)",
+                  background: "linear-gradient(90deg,#ffd700,#ffed4a)",
                   color: "#1a2332",
-                  fontSize: "0.7rem",
                   fontWeight: "bold",
-                  height: "24px",
-                  "& .MuiChip-icon": { color: "#1a2332", fontSize: "14px" }
+                  height: 22,
                 }}
               />
             )}
-            {/* NOUVEAU : Chip permissions étendues dans la navbar */}
             {role === "vendeuse" && extraPermissions.length > 0 && (
               <Chip
                 icon={<StarIcon />}
                 label={`+${extraPermissions.length} étendues`}
                 size="small"
                 sx={{
-                  marginLeft: "12px",
-                  background: "linear-gradient(90deg, #ff9800, #ffb74d)",
+                  background: "linear-gradient(90deg,#ff9800,#ffb74d)",
                   color: "white",
-                  fontSize: "0.7rem",
                   fontWeight: "bold",
-                  height: "24px",
-                  "& .MuiChip-icon": { color: "white", fontSize: "12px" }
+                  height: 22,
                 }}
               />
             )}
           </Typography>
 
-          {/* Heure actuelle en haut à droite */}
+          {/* Heure actuelle */}
           <Box sx={{ mr: 3 }}>
-            <Typography
-              variant="body1"
-              sx={{
-                fontWeight: "bold",
-                fontSize: "0.9rem",
-                color: "#fff",
-                textShadow: "0 0 5px #0006"
-              }}
-            >
+            <Typography variant="body1" sx={{ fontWeight: "bold", fontSize: "0.9rem", color: "#fff", textShadow: "0 0 5px #0006" }}>
               🕒 {currentTime}
             </Typography>
           </Box>
 
-          {/* Accès rapide Backup - MODIFIÉ avec vérification permission */}
+          {/* Accès rapide Analytics */}
+          {can("voir_dashboard") && (
+            <IconButton
+              color="inherit"
+              onClick={() => navigate('/analytics')}
+              sx={{ bgcolor: "#fff2", borderRadius: 2, mr: 1, "&:hover": { bgcolor: "#fff3" } }}
+              title="Statistiques et graphiques"
+            >
+              <BarChartIcon />
+            </IconButton>
+          )}
+
+          {/* Accès rapide Backup */}
           {can("voir_dashboard") && (
             <IconButton
               color="inherit"
               onClick={() => navigate('/backup')}
-              sx={{
-                bgcolor: "#fff2",
-                borderRadius: 2,
-                mr: 1,
-                "&:hover": { bgcolor: "#fff3" }
-              }}
+              sx={{ bgcolor: "#fff2", borderRadius: 2, mr: 1, "&:hover": { bgcolor: "#fff3" } }}
               title="Sauvegardes rapides"
             >
               <BackupIcon />
             </IconButton>
           )}
-          
+
           <Button
             color="inherit"
             onClick={handleLogout}

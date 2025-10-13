@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-
+import {  Link } from 'react-router-dom';
 export default function Homepage({ onLogin, onRegister }) {
   const [animationClass, setAnimationClass] = useState('');
   const [currentFeature, setCurrentFeature] = useState(0);
@@ -565,3 +565,9 @@ export default function Homepage({ onLogin, onRegister }) {
     </div>
   );
 }
+<div style={{ padding: '40px 20px', background: '#f8fafc', textAlign: 'center' }}>
+  <Link to="/legal?tab=cgu">CGU</Link> | 
+  <Link to="/legal?tab=cgv">CGV</Link> | 
+  <Link to="/legal?tab=privacy">Confidentialité</Link> | 
+  <Link to="/legal?tab=mentions">Mentions Légales</Link>
+</div>

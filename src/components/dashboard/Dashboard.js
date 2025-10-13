@@ -17,10 +17,9 @@ import { Link } from "react-router-dom";
    Constantes & Utils
 ========================= */
 
-const EXPIRY_THRESHOLD_DAYS = 180; // Péremption proche en jours
-const DEFAULT_SEUIL = 10;          // Seuil de stock par défaut
+const EXPIRY_THRESHOLD_DAYS = 180;
+const DEFAULT_SEUIL = 10;
 
-// Parse Timestamp / {seconds} / Date / string / number
 function toDate(v) {
   if (!v) return null;
   try {
@@ -34,7 +33,6 @@ function toDate(v) {
   }
 }
 
-// Même jour (local)
 function sameLocalDay(a, b = new Date()) {
   const da = toDate(a), dbb = toDate(b);
   if (!da || !dbb) return false;
@@ -45,7 +43,6 @@ function sameLocalDay(a, b = new Date()) {
   );
 }
 
-// Filtre période (local) + bornes
 function inPeriod(dateInput, period, minDate, maxDate) {
   const d = toDate(dateInput);
   if (!d) return false;
@@ -66,11 +63,10 @@ function inPeriod(dateInput, period, minDate, maxDate) {
     case "semaine": return d >= new Date(now.getFullYear(), now.getMonth(), now.getDate() - 7);
     case "mois":    return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth();
     case "annee":   return d.getFullYear() === now.getFullYear();
-    default:        return true;
+    default:         return true;
   }
 }
 
-// Première date d'un achat
 function achatDate(a) {
   return a?.dateReception ?? a?.dateAchat ?? a?.date ?? a?.timestamp ?? a?.createdAt ?? null;
 }
@@ -94,7 +90,7 @@ function norm(s) {
 
 function isCash(mode) {
   const m = norm(mode);
-  return ["especes", "espece", "cash", "liquide"].includes(m);
+  return ["especes", "espèces", "espece", "espèce", "cash", "liquide"].includes(m);
 }
 
 /* =========================
@@ -116,14 +112,12 @@ function normalizeStock(val) {
 }
 
 function getDocStockTag(doc) {
-  // 1) Doc-level
   for (const k of STOCK_KEYS) {
     if (doc?.[k] !== undefined) {
       const tag = normalizeStock(doc[k]);
       if (tag !== "unknown") return tag;
     }
   }
-  // 2) Lignes
   const lines = Array.isArray(doc?.articles) ? doc.articles
               : Array.isArray(doc?.mouvements) ? doc.mouvements
               : [];
@@ -141,12 +135,10 @@ function getDocStockTag(doc) {
     if (c1 > c2 && c1 > 0) return "stock1";
     if (c2 > c1 && c2 > 0) return "stock2";
   }
-  // 3) Défaut
   return "stock1";
 }
 const isStock1 = (doc) => getDocStockTag(doc) === "stock1";
 
-/** Détection AU NIVEAU LIGNE (fallback = tag du document, puis S1) */
 function getLineStockTag(line, parentDoc) {
   for (const k of STOCK_KEYS) {
     if (line?.[k] !== undefined) {
@@ -158,10 +150,6 @@ function getLineStockTag(line, parentDoc) {
   return parent !== "unknown" ? parent : "stock1";
 }
 
-/* =========================
-   Normalisation NUMÉRO DE LOT
-   (évite la double-comptabilisation sur transferts S1/S2)
-========================= */
 function normalizeLotNumber(lot) {
   if (!lot) return "-";
   return String(lot)
@@ -172,7 +160,7 @@ function normalizeLotNumber(lot) {
 }
 
 /* =========================
-   Paiements — détection type
+   Paiements – détection type
 ========================= */
 function isSupplierPayment(p) {
   const t = norm(p?.type || p?.relatedTo || p?.for || p?.category);
@@ -195,6 +183,52 @@ function isSalePayment(p) {
 }
 
 /* =========================
+   Détection ventes: espèces & annulée
+========================= */
+function getVenteId(v) {
+  return v?.id || v?.venteId || v?.saleId || v?.reference || v?.numero || null;
+}
+
+function getVentePaymentMode(v) {
+  return v?.modePaiement ?? v?.paymentMode ?? v?.moyen ?? v?.typePaiement ?? v?.mode ?? v?.paiement ?? v?.reglement ?? null;
+}
+
+function isCashSale(v) {
+  return isCash(getVentePaymentMode(v));
+}
+
+function isCanceledSale(v) {
+  const status = norm(v?.statut || v?.status || v?.etat || v?.state || v?.situation);
+  const flags = [v?.annule, v?.annulée, v?.annulee, v?.canceled, v?.cancelled, v?.isCanceled, v?.active === false];
+  if (["annulee","annule","annulée","cancelled","canceled"].includes(status)) return true;
+  if (flags.some(Boolean)) return true;
+  return false;
+}
+
+function getCancelDate(v) {
+  return v?.dateAnnulation
+    ?? v?.timestampAnnulation
+    ?? v?.cancelledAt
+    ?? v?.annuleAt
+    ?? v?.dateCanceled
+    ?? v?.dateCancel
+    ?? v?.updatedAt
+    ?? null;
+}
+
+function getSaleAmountFromLines(vente) {
+  const arts = Array.isArray(vente?.articles) ? vente.articles : [];
+  const subtotal = arts.reduce((sum, a) => {
+    const q = Number(a?.quantite) || 0;
+    const pu = Number(a?.prixUnitaire ?? a?.prix ?? 0) || 0;
+    const r = Number(a?.remise) || 0;
+    return sum + (q * pu - r);
+  }, 0);
+  const rTot = Number(vente?.remiseTotal ?? vente?.remiseGlobale ?? 0);
+  return Math.max(0, subtotal - rTot);
+}
+
+/* =========================
    Affichage helpers
 ========================= */
 function roleDisplay(role) {
@@ -212,6 +246,17 @@ function userDisplayName(user) {
   return "Utilisateur";
 }
 
+function getPeriodLabel(period) {
+  switch(period) {
+    case "jour": return "Aujourd'hui";
+    case "semaine": return "Cette semaine";
+    case "mois": return "Ce mois";
+    case "annee": return "Cette année";
+    case "toutes": return "Toutes périodes";
+    default: return period;
+  }
+}
+
 /* =========================
    Composant
 ========================= */
@@ -220,35 +265,27 @@ export default function Dashboard() {
   const { user, societeId, role, loading, hasCustomPermissions, getExtraPermissions } = useUserRole();
   const { can, isVendeuse } = usePermissions();
 
-  // Société
   const [societeInfo, setSocieteInfo] = useState(null);
   const [societeLoading, setSocieteLoading] = useState(false);
 
-  // Collections
   const [ventes, setVentes] = useState([]);
   const [achats, setAchats] = useState([]);
   const [stock, setStock] = useState([]);
   const [stockEntries, setStockEntries] = useState([]);
   const [paiements, setPaiements] = useState([]);
 
-  // UI
   const [notification, setNotification] = useState(null);
   const [isMobile, setIsMobile] = useState(false);
   const [isTablet, setIsTablet] = useState(false);
 
-  // Filtres période
   const [periode, setPeriode] = useState("mois");
   const [dateMin, setDateMin] = useState("");
   const [dateMax, setDateMax] = useState("");
 
-  // Bascule S1 ↔ TOUS (dblclick)
   const [showAllVentes, setShowAllVentes] = useState(false);
   const [showAllAchats, setShowAllAchats] = useState(false);
-
-  // Paiements KPI: par défaut Fournisseurs, dbl-clic => Ventes
   const [showSalesPayments, setShowSalesPayments] = useState(false);
 
-  /* Responsive */
   useEffect(() => {
     let rafId = null;
     const onResize = () => {
@@ -272,12 +309,10 @@ export default function Dashboard() {
     setTimeout(() => setNotification(null), 2500);
   }, []);
 
-  /* Fetch temps réel */
   useEffect(() => {
     if (loading || !user || !societeId) return;
     const unsubs = [];
 
-    // Société
     (async () => {
       setSocieteLoading(true);
       const ref = doc(db, "societe", societeId);
@@ -293,7 +328,6 @@ export default function Dashboard() {
       setSocieteLoading(false);
     })();
 
-    // Collections
     const qVentes = query(collection(db, "societe", societeId, "ventes"), orderBy("date", "desc"));
     const qAchats = query(collection(db, "societe", societeId, "achats"), orderBy("timestamp", "desc"));
     const qStock = collection(db, "societe", societeId, "stock");
@@ -319,22 +353,12 @@ export default function Dashboard() {
      CALCULS VENTES (ligne S1/S2)
   ========================= */
 
-  // Total de toutes les lignes (après remise globale)
   const computeMontantVenteAll = useCallback((vente) => {
     const m = Number(vente?.montantTotal) || 0;
     if (m > 0) return m;
-    const arts = Array.isArray(vente?.articles) ? vente.articles : [];
-    const subtotal = arts.reduce((sum, a) => {
-      const q = Number(a?.quantite) || 0;
-      const pu = Number(a?.prixUnitaire ?? a?.prix ?? 0) || 0;
-      const r = Number(a?.remise) || 0;
-      return sum + (q * pu - r);
-    }, 0);
-    const rTot = Number(vente?.remiseTotal ?? vente?.remiseGlobale ?? 0);
-    return Math.max(0, subtotal - rTot);
+    return getSaleAmountFromLines(vente);
   }, []);
 
-  // Total filtré par tag (ex: "stock1") au NIVEAU LIGNE avec remise globale proportionnelle
   const computeMontantVenteByTag = useCallback((vente, tag = "stock1") => {
     const arts = Array.isArray(vente?.articles) ? vente.articles : [];
     if (arts.length === 0) return 0;
@@ -360,7 +384,6 @@ export default function Dashboard() {
     return Math.max(0, subtotalTag - partRemise);
   }, []);
 
-  /* Calculs existants (achats/doc, paiements, ruptures, compteur produits) */
   const computeMontantAchat = useCallback((achat) => {
     const m = Number(achat?.montantTotal) || Number(achat?.montant) || 0;
     if (m > 0) return m;
@@ -381,29 +404,30 @@ export default function Dashboard() {
     totalAchats,
     totalPaiements,
     produitsStock,
-    soldeCaisse,
+    caisseEncaissements,
+    caisseDecaissements,
+    caisseSolde,
     ruptures,
   } = useMemo(() => {
-    // Filtrage période
     const vPer = ventes.filter(v => inPeriod(v.date || v.timestamp, periode, dateMin, dateMax));
-    const aPer = achats.filter(a => inPeriod(achatDate(a),        periode, dateMin, dateMax));
+    const aPer = achats.filter(a => inPeriod(achatDate(a), periode, dateMin, dateMax));
     const pPer = paiements.filter(p => inPeriod(p.date || p.timestamp, periode, dateMin, dateMax));
 
-    // VENTES — S1 par défaut (somme des lignes S1), TOUS en double-clic
+    // VENTES – S1 par défaut (somme des lignes S1), TOUS en double-clic
     const totalVentes = showAllVentes
       ? vPer.reduce((s,v) => s + computeMontantVenteAll(v), 0)
       : vPer.reduce((s,v) => s + computeMontantVenteByTag(v, "stock1"), 0);
 
-    // ACHATS — filtre doc (inchangé)
+    // ACHATS – filtre doc (inchangé)
     const aUsed = showAllAchats ? aPer : aPer.filter(isStock1);
     const totalAchats = aUsed.reduce((s,a) => s + computeMontantAchat(a), 0);
 
-    // PAIEMENTS — Fournisseurs (def) ⇄ Ventes (dbl-clic)
+    // PAIEMENTS – Fournisseurs (def) ⇄ Ventes (tous modes)
     const totalPaiements = pPer
       .filter(p => showSalesPayments ? isSalePayment(p) : isSupplierPayment(p))
       .reduce((s,p) => s + (Number(p?.montant) || 0), 0);
 
-    // ====== PRODUITS EN STOCK (S1+S2) — DÉDUPLIQUÉ ======
+    // ====== PRODUITS EN STOCK (S1+S2) – DÉDUPLIQUÉ ======
     const uniqueIds = new Set();
 
     const totalQtyOfStockItem = (item) => {
@@ -424,24 +448,40 @@ export default function Dashboard() {
     (Array.isArray(stockEntries) ? stockEntries : []).forEach((lot) => {
       const nom = lot?.nom || "";
       const lotNum = normalizeLotNumber(lot?.numeroLot);
-      const qty = (Number(lot?.stock1) || 0) + (Number(lot?.stock2) || 0); // ✅ correction parenthèses
+      const qty = (Number(lot?.stock1) || 0) + (Number(lot?.stock2) || 0);
       const key = `l|${norm(nom)}|${norm(lotNum)}`;
       if (qty > 0 && nom) uniqueIds.add(key);
     });
 
     const produitsStock = uniqueIds.size;
 
-    // Caisse (espèces aujourd'hui)
-    const soldeCaisse = pPer.reduce((s,p) => {
-      if (!sameLocalDay(p?.date ?? p?.timestamp)) return s;
-      const typeRaw = String(p?.type || p?.relatedTo || p?.for || p?.category || "").toLowerCase();
-      if (!["vente","ventes","sale","sales","reglementclient","reglement_client"].includes(typeRaw)) return s;
-      if (!isCash(p?.mode ?? p?.paymentMode ?? p?.moyen ?? p?.typePaiement)) return s;
-      return s + (Number(p?.montant) || 0);
-    }, 0);
+    /* ========================= CAISSE – CALCULÉE SUR LA PÉRIODE FILTRÉE =========================
+       Objectif:
+       - IN = tous les paiements "ventes" en espèces de la PÉRIODE (collection paiements)
+       - OUT = tous les paiements "achats" en espèces de la PÉRIODE (collection paiements)
+       - Solde = IN - OUT
+    ============================================================================= */
+
+    // 1) Paiements de la PÉRIODE filtrée
+    const pPeriod = paiements.filter(p => inPeriod(p.date || p.timestamp, periode, dateMin, dateMax));
+
+    // 2) IN: VENTES en espèces (encaissements)
+    const pSaleCash = pPeriod.filter(p =>
+      isSalePayment(p) && isCash(p?.mode ?? p?.paymentMode ?? p?.moyen ?? p?.typePaiement)
+    );
+    const caisseEncaissements = pSaleCash.reduce((s, p) => s + (Number(p?.montant) || 0), 0);
+
+    // 3) OUT: ACHATS (règlements fournisseurs) en espèces (décaissements)
+    const pSupplierCash = pPeriod.filter(p =>
+      isSupplierPayment(p) && isCash(p?.mode ?? p?.paymentMode ?? p?.moyen ?? p?.typePaiement)
+    );
+    const caisseDecaissements = pSupplierCash.reduce((s, p) => s + (Number(p?.montant) || 0), 0);
+
+    // 4) Solde caisse de la période = IN - OUT
+    const caisseSolde = caisseEncaissements - caisseDecaissements;
 
     // Ruptures & péremptions
-    const rows = [];
+    let rows = [];
     (Array.isArray(stock) ? stock : []).forEach((item) => {
       const q = Number(item.quantite) || 0;
       const seuil = Number(item.seuil) > 0 ? Number(item.seuil) : DEFAULT_SEUIL;
@@ -471,7 +511,16 @@ export default function Dashboard() {
       return (a.seuil ?? 0) - (b.seuil ?? 0);
     });
 
-    return { totalVentes, totalAchats, totalPaiements, produitsStock, soldeCaisse, ruptures: rows };
+    return { 
+      totalVentes, 
+      totalAchats, 
+      totalPaiements, 
+      produitsStock, 
+      caisseEncaissements,
+      caisseDecaissements,
+      caisseSolde, 
+      ruptures: rows 
+    };
   }, [
     ventes, achats, paiements, stock, stockEntries,
     periode, dateMin, dateMax,
@@ -500,6 +549,7 @@ export default function Dashboard() {
       kpiCard: { background: "linear-gradient(135deg,#f8fafc,#edf2f7)", border: "3px solid #e2e8f0", borderRadius: isMobile ? 14 : 20, padding: isMobile ? 16 : 24, position: "relative", cursor: "pointer" },
       badge: { position:"absolute", top:8, right:8, fontSize:12, fontWeight:800, padding:"4px 8px", borderRadius:999, background:"#e2e8f0", color:"#111827" },
       kpiValue: (c)=>({ fontSize: isMobile ? "1.5em" : "2em", fontWeight: 800, color:c, marginBottom: 6 }),
+      kpiSubValue: { fontSize: isMobile ? "0.75em" : "0.85em", color: "#6b7280", marginTop: 4, fontWeight: 600 },
       table: { width:"100%", borderCollapse:"collapse", borderRadius:12, overflow:"hidden", fontSize: isMobile ? ".95em" : "1em" },
       th: { background:"linear-gradient(135deg,#2d3748,#1a202c)", color:"#fff", textAlign:"left", padding:"10px 12px" },
       td: { background:"#fff", borderBottom:"1px solid #e2e8f0", padding:"10px 12px", fontWeight:600, color:"#1a202c" },
@@ -508,22 +558,28 @@ export default function Dashboard() {
     };
   }, [isMobile, isTablet]);
 
-  // Affichage user
   const displayName = userDisplayName(user);
   const displayRole = roleDisplay(role);
   const initials = (displayName||"U").split(" ").map(p=>p.trim()[0]).filter(Boolean).slice(0,2).join("").toUpperCase();
 
-  // Permissions étendues
   const extraPermissions = isVendeuse() && hasCustomPermissions() ? getExtraPermissions() : [];
   const isAchatsExtended = extraPermissions.includes("voir_achats");
   const isParametresExtended = extraPermissions.includes("parametres");
 
-  /* Render */
+  if (loading) {
+    return (
+      <div style={styles.container}>
+        <div style={styles.card}>
+          <div style={styles.content}>Chargement...</div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div style={styles.container}>
       <div style={styles.card}>
         <div style={styles.header}>
-          {/* Chip utilisateur */}
           <div style={styles.chipRow}>
             <div style={styles.chip} title={`${displayRole} — ${displayName}`}>
               <div style={styles.avatar}>{initials}</div>
@@ -552,7 +608,6 @@ export default function Dashboard() {
           <h1 style={styles.title}>Tableau de Bord</h1>
           <div style={styles.subtitle}>{societeLoading ? "Chargement…" : (societeInfo?.nom || "Société")}</div>
 
-          {/* Actions */}
           <div style={styles.actions}>
             {can("voir_ventes") && (
               <Link to="/ventes" style={{...styles.btn, background:"linear-gradient(135deg,#22c55e,#16a34a)"}} title="Nouvelle vente">
@@ -575,7 +630,6 @@ export default function Dashboard() {
               </Link>
             )}
 
-            {/* 🔔 Abonnement (PayPal) */}
             <Link
               to="/abonnement"
               style={{...styles.btn, background:"linear-gradient(135deg,#f59e0b,#d97706)"}}
@@ -605,9 +659,7 @@ export default function Dashboard() {
         </div>
 
         <div style={styles.content}>
-          {/* KPI cards */}
           <div style={styles.grid}>
-            {/* VENTES: défaut S1, dbl-click => S1+S2 */}
             <div
               style={styles.kpiCard}
               onDoubleClick={() => setShowAllVentes(v => !v)}
@@ -619,7 +671,6 @@ export default function Dashboard() {
               <div>Ventes ({periode})</div>
             </div>
 
-            {/* ACHATS: défaut S1, dbl-click => S1+S2 */}
             <div
               style={styles.kpiCard}
               onDoubleClick={() => setShowAllAchats(v => !v)}
@@ -631,7 +682,6 @@ export default function Dashboard() {
               <div>Achats ({periode})</div>
             </div>
 
-            {/* PAIEMENTS: Fournisseurs (def) ⇄ Ventes (dbl-clic) */}
             <div
               style={styles.kpiCard}
               onDoubleClick={() => setShowSalesPayments(v => !v)}
@@ -643,22 +693,22 @@ export default function Dashboard() {
               <div>Paiements ({showSalesPayments ? "Ventes" : "Fournisseurs"})</div>
             </div>
 
-            {/* PRODUITS: total S1+S2 DÉDUPLIQUÉ */}
-            <div style={{...styles.kpiCard, cursor:"default"}} title="Produits (stock + lots) — dédupliqué">
+            <div style={{...styles.kpiCard, cursor:"default"}} title="Produits (stock + lots) – dédupliqué">
               <div style={{fontSize:isMobile?"2.1em":"2.4em", marginBottom:10}}>📚</div>
               <div style={styles.kpiValue("#06b6d4")}>{produitsStock}</div>
               <div>Médicaments(Stock)</div>
             </div>
 
-            {/* CAISSE (espèces aujourd'hui): TOUS */}
-            <div style={{...styles.kpiCard, cursor:"default"}} title="Caisse d'aujourd'hui">
+            <div style={{...styles.kpiCard, cursor:"default"}} title={`Caisse espèces (${getPeriodLabel(periode)}) - Encaissements: ${formatDH(caisseEncaissements)} | Décaissements: ${formatDH(caisseDecaissements)}`}>
               <div style={{fontSize:isMobile?"2.1em":"2.4em", marginBottom:10}}>💶</div>
-              <div style={styles.kpiValue("#f59e0b")}>{formatDH(soldeCaisse)}</div>
-              <div>Caisse</div>
+              <div style={styles.kpiValue(caisseSolde >= 0 ? "#10b981" : "#ef4444")}>{formatDH(caisseSolde)}</div>
+              <div>Caisse - {getPeriodLabel(periode)}</div>
+              <div style={styles.kpiSubValue}>
+                IN: {formatDH(caisseEncaissements)} | OUT: {formatDH(caisseDecaissements)}
+              </div>
             </div>
           </div>
 
-          {/* Filtres période */}
           <div style={{ margin: "10px 0 20px", display: "flex", gap: 12, flexWrap: "wrap" }}>
             <select value={periode} onChange={(e) => setPeriode(e.target.value)} style={{ padding: "8px", borderRadius: "6px", border: "1px solid #ccc" }}>
               <option value="jour">Aujourd'hui</option>
@@ -672,18 +722,19 @@ export default function Dashboard() {
               value={dateMin}
               onChange={(e) => setDateMin(e.target.value)}
               style={{ padding: "8px", borderRadius: "6px", border: "1px solid #ccc" }}
+              placeholder="Date début"
             />
             <input
               type="date"
               value={dateMax}
               onChange={(e) => setDateMax(e.target.value)}
               style={{ padding: "8px", borderRadius: "6px", border: "1px solid #ccc" }}
+              placeholder="Date fin"
             />
           </div>
 
-          {/* Ruptures & péremptions */}
           <h3 style={{fontWeight:800, fontSize:isMobile?"1.15em":"1.35em", margin:"16px 0 10px", color:"#2d3748"}}>
-            Ruptures & péremptions (≤ {EXPIRY_THRESHOLD_DAYS} jours)
+            Ruptures &amp; péremptions (&le; {EXPIRY_THRESHOLD_DAYS} jours)
           </h3>
           <div style={{ overflowX: "auto" }}>
             <table style={styles.table}>

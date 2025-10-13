@@ -2526,7 +2526,7 @@ export default function StockManagement() {
               </h3>
               <button
                 onClick={() => setShowRetourHistory(false)}
-                style={{ background: "transparent", border: "none", fontSize: 24, cursor: "pointer" }}
+                style={{ border: "none", fontSize: 24, cursor: "pointer" }}
                 aria-label="Fermer"
               >
                 ×
@@ -2596,7 +2596,7 @@ export default function StockManagement() {
               borderRadius: 14,
               padding: 16,
               width: 680,
-              maxHeight: "90vh",
+              maxHeight: "61vh",
               overflowY: "auto",
             }}
           >
