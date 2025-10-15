@@ -93,6 +93,69 @@ const getModeColor = (mode) => {
   return "#6b7280";
 };
 
+/* ================= 🆕 VALIDATION DES ACHATS (identique à Dashboard.js) ================= */
+function isValidAchat(achat) {
+  // 1. Vérifier que l'achat existe et a un ID valide
+  if (!achat || !achat.id || typeof achat.id !== 'string') {
+    console.log('❌ Paiements - Achat rejeté: pas d\'ID', achat);
+    return false;
+  }
+
+  // 2. Vérifier les statuts de suppression/annulation
+  const statut = norm(achat?.statut || achat?.status || achat?.etat || achat?.statutReception || "");
+  const statutsInvalides = [
+    "supprime", "supprimé", "deleted", "removed",
+    "annule", "annulé", "cancelled", "canceled",
+    "inactif", "inactive", "archived", "archive"
+  ];
+  
+  if (statutsInvalides.includes(statut)) {
+    console.log('❌ Paiements - Achat rejeté: statut invalide', achat.id, statut);
+    return false;
+  }
+
+  // 3. Vérifier tous les flags de suppression possibles
+  const suppressionFlags = [
+    achat.deleted,
+    achat.isDeleted, 
+    achat.supprime,
+    achat.supprimé,
+    achat.removed,
+    achat.isRemoved,
+    achat.archived,
+    achat.isArchived,
+    achat.active === false,
+    achat.actif === false
+  ];
+
+  if (suppressionFlags.some(flag => flag === true)) {
+    console.log('❌ Paiements - Achat rejeté: flag de suppression détecté', achat.id);
+    return false;
+  }
+
+  // 4. Vérifier qu'il y a des articles
+  if (!Array.isArray(achat.articles) || achat.articles.length === 0) {
+    console.log('❌ Paiements - Achat rejeté: pas d\'articles', achat.id);
+    return false;
+  }
+
+  // 5. Vérifier qu'au moins un article est valide (quantité > 0 ET prix > 0)
+  const hasValidArticle = achat.articles.some(article => {
+    const base = article?.recu || article?.commandee || article || {};
+    const quantite = Number(base?.quantite || 0);
+    const prixUnitaire = Number(base?.prixUnitaire || base?.prixAchat || 0);
+    return quantite > 0 && prixUnitaire > 0;
+  });
+
+  if (!hasValidArticle) {
+    console.log('❌ Paiements - Achat rejeté: aucun article valide', achat.id);
+    return false;
+  }
+
+  // ✅ L'achat est valide
+  return true;
+}
+
 /* ================= Styles (injection) ================= */
 const useInjectStyles = () => {
   useEffect(() => {
@@ -173,7 +236,7 @@ export default function Paiements() {
   const [editingInstrumentsFor, setEditingInstrumentsFor] = useState(null);
   const [draftInstruments, setDraftInstruments] = useState([]);
 
-  // 🆕 États pour l'édition de paiement
+  // États pour l'édition de paiement
   const [editingPayment, setEditingPayment] = useState(null);
   const [editPaymentDate, setEditPaymentDate] = useState("");
   const [editPaymentMode, setEditPaymentMode] = useState("Espèces");
@@ -261,6 +324,7 @@ export default function Paiements() {
     return idx;
   }, [documents, paiementsByDoc, getTotalDoc, relatedTo]);
 
+  // 🔥 CHARGEMENT DES DOCUMENTS AVEC FILTRAGE DES ACHATS SUPPRIMÉS
   const loadDocuments = useCallback(() => {
     if (!societeId) return;
     if (unsubDocsRef.current) unsubDocsRef.current();
@@ -268,16 +332,36 @@ export default function Paiements() {
     unsubDocsRef.current = onSnapshot(
       c,
       (snap) => {
+        console.log(`📊 Paiements: ${snap.docs.length} documents ${relatedTo} récupérés depuis Firestore`);
+        
         const arr = [];
         snap.forEach((d) => {
           const data = d.data();
-          if (!Array.isArray(data.articles) || data.articles.length === 0) return;
-          if (relatedTo === "achats") {
-            const st = (data.statutReception || "en_attente").toLowerCase();
-            if (!["reçu", "recu", "partiel"].includes(st)) return;
+          const docWithId = { id: d.id, ...data };
+          
+          // Filtrage de base
+          if (!Array.isArray(data.articles) || data.articles.length === 0) {
+            console.log(`🚫 Paiements: Document ${d.id} ignoré (pas d'articles)`);
+            return;
           }
-          arr.push({ id: d.id, ...data });
+          
+          if (relatedTo === "achats") {
+            // 🔥 VALIDATION STRICTE DES ACHATS
+            if (!isValidAchat(docWithId)) {
+              console.log(`🗑️ Paiements: Achat ${d.id} filtré (invalide/supprimé)`);
+              return;
+            }
+            
+            const st = (data.statutReception || "en_attente").toLowerCase();
+            if (!["reçu", "recu", "partiel"].includes(st)) {
+              console.log(`🚫 Paiements: Achat ${d.id} ignoré (statut réception: ${st})`);
+              return;
+            }
+          }
+          
+          arr.push(docWithId);
         });
+        
         arr.sort((a, b) => {
           const da =
             toDateSafe(a.date)?.getTime() ||
@@ -289,9 +373,14 @@ export default function Paiements() {
             0;
           return dbb - da;
         });
+        
+        console.log(`✅ Paiements: ${arr.length} documents ${relatedTo} valides chargés`);
         setDocuments(arr);
       },
-      (e) => console.error("docs", e)
+      (e) => {
+        console.error("❌ Paiements - Erreur loadDocuments:", e);
+        setDocuments([]);
+      }
     );
   }, [societeId, relatedTo]);
 
@@ -591,7 +680,7 @@ export default function Paiements() {
     showNote,
   ]);
 
-  // 🆕 ÉDITION DE PAIEMENT
+  // ÉDITION DE PAIEMENT
   const handleEditPayment = useCallback((payment) => {
     setEditingPayment(payment);
     setEditPaymentDate(getDateInputValue(payment.date));
@@ -724,7 +813,7 @@ export default function Paiements() {
     setEditPaymentInstruments((prev) => prev.filter((_, i) => i !== idx));
   }, []);
 
-  // 🆕 SUPPRESSION DE PAIEMENT
+  // SUPPRESSION DE PAIEMENT
   const handleDeletePayment = useCallback(async (payment) => {
     if (!societeId || !user || !payment) return;
 
@@ -1601,7 +1690,7 @@ export default function Paiements() {
         </div>
       </div>
 
-      {/* 🆕 MODAL D'ÉDITION DE PAIEMENT */}
+      {/* MODAL D'ÉDITION DE PAIEMENT */}
       {editingPayment && (
         <div className="modal-overlay" onClick={(e) => { if (e.target === e.currentTarget) handleCancelEditPayment(); }}>
           <div className="modal-content">

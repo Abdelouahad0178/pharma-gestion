@@ -48,8 +48,8 @@ export default function LegalDocuments() {
     },
     backButtonTop: {
       position: 'absolute',
-      top: '16px',
-      left: '16px',
+      top: '74px',
+      left: '6px',
       display: 'inline-flex',
       alignItems: 'center',
       gap: '8px',
@@ -193,7 +193,7 @@ export default function LegalDocuments() {
         <h3 style={styles.subsectionTitle}>1. Définitions</h3>
         <ul style={styles.list}>
           <li style={styles.listItem}><strong>Service :</strong> Logiciel SaaS "Pharma Gestion" accessible via Internet</li>
-          <li style={styles.listItem}><strong>Éditeur :</strong> [VOTRE SOCIÉTÉ], éditeur et hébergeur du logiciel</li>
+          <li style={styles.listItem}><strong>Éditeur :</strong> [ANAPHARMO], éditeur et hébergeur du logiciel</li>
           <li style={styles.listItem}><strong>Client :</strong> Toute personne morale ou physique souscrivant à un abonnement</li>
           <li style={styles.listItem}><strong>Utilisateur :</strong> Toute personne accédant au Service avec un compte autorisé</li>
           <li style={styles.listItem}><strong>Données :</strong> Toutes informations saisies, stockées ou traitées via le Service</li>
@@ -316,9 +316,9 @@ export default function LegalDocuments() {
         <p style={styles.paragraph}>
           <strong>Service Client :</strong><br />
           Email : support@pharma-gestion.ma<br />
-          Téléphone : +212 5XX-XXXXXX<br />
+          Téléphone : +212 211223344<br />
           Horaires : Lundi-Vendredi 9h-18h<br />
-          Adresse : [Votre adresse complète]
+          Adresse : [AV MED6 N°123 Casablanca MAROC]
         </p>
       </div>
       <div style={styles.updateDate}>

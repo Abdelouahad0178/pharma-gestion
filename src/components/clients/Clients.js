@@ -109,9 +109,9 @@ export default function Clients(){
       .r-grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
       .r-grid-3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; }
       .r-grid-4 { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; }
-      .modal-card { max-width: 1000px; width: 95%; max-height: 90vh; display: flex; flex-direction: column; padding: 16px; }
+      .modal-card { max-width: 1000px; width: 95%; max-height: 60vh; display: flex; flex-direction: column; padding: 16px; }
       .modal-body-scroll { overflow-y: auto; min-height: 0; }
-      @media (max-width: 480px) { .modal-card { padding: 12px; } }
+      @media (max-width: 480px) { .modal-card { padding: 12px;max-height: 41vh; } }
     `}</style>
   );
 

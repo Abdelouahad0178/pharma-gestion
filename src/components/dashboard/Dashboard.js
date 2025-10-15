@@ -8,6 +8,7 @@ import {
   query,
   orderBy,
   getDoc,
+  where,
 } from "firebase/firestore";
 import { useUserRole } from "../../contexts/UserRoleContext";
 import { usePermissions } from "../hooks/usePermissions";
@@ -91,6 +92,75 @@ function norm(s) {
 function isCash(mode) {
   const m = norm(mode);
   return ["especes", "espèces", "espece", "espèce", "cash", "liquide"].includes(m);
+}
+
+/* =========================
+   🆕 VALIDATION STRICTE DES ACHATS
+========================= */
+function isValidAchat(achat) {
+  // 1. Vérifier que l'achat existe et a un ID valide
+  if (!achat || !achat.id || typeof achat.id !== 'string') {
+    console.log('❌ Achat rejeté: pas d\'ID', achat);
+    return false;
+  }
+
+  // 2. 🔥 NOUVEAU: Exclure explicitement les bons de transfert si souhaité
+  // Décommentez cette ligne pour masquer aussi les transferts:
+  // if (achat.isTransferred === true) return false;
+
+  // 3. Vérifier les statuts de suppression/annulation
+  const statut = norm(achat?.statut || achat?.status || achat?.etat || achat?.statutReception || "");
+  const statutsInvalides = [
+    "supprime", "supprimé", "deleted", "removed",
+    "annule", "annulé", "cancelled", "canceled",
+    "inactif", "inactive", "archived", "archive"
+  ];
+  
+  if (statutsInvalides.includes(statut)) {
+    console.log('❌ Achat rejeté: statut invalide', achat.id, statut);
+    return false;
+  }
+
+  // 4. Vérifier tous les flags de suppression possibles
+  const suppressionFlags = [
+    achat.deleted,
+    achat.isDeleted, 
+    achat.supprime,
+    achat.supprimé,
+    achat.removed,
+    achat.isRemoved,
+    achat.archived,
+    achat.isArchived,
+    achat.active === false,
+    achat.actif === false
+  ];
+
+  if (suppressionFlags.some(flag => flag === true)) {
+    console.log('❌ Achat rejeté: flag de suppression détecté', achat.id);
+    return false;
+  }
+
+  // 5. Vérifier qu'il y a des articles
+  if (!Array.isArray(achat.articles) || achat.articles.length === 0) {
+    console.log('❌ Achat rejeté: pas d\'articles', achat.id);
+    return false;
+  }
+
+  // 6. Vérifier qu'au moins un article est valide (quantité > 0 ET prix > 0)
+  const hasValidArticle = achat.articles.some(article => {
+    const base = article?.recu || article?.commandee || article || {};
+    const quantite = Number(base?.quantite || 0);
+    const prixUnitaire = Number(base?.prixUnitaire || base?.prixAchat || 0);
+    return quantite > 0 && prixUnitaire > 0;
+  });
+
+  if (!hasValidArticle) {
+    console.log('❌ Achat rejeté: aucun article valide', achat.id);
+    return false;
+  }
+
+  // ✅ L'achat est valide
+  return true;
 }
 
 /* =========================
@@ -329,24 +399,59 @@ export default function Dashboard() {
     })();
 
     const qVentes = query(collection(db, "societe", societeId, "ventes"), orderBy("date", "desc"));
-    const qAchats = query(collection(db, "societe", societeId, "achats"), orderBy("timestamp", "desc"));
+    
+    // 🔥 NOUVELLE APPROCHE: Query Firestore avec exclusion DIRECTE
+    const qAchats = query(
+      collection(db, "societe", societeId, "achats"),
+      orderBy("timestamp", "desc")
+    );
+    
     const qStock = collection(db, "societe", societeId, "stock");
     const qStockEntries = query(collection(db, "societe", societeId, "stock_entries"), orderBy("nom"));
     const qPaiements = query(collection(db, "societe", societeId, "paiements"), orderBy("date", "desc"));
 
-    unsubs.push(onSnapshot(qVentes,  s => setVentes(s.docs.map(d => ({ id:d.id, ...d.data() }))), () => setVentes([])));
-    unsubs.push(onSnapshot(qAchats,  s => {
-      const arr = s.docs.map(d => ({ id:d.id, ...d.data() }));
-      arr.sort((a,b) => (toDate(achatDate(b))||0) - (toDate(achatDate(a))||0));
-      setAchats(arr);
-    }, () => setAchats([])));
-    unsubs.push(onSnapshot(qStock,   s => setStock(s.docs.map(d => ({ id:d.id, ...d.data() }))), () => setStock([])));
+    unsubs.push(onSnapshot(qVentes, s => setVentes(s.docs.map(d => ({ id:d.id, ...d.data() }))), () => setVentes([])));
+    
+    // 🔥 FILTRAGE TRIPLE SÉCURITÉ pour les achats
+    unsubs.push(onSnapshot(
+      qAchats,
+      (snapshot) => {
+        console.log(`📊 Dashboard: ${snapshot.docs.length} achats récupérés depuis Firestore`);
+        
+        const arr = snapshot.docs
+          .map(d => {
+            const data = d.data();
+            return { id: d.id, ...data };
+          })
+          .filter(achat => {
+            const isValid = isValidAchat(achat);
+            if (!isValid) {
+              console.log(`🗑️ Achat ${achat.id} filtré (invalide/supprimé)`);
+            }
+            return isValid;
+          });
+        
+        console.log(`✅ Dashboard: ${arr.length} achats valides après filtrage`);
+        
+        arr.sort((a,b) => (toDate(achatDate(b))||0) - (toDate(achatDate(a))||0));
+        setAchats(arr);
+      },
+      (error) => {
+        console.error('❌ Erreur onSnapshot achats:', error);
+        setAchats([]);
+      }
+    ));
+    
+    unsubs.push(onSnapshot(qStock, s => setStock(s.docs.map(d => ({ id:d.id, ...d.data() }))), () => setStock([])));
     unsubs.push(onSnapshot(qStockEntries, s => setStockEntries(s.docs.map(d => ({ id:d.id, ...d.data() }))), () => setStockEntries([])));
     unsubs.push(onSnapshot(qPaiements, s => setPaiements(s.docs.map(d => ({ id:d.id, ...d.data() }))), () => setPaiements([])));
 
     toast("Données (temps réel) prêtes ✅");
 
-    return () => { unsubs.forEach(u => { try { u && u(); } catch {} }); };
+    return () => { 
+      console.log('🔌 Dashboard: Déconnexion des listeners Firestore');
+      unsubs.forEach(u => { try { u && u(); } catch {} }); 
+    };
   }, [loading, user, societeId, toast]);
 
   /* =========================
@@ -385,8 +490,15 @@ export default function Dashboard() {
   }, []);
 
   const computeMontantAchat = useCallback((achat) => {
+    // 🔥 Vérification de sécurité supplémentaire
+    if (!isValidAchat(achat)) {
+      console.warn(`⚠️ Tentative de calcul sur achat invalide: ${achat?.id}`);
+      return 0;
+    }
+
     const m = Number(achat?.montantTotal) || Number(achat?.montant) || 0;
     if (m > 0) return m;
+    
     const arts = Array.isArray(achat?.articles) ? achat.articles : [];
     const subtotal = arts.reduce((sum, a) => {
       const base = (a && (a.recu || a.commandee)) ? (a.recu || a.commandee) : a || {};
@@ -409,8 +521,19 @@ export default function Dashboard() {
     caisseSolde,
     ruptures,
   } = useMemo(() => {
+    // 🔥 QUADRUPLE FILTRAGE de sécurité
+    const achatsValides = achats.filter(a => {
+      const valid = isValidAchat(a);
+      if (!valid) {
+        console.log(`🚫 Achat ${a.id} exclu des calculs (invalide)`);
+      }
+      return valid;
+    });
+    
+    console.log(`📈 Calcul des totaux: ${achatsValides.length}/${achats.length} achats valides`);
+    
     const vPer = ventes.filter(v => inPeriod(v.date || v.timestamp, periode, dateMin, dateMax));
-    const aPer = achats.filter(a => inPeriod(achatDate(a), periode, dateMin, dateMax));
+    const aPer = achatsValides.filter(a => inPeriod(achatDate(a), periode, dateMin, dateMax));
     const pPer = paiements.filter(p => inPeriod(p.date || p.timestamp, periode, dateMin, dateMax));
 
     // VENTES – S1 par défaut (somme des lignes S1), TOUS en double-clic
@@ -418,7 +541,7 @@ export default function Dashboard() {
       ? vPer.reduce((s,v) => s + computeMontantVenteAll(v), 0)
       : vPer.reduce((s,v) => s + computeMontantVenteByTag(v, "stock1"), 0);
 
-    // ACHATS – filtre doc (inchangé)
+    // ACHATS – filtre doc
     const aUsed = showAllAchats ? aPer : aPer.filter(isStock1);
     const totalAchats = aUsed.reduce((s,a) => s + computeMontantAchat(a), 0);
 
@@ -455,29 +578,19 @@ export default function Dashboard() {
 
     const produitsStock = uniqueIds.size;
 
-    /* ========================= CAISSE – CALCULÉE SUR LA PÉRIODE FILTRÉE =========================
-       Objectif:
-       - IN = tous les paiements "ventes" en espèces de la PÉRIODE (collection paiements)
-       - OUT = tous les paiements "achats" en espèces de la PÉRIODE (collection paiements)
-       - Solde = IN - OUT
-    ============================================================================= */
-
-    // 1) Paiements de la PÉRIODE filtrée
+    // CAISSE
     const pPeriod = paiements.filter(p => inPeriod(p.date || p.timestamp, periode, dateMin, dateMax));
 
-    // 2) IN: VENTES en espèces (encaissements)
     const pSaleCash = pPeriod.filter(p =>
       isSalePayment(p) && isCash(p?.mode ?? p?.paymentMode ?? p?.moyen ?? p?.typePaiement)
     );
     const caisseEncaissements = pSaleCash.reduce((s, p) => s + (Number(p?.montant) || 0), 0);
 
-    // 3) OUT: ACHATS (règlements fournisseurs) en espèces (décaissements)
     const pSupplierCash = pPeriod.filter(p =>
       isSupplierPayment(p) && isCash(p?.mode ?? p?.paymentMode ?? p?.moyen ?? p?.typePaiement)
     );
     const caisseDecaissements = pSupplierCash.reduce((s, p) => s + (Number(p?.montant) || 0), 0);
 
-    // 4) Solde caisse de la période = IN - OUT
     const caisseSolde = caisseEncaissements - caisseDecaissements;
 
     // Ruptures & péremptions
@@ -581,7 +694,7 @@ export default function Dashboard() {
       <div style={styles.card}>
         <div style={styles.header}>
           <div style={styles.chipRow}>
-            <div style={styles.chip} title={`${displayRole} — ${displayName}`}>
+            <div style={styles.chip} title={`${displayRole} – ${displayName}`}>
               <div style={styles.avatar}>{initials}</div>
               <div style={{display:"flex",flexDirection:"column"}}>
                 <div style={{fontWeight:800, fontSize:13}}>{displayName}</div>

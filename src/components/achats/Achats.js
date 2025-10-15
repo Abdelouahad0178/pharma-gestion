@@ -14,6 +14,7 @@ import {
   where,
   orderBy,
   Timestamp,
+  writeBatch,
 } from "firebase/firestore";
 import { useUserRole } from "../../contexts/UserRoleContext";
 
@@ -25,6 +26,7 @@ import { useUserRole } from "../../contexts/UserRoleContext";
  * - Le bon original voit ses quantités diminuées
  * - Total affiché en bas du tableau des bons
  * - Transfert fonctionnel pour réceptions totales ET partielles
+ * - 🆕 SUPPRESSION EN CASCADE : supprime automatiquement les paiements associés
  */
 
 export default function Achats() {
@@ -809,13 +811,46 @@ export default function Achats() {
     window.scrollTo({ top: 0, behavior: "smooth" });
   }, [toDateSafe]);
 
-  /* ===================== Suppression bon ===================== */
+  /* ===================== 🆕 SUPPRESSION BON AVEC CASCADE PAIEMENTS ===================== */
   const handleDeleteBon = useCallback(async (bon) => {
     if (!societeId) return showNotification("Aucune société sélectionnée !", "error");
     if (!user) return showNotification("Utilisateur non connecté !", "error");
-    if (!window.confirm("Supprimer ce bon d'achat ? Cette action est irréversible.")) return;
+    
+    // Confirmation avec avertissement sur les paiements
+    const confirmMsg = 
+      `⚠️ ATTENTION : Supprimer ce bon d'achat ?\n\n` +
+      `Cette action va également supprimer :\n` +
+      `• Tous les paiements associés à cet achat\n` +
+      `• Les entrées de stock liées (si réception effectuée)\n\n` +
+      `Cette action est IRRÉVERSIBLE.\n\n` +
+      `Voulez-vous vraiment continuer ?`;
+    
+    if (!window.confirm(confirmMsg)) return;
+    
     setIsLoading(true);
+    
     try {
+      console.log(`🗑️ Début suppression achat ${bon.id} avec cascade...`);
+      
+      // 1️⃣ Trouver tous les paiements liés à cet achat
+      const paiementsQuery = query(
+        collection(db, "societe", societeId, "paiements"),
+        where("docId", "==", bon.id),
+        where("type", "==", "achats")
+      );
+      
+      const paiementsSnapshot = await getDocs(paiementsQuery);
+      console.log(`📊 ${paiementsSnapshot.size} paiement(s) trouvé(s) pour l'achat ${bon.id}`);
+      
+      // 2️⃣ Utiliser un batch pour supprimer tous les paiements
+      const batch = writeBatch(db);
+      
+      paiementsSnapshot.forEach((doc) => {
+        console.log(`🗑️ Suppression du paiement ${doc.id} (${doc.data().montant} DH)`);
+        batch.delete(doc.ref);
+      });
+      
+      // 3️⃣ Supprimer les entrées de stock si réception effectuée
       const receivedArticles = (bon.articles || [])
         .filter((a) => (a?.recu?.quantite || 0) > 0)
         .map((a) => ({ produit: a.produit, ...(a.recu || {}) }));
@@ -830,19 +865,45 @@ export default function Achats() {
           : 0) - (Number(bon.remiseGlobale) || 0);
 
       if (bon.statutReception && bon.statutReception !== "en_attente") {
+        console.log(`🔄 Suppression des entrées de stock pour l'achat ${bon.id}`);
         await updateStockOnDelete({ id: bon.id, fournisseur: bon.fournisseur || "", articles: receivedArticles });
       }
-      await deleteDoc(doc(db, "societe", societeId, "achats", bon.id));
-
+      
+      // 4️⃣ Supprimer le bon d'achat
+      const achatRef = doc(db, "societe", societeId, "achats", bon.id);
+      batch.delete(achatRef);
+      
+      // 5️⃣ Exécuter toutes les suppressions
+      await batch.commit();
+      
+      console.log(`✅ Achat ${bon.id} et ${paiementsSnapshot.size} paiement(s) supprimés avec succès`);
+      
+      // 6️⃣ Enregistrer l'activité
       await addDoc(collection(db, "societe", societeId, "activities"), {
-        type: "achat", userId: user.uid, userEmail: user.email, timestamp: Timestamp.now(),
-        details: { fournisseur: bon.fournisseur, montant: montantTotal, action: "suppression", achatId: bon.id, stock: pickDocStock(bon) },
+        type: "achat", 
+        userId: user.uid, 
+        userEmail: user.email, 
+        timestamp: Timestamp.now(),
+        details: { 
+          fournisseur: bon.fournisseur, 
+          montant: montantTotal, 
+          action: "suppression", 
+          achatId: bon.id, 
+          stock: pickDocStock(bon),
+          paiementsSupprimesCount: paiementsSnapshot.size,
+          montantPaiementsSupprimés: paiementsSnapshot.docs.reduce((sum, doc) => sum + (Number(doc.data().montant) || 0), 0)
+        },
       });
 
+      // 7️⃣ Rafraîchir les données
       await Promise.all([fetchAchats(), fetchMedicaments(), fetchStockEntries()]);
-      showNotification("Bon d'achat supprimé avec succès !", "success");
+      
+      showNotification(
+        `Bon d'achat supprimé avec succès ! (${paiementsSnapshot.size} paiement(s) supprimé(s))`,
+        "success"
+      );
     } catch (e) {
-      console.error("handleDeleteBon:", e);
+      console.error("❌ Erreur handleDeleteBon:", e);
       showNotification("Erreur lors de la suppression: " + e.message, "error");
     } finally {
       setIsLoading(false);

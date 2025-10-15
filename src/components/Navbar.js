@@ -114,7 +114,7 @@ export default function Navbar() {
       sx={{
         width: 285,
         height: "100%",
-        background: "linear-gradient(135deg,#122058,#315aac 120%)",
+        
         color: "#fff"
       }}
       role="presentation"
