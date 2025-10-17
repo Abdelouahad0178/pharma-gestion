@@ -5,23 +5,32 @@ import { signOut } from "firebase/auth";
 import { auth } from "../firebase/config";
 import { useUserRole } from "../contexts/UserRoleContext";
 
-export default function Protected({ permission, children }) {
-  const { 
-    loading, 
-    user, 
-    can, 
-    canAccessApp, 
-    getBlockMessage, 
+/**
+ * Protected
+ * Props supportées :
+ * - permission?: string                → exige une permission unique
+ * - allOf?: string[]                   → exige toutes ces permissions
+ * - anyOf?: string[]                   → exige au moins une de ces permissions
+ * - children: ReactNode
+ *
+ * Priorité d'évaluation: allOf > anyOf > permission
+ */
+export default function Protected({ permission, allOf, anyOf, children }) {
+  const {
+    loading,
+    user,
+    can,
+    canAccessApp,
+    getBlockMessage,
     isDeleted,
     isLocked,
     isActive,
     isOwner,
-    role 
+    role,
   } = useUserRole();
-  
+
   const navigate = useNavigate();
 
-  // Fonction pour gérer la déconnexion
   const handleLogout = async () => {
     try {
       await signOut(auth);
@@ -31,69 +40,89 @@ export default function Protected({ permission, children }) {
     }
   };
 
-  // En cours de chargement
+  // -------- Helpers permission sets (exact) ----------
+  const hasAll = (perms) => Array.isArray(perms) && perms.every((p) => can(p));
+  const hasAny = (perms) => Array.isArray(perms) && perms.some((p) => can(p));
+
+  const isAllowed = () => {
+    // Priorité: allOf > anyOf > permission (string)
+    if (Array.isArray(allOf) && allOf.length > 0) return hasAll(allOf);
+    if (Array.isArray(anyOf) && anyOf.length > 0) return hasAny(anyOf);
+    if (typeof permission === "string" && permission.trim()) return can(permission.trim());
+    // Si aucune contrainte explicite, on laisse passer
+    return true;
+  };
+
+  // ================== States d'accès ==================
   if (loading) {
     return (
-      <div style={{
-        padding: 40,
-        textAlign: "center",
-        minHeight: '50vh',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        flexDirection: 'column',
-        color: '#e5eeff',
-        background: 'linear-gradient(120deg, #223049 0%, #344060 100%)'
-      }}>
-        <div style={{ 
-          fontSize: '48px', 
-          marginBottom: '20px',
-          animation: 'pulse 2s infinite'
-        }}>⏳</div>
-        <div style={{ fontSize: '18px', fontWeight: 600 }}>Chargement...</div>
-        <div style={{ fontSize: '14px', color: '#8892b0', marginTop: '10px' }}>
+      <div
+        style={{
+          padding: 40,
+          textAlign: "center",
+          minHeight: "50vh",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          flexDirection: "column",
+          color: "#e5eeff",
+          background: "linear-gradient(120deg, #223049 0%, #344060 100%)",
+        }}
+      >
+        <div
+          style={{
+            fontSize: "48px",
+            marginBottom: "20px",
+            animation: "pulse 2s infinite",
+          }}
+        >
+          ⏳
+        </div>
+        <div style={{ fontSize: "18px", fontWeight: 600 }}>Chargement...</div>
+        <div style={{ fontSize: "14px", color: "#8892b0", marginTop: "10px" }}>
           Vérification des permissions en cours
         </div>
       </div>
     );
   }
 
-  // Si non connecté
   if (!user) {
     return (
-      <div style={{
-        padding: 40,
-        textAlign: "center",
-        color: "#dc2626",
-        minHeight: '50vh',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        flexDirection: 'column',
-        background: 'linear-gradient(120deg, #2d1b1b 0%, #3d2020 100%)'
-      }}>
-        <div style={{ fontSize: '64px', marginBottom: '20px' }}>🚫</div>
-        <div style={{ fontSize: '24px', fontWeight: 800, marginBottom: '10px' }}>
+      <div
+        style={{
+          padding: 40,
+          textAlign: "center",
+          color: "#dc2626",
+          minHeight: "50vh",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          flexDirection: "column",
+          background: "linear-gradient(120deg, #2d1b1b 0%, #3d2020 100%)",
+        }}
+      >
+        <div style={{ fontSize: "64px", marginBottom: "20px" }}>🚫</div>
+        <div style={{ fontSize: "24px", fontWeight: 800, marginBottom: "10px" }}>
           Non connecté
         </div>
-        <div style={{ fontSize: '16px', color: '#8892b0', marginBottom: '20px' }}>
+        <div style={{ fontSize: "16px", color: "#8892b0", marginBottom: "20px" }}>
           Veuillez vous connecter pour accéder à cette page.
         </div>
         <button
           onClick={() => navigate("/login")}
           style={{
-            background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-            color: 'white',
-            border: 'none',
-            borderRadius: '10px',
-            padding: '12px 24px',
-            fontSize: '16px',
+            background: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
+            color: "white",
+            border: "none",
+            borderRadius: "10px",
+            padding: "12px 24px",
+            fontSize: "16px",
             fontWeight: 700,
-            cursor: 'pointer',
-            transition: 'all 0.3s ease'
+            cursor: "pointer",
+            transition: "all 0.3s ease",
           }}
-          onMouseEnter={e => e.target.style.transform = 'scale(1.05)'}
-          onMouseLeave={e => e.target.style.transform = 'scale(1)'}
+          onMouseEnter={(e) => (e.target.style.transform = "scale(1.05)")}
+          onMouseLeave={(e) => (e.target.style.transform = "scale(1)")}
         >
           Se connecter
         </button>
@@ -101,41 +130,42 @@ export default function Protected({ permission, children }) {
     );
   }
 
-  // NOUVEAU: Vérification spécifique pour utilisateur supprimé
   if (isDeleted) {
     return (
-      <div style={{
-        padding: 40,
-        textAlign: "center",
-        color: "#dc2626",
-        minHeight: '50vh',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        flexDirection: 'column',
-        background: 'linear-gradient(120deg, #2d1b1b 0%, #3d2020 100%)'
-      }}>
-        <div style={{ fontSize: '64px', marginBottom: '20px' }}>🗑️</div>
-        <div style={{ fontSize: '24px', fontWeight: 800, marginBottom: '10px' }}>
+      <div
+        style={{
+          padding: 40,
+          textAlign: "center",
+          color: "#dc2626",
+          minHeight: "50vh",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          flexDirection: "column",
+          background: "linear-gradient(120deg, #2d1b1b 0%, #3d2020 100%)",
+        }}
+      >
+        <div style={{ fontSize: "64px", marginBottom: "20px" }}>🗑️</div>
+        <div style={{ fontSize: "24px", fontWeight: 800, marginBottom: "10px" }}>
           Compte supprimé
         </div>
-        <div style={{ fontSize: '16px', color: '#8892b0', marginBottom: '10px' }}>
+        <div style={{ fontSize: "16px", color: "#8892b0", marginBottom: "10px" }}>
           Ce compte a été supprimé par l'administrateur.
         </div>
-        <div style={{ fontSize: '14px', color: '#6b7280', marginBottom: '20px' }}>
+        <div style={{ fontSize: "14px", color: "#6b7280", marginBottom: "20px" }}>
           Contactez l'administrateur si vous pensez qu'il s'agit d'une erreur.
         </div>
         <button
           onClick={handleLogout}
           style={{
-            background: 'linear-gradient(135deg, #f56565 0%, #e53e3e 100%)',
-            color: 'white',
-            border: 'none',
-            borderRadius: '10px',
-            padding: '12px 24px',
-            fontSize: '16px',
+            background: "linear-gradient(135deg, #f56565 0%, #e53e3e 100%)",
+            color: "white",
+            border: "none",
+            borderRadius: "10px",
+            padding: "12px 24px",
+            fontSize: "16px",
             fontWeight: 700,
-            cursor: 'pointer'
+            cursor: "pointer",
           }}
         >
           Se déconnecter
@@ -144,74 +174,73 @@ export default function Protected({ permission, children }) {
     );
   }
 
-  // Si le compte ne peut pas accéder à l'application (verrouillé/désactivé)
   if (canAccessApp && !canAccessApp()) {
     const getStatusInfo = () => {
       if (isLocked) {
         return {
-          icon: '🔒',
-          title: 'Compte verrouillé',
-          subtitle: 'Votre compte a été temporairement verrouillé',
-          color: '#f59e0b',
-          background: 'linear-gradient(120deg, #2d2416 0%, #3d3020 100%)'
+          icon: "🔒",
+          title: "Compte verrouillé",
+          subtitle: "Votre compte a été temporairement verrouillé",
+          color: "#f59e0b",
+          background: "linear-gradient(120deg, #2d2416 0%, #3d3020 100%)",
         };
       }
       if (!isActive) {
         return {
-          icon: '⏸️',
-          title: 'Compte désactivé',
-          subtitle: 'Votre compte a été désactivé par l\'administrateur',
-          color: '#dc2626',
-          background: 'linear-gradient(120deg, #2d1b1b 0%, #3d2020 100%)'
+          icon: "⏸️",
+          title: "Compte désactivé",
+          subtitle: "Votre compte a été désactivé par l'administrateur",
+          color: "#dc2626",
+          background: "linear-gradient(120deg, #2d1b1b 0%, #3d2020 100%)",
         };
       }
       return {
-        icon: '🚫',
-        title: 'Accès refusé',
-        subtitle: 'Accès à l\'application refusé',
-        color: '#dc2626',
-        background: 'linear-gradient(120deg, #2d1b1b 0%, #3d2020 100%)'
+        icon: "🚫",
+        title: "Accès refusé",
+        subtitle: "Accès à l'application refusé",
+        color: "#dc2626",
+        background: "linear-gradient(120deg, #2d1b1b 0%, #3d2020 100%)",
       };
     };
 
     const statusInfo = getStatusInfo();
 
     return (
-      <div style={{
-        padding: 40,
-        textAlign: "center",
-        color: statusInfo.color,
-        minHeight: '50vh',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        flexDirection: 'column',
-        background: statusInfo.background
-      }}>
-        <div style={{ fontSize: '64px', marginBottom: '20px' }}>
-          {statusInfo.icon}
-        </div>
-        <div style={{ fontSize: '24px', fontWeight: 800, marginBottom: '10px' }}>
+      <div
+        style={{
+          padding: 40,
+          textAlign: "center",
+          color: statusInfo.color,
+          minHeight: "50vh",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          flexDirection: "column",
+          background: statusInfo.background,
+        }}
+      >
+        <div style={{ fontSize: "64px", marginBottom: "20px" }}>{statusInfo.icon}</div>
+        <div style={{ fontSize: "24px", fontWeight: 800, marginBottom: "10px" }}>
           {statusInfo.title}
         </div>
-        <div style={{ fontSize: '16px', color: '#8892b0', marginBottom: '10px' }}>
+        <div style={{ fontSize: "16px", color: "#8892b0", marginBottom: "10px" }}>
           {statusInfo.subtitle}
         </div>
-        <div style={{ fontSize: '14px', color: '#6b7280', marginBottom: '20px' }}>
+        <div style={{ fontSize: "14px", color: "#6b7280", marginBottom: "20px" }}>
           {getBlockMessage && getBlockMessage()}
         </div>
-        <div style={{ display: 'flex', gap: '15px' }}>
+        <div style={{ display: "flex", gap: "15px" }}>
           <button
             onClick={handleLogout}
             style={{
-              background: 'linear-gradient(135deg, #6b7280 0%, #4b5563 100%)',
-              color: 'white',
-              border: 'none',
-              borderRadius: '10px',
-              padding: '12px 24px',
-              fontSize: '16px',
+              background: "linear-gradient(135deg, #6b7280 0%, #4b5563 100%)",
+              color: "white",
+              border: "none",
+              borderRadius: "10px",
+              padding: "12px 24px",
+              fontSize: "16px",
               fontWeight: 700,
-              cursor: 'pointer'
+              cursor: "pointer",
             }}
           >
             Se déconnecter
@@ -219,14 +248,14 @@ export default function Protected({ permission, children }) {
           <button
             onClick={() => window.location.reload()}
             style={{
-              background: 'linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%)',
-              color: 'white',
-              border: 'none',
-              borderRadius: '10px',
-              padding: '12px 24px',
-              fontSize: '16px',
+              background: "linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%)",
+              color: "white",
+              border: "none",
+              borderRadius: "10px",
+              padding: "12px 24px",
+              fontSize: "16px",
               fontWeight: 700,
-              cursor: 'pointer'
+              cursor: "pointer",
             }}
           >
             Actualiser
@@ -236,80 +265,97 @@ export default function Protected({ permission, children }) {
     );
   }
 
-  // Si pas la permission spécifique
-  if (permission && !can(permission)) {
+  // ================== Vérification permissions ==================
+  const allowed = isAllowed();
+
+  if (!allowed) {
     const getPermissionInfo = () => {
-      const permissionMessages = {
-        'voir_achats': 'Seul le pharmacien peut accéder aux achats',
-        'gerer_utilisateurs': 'Seul le propriétaire peut gérer les utilisateurs',
-        'parametres': 'Seul le pharmacien peut accéder aux paramètres',
-        'voir_ventes': 'Vous n\'avez pas accès aux ventes',
-        'ajouter_stock': 'Vous n\'avez pas accès à la gestion du stock',
-        'modifier_roles': 'Seul le propriétaire peut modifier les rôles'
+      const map = {
+        voir_achats: "Seul le pharmacien peut accéder aux achats",
+        gerer_utilisateurs: "Seul le propriétaire peut gérer les utilisateurs",
+        parametres: "Seul le pharmacien peut accéder aux paramètres",
+        voir_ventes: "Vous n'avez pas accès aux ventes",
+        ajouter_stock: "Vous n'avez pas accès à la gestion du stock",
+        modifier_roles: "Seul le propriétaire peut modifier les rôles",
       };
-      
-      return permissionMessages[permission] || 'Permission insuffisante pour cette action';
+
+      // Construire un message plus précis si allOf/anyOf sont utilisés
+      if (Array.isArray(allOf) && allOf.length) {
+        return `Permissions requises: toutes (${allOf.join(", ")})`;
+      }
+      if (Array.isArray(anyOf) && anyOf.length) {
+        return `Permissions requises: au moins une parmi (${anyOf.join(", ")})`;
+      }
+      if (typeof permission === "string" && permission.trim()) {
+        return map[permission] || "Permission insuffisante pour cette action";
+      }
+      return "Permission insuffisante pour cette action";
     };
 
-    // Message spécial pour la gestion des utilisateurs
     if (permission === "gerer_utilisateurs") {
       return (
-        <div style={{
-          padding: 40,
-          textAlign: "center",
-          color: "#fbbf24",
-          minHeight: '50vh',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          flexDirection: 'column',
-          background: 'linear-gradient(120deg, #2d2416 0%, #3d3020 100%)'
-        }}>
-          <div style={{ fontSize: '64px', marginBottom: '20px' }}>👑</div>
-          <div style={{ fontSize: '24px', fontWeight: 800, marginBottom: '10px' }}>
+        <div
+          style={{
+            padding: 40,
+            textAlign: "center",
+            color: "#fbbf24",
+            minHeight: "50vh",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            flexDirection: "column",
+            background: "linear-gradient(120deg, #2d2416 0%, #3d3020 100%)",
+          }}
+        >
+          <div style={{ fontSize: "64px", marginBottom: "20px" }}>👑</div>
+          <div style={{ fontSize: "24px", fontWeight: 800, marginBottom: "10px" }}>
             🔒 Accès Restreint - Propriétaire Uniquement
           </div>
-          <div style={{ fontSize: '16px', color: '#8892b0', marginBottom: '10px' }}>
+          <div style={{ fontSize: "16px", color: "#8892b0", marginBottom: "10px" }}>
             Seul le propriétaire de la société peut gérer les utilisateurs.
           </div>
-          <div style={{ 
-            fontSize: '14px', 
-            color: '#6b7280', 
-            marginBottom: '10px',
-            background: 'rgba(0,0,0,0.3)',
-            padding: '8px 16px',
-            borderRadius: '20px'
-          }}>
-            Votre rôle: <strong>{role}</strong> {isOwner ? '(👑 Propriétaire)' : '(👤 Utilisateur standard)'}
+          <div
+            style={{
+              fontSize: "14px",
+              color: "#6b7280",
+              marginBottom: "10px",
+              background: "rgba(0,0,0,0.3)",
+              padding: "8px 16px",
+              borderRadius: "20px",
+            }}
+          >
+            Votre rôle: <strong>{role}</strong> {isOwner ? "(👑 Propriétaire)" : "(👤 Utilisateur standard)"}
           </div>
           {!isOwner && (
-            <div style={{ 
-              fontSize: '14px', 
-              color: '#6b7280', 
-              marginBottom: '20px',
-              background: 'rgba(251, 191, 36, 0.1)',
-              border: '1px solid rgba(251, 191, 36, 0.3)',
-              padding: '12px 20px',
-              borderRadius: '8px',
-              maxWidth: '500px'
-            }}>
-              💡 <strong>Information :</strong> Cette fonctionnalité permet de promouvoir des vendeuses 
-              au rang de docteur ou de rétrograder des docteurs. Elle n'est accessible qu'au propriétaire 
+            <div
+              style={{
+                fontSize: "14px",
+                color: "#6b7280",
+                marginBottom: "20px",
+                background: "rgba(251, 191, 36, 0.1)",
+                border: "1px solid rgba(251, 191, 36, 0.3)",
+                padding: "12px 20px",
+                borderRadius: "8px",
+                maxWidth: "500px",
+              }}
+            >
+              💡 <strong>Information :</strong> Cette fonctionnalité permet de promouvoir des vendeuses
+              au rang de docteur ou de rétrograder des docteurs. Elle n'est accessible qu'au propriétaire
               pour des raisons de sécurité.
             </div>
           )}
-          <div style={{ display: 'flex', gap: '15px' }}>
+          <div style={{ display: "flex", gap: "15px" }}>
             <button
               onClick={() => navigate("/dashboard")}
               style={{
-                background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-                color: 'white',
-                border: 'none',
-                borderRadius: '10px',
-                padding: '12px 24px',
-                fontSize: '16px',
+                background: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
+                color: "white",
+                border: "none",
+                borderRadius: "10px",
+                padding: "12px 24px",
+                fontSize: "16px",
                 fontWeight: 700,
-                cursor: 'pointer'
+                cursor: "pointer",
               }}
             >
               Retour au Dashboard
@@ -317,14 +363,14 @@ export default function Protected({ permission, children }) {
             <button
               onClick={() => navigate(-1)}
               style={{
-                background: 'linear-gradient(135deg, #6b7280 0%, #4b5563 100%)',
-                color: 'white',
-                border: 'none',
-                borderRadius: '10px',
-                padding: '12px 24px',
-                fontSize: '16px',
+                background: "linear-gradient(135deg, #6b7280 0%, #4b5563 100%)",
+                color: "white",
+                border: "none",
+                borderRadius: "10px",
+                padding: "12px 24px",
+                fontSize: "16px",
                 fontWeight: 700,
-                cursor: 'pointer'
+                cursor: "pointer",
               }}
             >
               Retour
@@ -334,51 +380,54 @@ export default function Protected({ permission, children }) {
       );
     }
 
-    // Message générique pour les autres permissions
     return (
-      <div style={{
-        padding: 40,
-        textAlign: "center",
-        color: "#f59e0b",
-        minHeight: '50vh',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        flexDirection: 'column',
-        background: 'linear-gradient(120deg, #2d2416 0%, #3d3020 100%)'
-      }}>
-        <div style={{ fontSize: '64px', marginBottom: '20px' }}>⚠️</div>
-        <div style={{ fontSize: '24px', fontWeight: 800, marginBottom: '10px' }}>
+      <div
+        style={{
+          padding: 40,
+          textAlign: "center",
+          color: "#f59e0b",
+          minHeight: "50vh",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          flexDirection: "column",
+          background: "linear-gradient(120deg, #2d2416 0%, #3d3020 100%)",
+        }}
+      >
+        <div style={{ fontSize: "64px", marginBottom: "20px" }}>⚠️</div>
+        <div style={{ fontSize: "24px", fontWeight: 800, marginBottom: "10px" }}>
           Permission insuffisante
         </div>
-        <div style={{ fontSize: '16px', color: '#8892b0', marginBottom: '10px' }}>
+        <div style={{ fontSize: "16px", color: "#8892b0", marginBottom: "10px" }}>
           {getPermissionInfo()}
         </div>
-        <div style={{ 
-          fontSize: '14px', 
-          color: '#6b7280', 
-          marginBottom: '10px',
-          background: 'rgba(0,0,0,0.3)',
-          padding: '8px 16px',
-          borderRadius: '20px'
-        }}>
-          Votre rôle: <strong>{role}</strong> {isOwner && '(👑 Propriétaire)'}
+        <div
+          style={{
+            fontSize: "14px",
+            color: "#6b7280",
+            marginBottom: "10px",
+            background: "rgba(0,0,0,0.3)",
+            padding: "8px 16px",
+            borderRadius: "20px",
+          }}
+        >
+          Votre rôle: <strong>{role}</strong> {isOwner && "(👑 Propriétaire)"}
         </div>
-        <div style={{ fontSize: '14px', color: '#6b7280', marginBottom: '20px' }}>
+        <div style={{ fontSize: "14px", color: "#6b7280", marginBottom: "20px" }}>
           Contactez l'administrateur pour plus d'informations.
         </div>
-        <div style={{ display: 'flex', gap: '15px' }}>
+        <div style={{ display: "flex", gap: "15px" }}>
           <button
             onClick={() => navigate("/dashboard")}
             style={{
-              background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-              color: 'white',
-              border: 'none',
-              borderRadius: '10px',
-              padding: '12px 24px',
-              fontSize: '16px',
+              background: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
+              color: "white",
+              border: "none",
+              borderRadius: "10px",
+              padding: "12px 24px",
+              fontSize: "16px",
               fontWeight: 700,
-              cursor: 'pointer'
+              cursor: "pointer",
             }}
           >
             Retour au Dashboard
@@ -386,14 +435,14 @@ export default function Protected({ permission, children }) {
           <button
             onClick={() => navigate(-1)}
             style={{
-              background: 'linear-gradient(135deg, #6b7280 0%, #4b5563 100%)',
-              color: 'white',
-              border: 'none',
-              borderRadius: '10px',
-              padding: '12px 24px',
-              fontSize: '16px',
+              background: "linear-gradient(135deg, #6b7280 0%, #4b5563 100%)",
+              color: "white",
+              border: "none",
+              borderRadius: "10px",
+              padding: "12px 24px",
+              fontSize: "16px",
               fontWeight: 700,
-              cursor: 'pointer'
+              cursor: "pointer",
             }}
           >
             Retour
@@ -403,6 +452,5 @@ export default function Protected({ permission, children }) {
     );
   }
 
-  // Affiche le contenu si tout est ok
   return <>{children}</>;
 }

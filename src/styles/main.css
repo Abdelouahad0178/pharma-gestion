@@ -793,3 +793,63 @@ label {
 .field{
   background: #1c0454;
 }
+
+
+
+/* Empêche la sélection et le drag globalement */
+html, body, #root {
+  -webkit-user-select: none;
+  user-select: none;
+}
+img, a, svg {
+  -webkit-user-drag: none;
+  user-drag: none;
+}
+
+/* MAIS réactive la sélection dans les champs de saisie */
+input, textarea, [contenteditable="true"] {
+  -webkit-user-select: text !important;
+  user-select: text !important;
+}
+/* BackToTop floating button */
+.backtotop{
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  width: 46px;
+  height: 46px;
+  border-radius: 999px;
+  border: 0;
+  cursor: pointer;
+  z-index: 9999;
+  background: linear-gradient(135deg,#667eea,#764ba2);
+  color: #fff;
+  font-weight: 900;
+  font-size: 20px;
+  box-shadow: 0 18px 40px rgba(0,0,0,.25);
+  display: grid;
+  place-items: center;
+  opacity: 0;
+  transform: translateY(12px) scale(.9);
+  pointer-events: none;
+  transition: opacity .2s ease, transform .2s ease, box-shadow .2s ease;
+}
+.backtotop:hover{ box-shadow: 0 22px 50px rgba(0,0,0,.3); }
+.backtotop:active{ transform: translateY(12px) scale(.88); }
+.backtotop.show{
+  opacity: 1;
+  transform: translateY(0) scale(1);
+  pointer-events: auto;
+}
+@media (max-width: 768px){
+  .backtotop{
+    right: 12px;
+    bottom: 12px;
+    width: 44px;
+    height: 44px;
+    font-size: 18px;
+  }
+}
+@media (prefers-reduced-motion: reduce){
+  .backtotop{ transition: none; }
+}

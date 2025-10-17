@@ -1,13 +1,32 @@
-// src/components/legal/LegalDocuments.js - Version SaaS Logiciel (boutons « ← Retour » en haut à gauche et en bas à gauche)
-import React, { useState } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
+// src/components/legal/LegalDocuments.js - Version SaaS + Back fiable (haut & bas) + lecture ?tab=
+import React, { useState, useEffect } from 'react';
+import { useNavigate, Link, useLocation } from 'react-router-dom';
 
 export default function LegalDocuments() {
   const navigate = useNavigate();
+  const location = useLocation();
   const [activeTab, setActiveTab] = useState('cgu');
 
+  // Permet d’ouvrir /legal?tab=privacy etc.
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    const t = params.get('tab');
+    if (t && ['cgu', 'cgv', 'privacy', 'mentions', 'sla'].includes(t)) {
+      setActiveTab(t);
+    }
+  }, [location.search]);
+
+  // Back robuste : s’il n’y a pas d’historique, on va à la Home
+  const handleBack = () => {
+    if (window.history.length > 1) {
+      navigate(-1);
+    } else {
+      navigate('/'); // fallback
+    }
+  };
+
   const tabs = [
-    { id: 'cgu', label: 'CGU - Conditions d\'Utilisation', icon: '📜' },
+    { id: 'cgu', label: "CGU - Conditions d'Utilisation", icon: '📜' },
     { id: 'cgv', label: 'CGV - Conditions de Vente', icon: '💰' },
     { id: 'privacy', label: 'Confidentialité & RGPD', icon: '🔒' },
     { id: 'mentions', label: 'Mentions Légales', icon: '⚖️' },
@@ -32,7 +51,7 @@ export default function LegalDocuments() {
     header: {
       position: 'relative',
       background: 'linear-gradient(135deg, #4a5568 0%, #2d3748 100%)',
-      padding: '30px',
+      padding: '48px 30px 30px',
       color: 'white',
       textAlign: 'center'
     },
@@ -48,19 +67,20 @@ export default function LegalDocuments() {
     },
     backButtonTop: {
       position: 'absolute',
-      top: '74px',
-      left: '6px',
+      top: '12px',
+      left: '12px',
+      zIndex: 5,
       display: 'inline-flex',
       alignItems: 'center',
       gap: '8px',
-      padding: '10px 18px',
+      padding: '10px 14px',
       background: 'linear-gradient(135deg, #667eea, #764ba2)',
       color: 'white',
       border: 'none',
       borderRadius: '10px',
       fontWeight: 600,
       cursor: 'pointer',
-      transition: 'transform 0.2s',
+      transition: 'transform 0.2s, opacity .2s',
       fontSize: '0.95em',
       boxShadow: '0 6px 16px rgba(0,0,0,0.25)'
     },
@@ -171,8 +191,9 @@ export default function LegalDocuments() {
   // Bouton « haut-gauche »
   const BackButtonTop = () => (
     <button
+      type="button"
       style={styles.backButtonTop}
-      onClick={() => navigate(-1)}
+      onClick={handleBack}
       onMouseEnter={(e) => (e.currentTarget.style.transform = 'scale(1.05)')}
       onMouseLeave={(e) => (e.currentTarget.style.transform = 'scale(1)')}
       aria-label="Revenir en arrière"
@@ -863,6 +884,7 @@ export default function LegalDocuments() {
               key={tab.id}
               style={styles.tab(activeTab === tab.id)}
               onClick={() => setActiveTab(tab.id)}
+              type="button"
             >
               {tab.icon} {tab.label}
             </button>
@@ -878,8 +900,9 @@ export default function LegalDocuments() {
         {/* Bouton « ← Retour » en bas à gauche */}
         <div style={styles.footer}>
           <button
+            type="button"
             style={styles.backButtonBottom}
-            onClick={() => navigate(-1)}
+            onClick={handleBack}
             onMouseEnter={(e) => (e.currentTarget.style.transform = 'scale(1.05)')}
             onMouseLeave={(e) => (e.currentTarget.style.transform = 'scale(1)')}
           >

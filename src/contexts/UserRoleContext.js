@@ -1,15 +1,25 @@
-// src/contexts/UserRoleContext.js - VERSION CORRIGÉE
+// src/contexts/UserRoleContext.js - VERSION CORRIGÉE (matching strict des permissions)
 import React, {
   createContext,
   useContext,
   useState,
   useEffect,
   useRef,
+  useMemo,
 } from "react";
 import { getAuth, onAuthStateChanged } from "firebase/auth";
 import { doc, getDoc, onSnapshot } from "firebase/firestore";
 import { db, disableFirestoreNetwork, enableFirestoreNetwork } from "../firebase/config";
-import permissions, { DOCTOR_ONLY_PERMISSIONS } from "../utils/permissions";
+
+// ⚠️ On importe maintenant les helpers stricts
+import permissions, {
+  DOCTOR_ONLY_PERMISSIONS,
+  normalizePermissions,
+  getDefaultPermissionsForRole,
+  hasPerm,
+  hasAll,
+  hasAny,
+} from "../utils/permissions";
 
 const UserRoleContext = createContext();
 
@@ -40,27 +50,26 @@ export function UserRoleProvider({ children }) {
   const [adminPopup, setAdminPopup] = useState(null);
   const [paymentWarning, setPaymentWarning] = useState(null);
 
-  // --- Permissions personnalisées ---
+  // --- Permissions personnalisées (telles que stockées en DB) ---
   const [customPermissions, setCustomPermissions] = useState([]);
 
   // ✅ Refs pour garantir 1 seul listener actif
   const authUnsubRef = useRef(null);
   const userUnsubRef = useRef(null);
   const socUnsubRef = useRef(null);
-  const currentUserIdRef = useRef(null); // ✅ Tracker l'utilisateur actuel
-  const currentSocieteIdRef = useRef(null); // ✅ Tracker la société actuelle
+  const currentUserIdRef = useRef(null);
+  const currentSocieteIdRef = useRef(null);
 
   // Utilitaire : reset réseau si "Target ID already exists"
   const tryRecoverWatchError = async (err) => {
     const msg = String(err?.message || "");
     if (msg.includes("Target ID already exists")) {
-      console.warn("[UserRoleContext] Tentative de récupération Target ID error");
       try {
         await disableFirestoreNetwork();
-        await new Promise(resolve => setTimeout(resolve, 100));
+        await new Promise((resolve) => setTimeout(resolve, 100));
         await enableFirestoreNetwork();
-      } catch (_) {
-        console.error("[UserRoleContext] Échec récupération réseau");
+      } catch {
+        /* noop */
       }
     }
   };
@@ -69,12 +78,10 @@ export function UserRoleProvider({ children }) {
   // Écoute de l'auth Firebase
   // =========================
   useEffect(() => {
-    console.log("[UserRoleContext] Initialisation listener Auth");
     const auth = getAuth();
 
-    // ✅ Cleanup préventif si listener existe déjà
+    // Cleanup préventif si listener existe déjà
     if (authUnsubRef.current) {
-      console.log("[UserRoleContext] Cleanup listener Auth existant");
       authUnsubRef.current();
       authUnsubRef.current = null;
     }
@@ -87,16 +94,12 @@ export function UserRoleProvider({ children }) {
       socUnsubRef.current = null;
     }
 
-    // ✅ Listener Auth unique
+    // Listener Auth unique
     authUnsubRef.current = onAuthStateChanged(auth, async (firebaseUser) => {
-      console.log("[UserRoleContext] Auth state changed:", firebaseUser?.uid || "null");
       setAuthReady(true);
 
       if (!firebaseUser) {
-        // Déconnexion
-        console.log("[auth] Utilisateur déconnecté de Firebase Auth");
-
-        // Cleanup listeners
+        // Déconnexion → reset
         if (userUnsubRef.current) {
           userUnsubRef.current();
           userUnsubRef.current = null;
@@ -106,7 +109,6 @@ export function UserRoleProvider({ children }) {
           socUnsubRef.current = null;
         }
 
-        // Reset états
         setRole(null);
         setSocieteId(null);
         setUser(null);
@@ -124,38 +126,31 @@ export function UserRoleProvider({ children }) {
         return;
       }
 
-      // ✅ Éviter réattachement si même utilisateur
-      if (currentUserIdRef.current === firebaseUser.uid) {
-        console.log("[UserRoleContext] Même utilisateur, skip réattachement");
-        return;
-      }
+      // Éviter réattachement si même utilisateur
+      if (currentUserIdRef.current === firebaseUser.uid) return;
 
-      // Nouvel utilisateur - cleanup ancien listener
+      // Cleanup ancien listener
       if (userUnsubRef.current) {
-        console.log("[UserRoleContext] Cleanup ancien listener user");
         userUnsubRef.current();
         userUnsubRef.current = null;
       }
       if (socUnsubRef.current) {
-        console.log("[UserRoleContext] Cleanup ancien listener société");
         socUnsubRef.current();
         socUnsubRef.current = null;
       }
 
       currentUserIdRef.current = firebaseUser.uid;
-      console.log("[UserRoleContext] Attachement listener user:", firebaseUser.uid);
 
       try {
         const userRef = doc(db, "users", firebaseUser.uid);
 
-        // ✅ Listener utilisateur unique
         userUnsubRef.current = onSnapshot(
           userRef,
           (snap) => {
             if (snap.exists()) {
               const data = snap.data();
 
-              // Mettre à jour états
+              // États principaux
               setIsDeleted(data.deleted === true);
               setRole(data.role || "vendeuse");
               setSocieteId(data.societeId || null);
@@ -164,9 +159,11 @@ export function UserRoleProvider({ children }) {
               setIsActive(data.active !== false && data.isActive !== false);
               setAdminPopup(data.adminPopup || null);
               setPaymentWarning(data.paymentWarning || null);
-              setCustomPermissions(data.customPermissions || []);
 
-              // Objet utilisateur enrichi
+              // ⚠️ Important : on NORMALISE ce qui vient de Firestore
+              const normalizedCustom = normalizePermissions(data.customPermissions || []);
+              setCustomPermissions(normalizedCustom);
+
               setUser({
                 ...firebaseUser,
                 ...data,
@@ -178,11 +175,10 @@ export function UserRoleProvider({ children }) {
                 active: data.active !== false && data.isActive !== false,
                 adminPopup: data.adminPopup || null,
                 paymentWarning: data.paymentWarning || null,
-                customPermissions: data.customPermissions || [],
+                customPermissions: normalizedCustom,
               });
             } else {
               // Document utilisateur absent → valeurs par défaut
-              console.log("[auth] Document utilisateur absent → défauts");
               const defaultData = {
                 role: "vendeuse",
                 societeId: null,
@@ -203,7 +199,7 @@ export function UserRoleProvider({ children }) {
               setIsActive(defaultData.active);
               setAdminPopup(defaultData.adminPopup);
               setPaymentWarning(defaultData.paymentWarning);
-              setCustomPermissions(defaultData.customPermissions);
+              setCustomPermissions([]);
 
               setUser({
                 ...firebaseUser,
@@ -214,9 +210,7 @@ export function UserRoleProvider({ children }) {
             setLoading(false);
           },
           async (error) => {
-            console.error("[UserRoleContext] Erreur listener user:", error.message);
-
-            // Permissions refusées
+            // Gestion d’erreur : fallback permissif minimal
             if (error?.code === "permission-denied") {
               setRole("vendeuse");
               setSocieteId(null);
@@ -241,7 +235,6 @@ export function UserRoleProvider({ children }) {
                 customPermissions: [],
               });
             } else {
-              console.warn("[auth] Erreur réseau ou autre, valeurs par défaut");
               setRole("vendeuse");
               setSocieteId(null);
               setIsLocked(false);
@@ -271,9 +264,7 @@ export function UserRoleProvider({ children }) {
           }
         );
       } catch (e) {
-        console.error("[UserRoleContext] Erreur init listener user:", e);
-
-        // Valeurs par défaut en cas d'erreur init
+        // Erreur d’attachement → défauts
         setRole("vendeuse");
         setSocieteId(null);
         setIsLocked(false);
@@ -302,9 +293,8 @@ export function UserRoleProvider({ children }) {
       }
     });
 
-    // ✅ Cleanup global
+    // Cleanup global
     return () => {
-      console.log("[UserRoleContext] Cleanup global Auth");
       if (authUnsubRef.current) {
         authUnsubRef.current();
         authUnsubRef.current = null;
@@ -318,16 +308,14 @@ export function UserRoleProvider({ children }) {
         socUnsubRef.current = null;
       }
     };
-  }, []); // ✅ Dépendances vides - ne s'exécute qu'une fois
+  }, []);
 
   // =========================
   // Écoute du document société
   // =========================
   useEffect(() => {
-    // ✅ Skip si pas d'utilisateur ou société supprimée
     if (!user || !societeId || isDeleted) {
       if (socUnsubRef.current) {
-        console.log("[UserRoleContext] Cleanup listener société (conditions invalides)");
         socUnsubRef.current();
         socUnsubRef.current = null;
       }
@@ -336,26 +324,18 @@ export function UserRoleProvider({ children }) {
       return;
     }
 
-    // ✅ Éviter réattachement si même société
-    if (currentSocieteIdRef.current === societeId) {
-      console.log("[UserRoleContext] Même société, skip réattachement");
-      return;
-    }
+    if (currentSocieteIdRef.current === societeId) return;
 
-    // Nouvelle société - cleanup ancien listener
     if (socUnsubRef.current) {
-      console.log("[UserRoleContext] Cleanup ancien listener société");
       socUnsubRef.current();
       socUnsubRef.current = null;
     }
 
     currentSocieteIdRef.current = societeId;
-    console.log("[UserRoleContext] Attachement listener société:", societeId.slice(0, 10) + "...");
 
     try {
       const ref = doc(db, "societe", societeId);
 
-      // ✅ Listener société unique
       socUnsubRef.current = onSnapshot(
         ref,
         async (snap) => {
@@ -363,7 +343,6 @@ export function UserRoleProvider({ children }) {
             const data = snap.data();
             setSocieteName(data?.nom || data?.name || "Société");
           } else {
-            // Fallback ancienne collection
             try {
               const oldRef = doc(db, "societes", societeId);
               const oldSnap = await getDoc(oldRef);
@@ -379,102 +358,94 @@ export function UserRoleProvider({ children }) {
           }
         },
         async (err) => {
-          console.warn("[UserRoleContext] Erreur listener société:", err.message);
           setSocieteName("Société (erreur de chargement)");
           await tryRecoverWatchError(err);
         }
       );
     } catch (e) {
-      console.warn("[UserRoleContext] Erreur init listener société:", e);
       setSocieteName("Société (erreur)");
     }
 
-    // ✅ Cleanup
     return () => {
       if (socUnsubRef.current) {
-        console.log("[UserRoleContext] Cleanup listener société");
         socUnsubRef.current();
         socUnsubRef.current = null;
       }
     };
-  }, [user?.uid, societeId, isDeleted]); // ✅ Dépendances primitives
+  }, [user?.uid, societeId, isDeleted]);
 
   // =========================
   // Permissions & Helpers
   // =========================
 
+  /**
+   * Calcul des permissions EFFECTIVES :
+   * - Si customPermissions (normalisées) est non vide → on les prend telles quelles (override complet)
+   * - Sinon → on prend les permissions par défaut du rôle
+   * - On retire implicitement les permissions "doctor-only" si role === vendeuse (sécurité)
+   *
+   * NB: Toute la logique de matching se fait ensuite en EXACT via hasPerm/hasAll/hasAny
+   */
+  const effectivePermissions = useMemo(() => {
+    const base =
+      customPermissions && customPermissions.length > 0
+        ? normalizePermissions(customPermissions)
+        : normalizePermissions(getDefaultPermissionsForRole(role));
+
+    if ((role || "").toLowerCase() === "vendeuse") {
+      // On filtre toute permission doctor-only par sécurité
+      return base.filter((p) => !DOCTOR_ONLY_PERMISSIONS.includes(p));
+    }
+    return base;
+  }, [role, customPermissions]);
+
+  /** Vérification d'une permission (exact match) */
   const can = (permission) => {
     if (isDeleted || !user || !authReady) return false;
     if (isLocked && !isOwner) return false;
     if (!isActive && !isOwner) return false;
 
-    const ownerOnlyPermissions = [
+    // Permissions “owner-only” implicites (ex. gestion forte des comptes)
+    const ownerOnly = [
       "gerer_utilisateurs",
       "modifier_roles",
       "voir_gestion_utilisateurs",
       "promouvoir_utilisateur",
       "retrograder_utilisateur",
     ];
-
-    if (ownerOnlyPermissions.includes(permission)) {
-      return isOwner && role === "docteur" && !isDeleted && isActive && authReady;
+    if (ownerOnly.includes(permission)) {
+      return isOwner && (role || "").toLowerCase() === "docteur" && !isDeleted && isActive && authReady;
     }
 
+    // Le propriétaire a tous les droits applicatifs (sauf cas admin système non prévu ici)
     if (isOwner && user && !isDeleted) return true;
 
-    if (role === "vendeuse") {
-      if (DOCTOR_ONLY_PERMISSIONS.includes(permission)) {
-        return false;
-      }
-      
-      if (customPermissions.length > 0) {
-        return customPermissions.includes(permission);
-      } else {
-        const defaultPermissions = permissions.vendeuse || [];
-        return defaultPermissions.includes(permission);
-      }
+    // Bloque explicitement ce qui est doctor-only pour les vendeuses
+    if ((role || "").toLowerCase() === "vendeuse") {
+      if (DOCTOR_ONLY_PERMISSIONS.includes(permission)) return false;
     }
 
-    if (role === "docteur") {
-      if (customPermissions.length > 0) {
-        return customPermissions.includes(permission);
-      } else {
-        return (permissions.docteur || []).includes(permission);
-      }
-    }
-
-    return false;
+    // Match EXACT
+    return hasPerm(effectivePermissions, permission);
   };
 
-  const getUserPermissions = () => {
-    if (role === "docteur") {
-      if (customPermissions.length > 0) {
-        return customPermissions;
-      } else {
-        return permissions.docteur || [];
-      }
-    } else if (role === "vendeuse") {
-      if (customPermissions.length > 0) {
-        return customPermissions;
-      } else {
-        return permissions.vendeuse || [];
-      }
-    }
-    return [];
-  };
+  /** Expose la liste effective (utile pour affichage / debug) */
+  const getUserPermissions = () => [...effectivePermissions];
 
   const hasCustomPermissions = () => customPermissions.length > 0;
 
+  // Diff par rapport aux permissions par défaut du rôle (pour badges UI)
   const getExtraPermissions = () => {
     if (!role || customPermissions.length === 0) return [];
-    const defaultPermissions = permissions[role] || [];
-    return customPermissions.filter(p => !defaultPermissions.includes(p));
+    const defaults = normalizePermissions(getDefaultPermissionsForRole(role));
+    return normalizePermissions(customPermissions).filter((p) => !defaults.includes(p));
   };
 
   const getRemovedPermissions = () => {
     if (!role || customPermissions.length === 0) return [];
-    const defaultPermissions = permissions[role] || [];
-    return defaultPermissions.filter(p => !customPermissions.includes(p));
+    const defaults = normalizePermissions(getDefaultPermissionsForRole(role));
+    const customSet = new Set(normalizePermissions(customPermissions));
+    return defaults.filter((p) => !customSet.has(p));
   };
 
   const getPermissionChanges = () => {
@@ -483,18 +454,16 @@ export function UserRoleProvider({ children }) {
         hasChanges: false,
         added: [],
         removed: [],
-        total: getUserPermissions().length
+        total: getUserPermissions().length,
       };
     }
-
     const added = getExtraPermissions();
     const removed = getRemovedPermissions();
-
     return {
       hasChanges: added.length > 0 || removed.length > 0,
       added,
       removed,
-      total: getUserPermissions().length
+      total: getUserPermissions().length,
     };
   };
 
@@ -503,13 +472,14 @@ export function UserRoleProvider({ children }) {
     if (!targetUserId) return;
 
     try {
-      const userDoc = await getDoc(doc(db, 'users', targetUserId));
+      const userDoc = await getDoc(doc(db, "users", targetUserId));
       if (userDoc.exists()) {
         const userData = userDoc.data();
-        setCustomPermissions(userData.customPermissions || []);
+        // On normalise à l’entrée
+        setCustomPermissions(normalizePermissions(userData.customPermissions || []));
       }
     } catch (error) {
-      console.error('[UserRoleContext] Erreur rechargement permissions:', error);
+      console.error("[UserRoleContext] Erreur rechargement permissions:", error);
     }
   };
 
@@ -522,14 +492,10 @@ export function UserRoleProvider({ children }) {
   };
 
   const canManageUsers = () => {
-    return isOwner && user && !isDeleted && isActive && authReady && role === "docteur";
+    return isOwner && user && !isDeleted && isActive && authReady && (role || "").toLowerCase() === "docteur";
   };
-  const canChangeRoles = () => {
-    return isOwner && user && !isDeleted && isActive && authReady && role === "docteur";
-  };
-  const canDeleteSociete = () => {
-    return isOwner && user && !isDeleted && isActive && authReady && role === "docteur";
-  };
+  const canChangeRoles = () => canManageUsers();
+  const canDeleteSociete = () => canManageUsers();
   const canPromoteToOwner = () => false;
   const canDeleteOwner = () => false;
   const canLockOwner = () => false;
@@ -553,7 +519,7 @@ export function UserRoleProvider({ children }) {
     if (!canChangeRoles()) return false;
     if (targetUserIsOwner) return false;
     if (targetUserId === user?.uid) return false;
-    if (currentRole !== "vendeuse") return false;
+    if ((currentRole || "").toLowerCase() !== "vendeuse") return false;
     return true;
   };
 
@@ -561,7 +527,7 @@ export function UserRoleProvider({ children }) {
     if (!canChangeRoles()) return false;
     if (targetUserIsOwner) return false;
     if (targetUserId === user?.uid) return false;
-    if (currentRole !== "docteur") return false;
+    if ((currentRole || "").toLowerCase() !== "docteur") return false;
     return true;
   };
 
@@ -573,12 +539,12 @@ export function UserRoleProvider({ children }) {
     return null;
   };
 
-  const isAdmin = () => role === "docteur" && canAccessApp();
+  const isAdmin = () => (role || "").toLowerCase() === "docteur" && canAccessApp();
   const isSuperAdmin = () => isOwner && canAccessApp();
 
   const getUserStats = () => {
     const changes = getPermissionChanges();
-    
+
     return {
       isConnected: !!user && authReady,
       isActive,
@@ -623,28 +589,28 @@ export function UserRoleProvider({ children }) {
     } else if (!isActive && !isOwner) {
       messages.push({ type: "warning", text: "Votre compte est désactivé" });
     }
-    
+
     if (hasCustomPermissions()) {
       const changes = getPermissionChanges();
-      
+
       if (changes.added.length > 0 && changes.removed.length > 0) {
-        messages.push({ 
-          type: "info", 
-          text: `Permissions personnalisées : +${changes.added.length} ajoutées, -${changes.removed.length} retirées` 
+        messages.push({
+          type: "info",
+          text: `Permissions personnalisées : +${changes.added.length} ajoutées, -${changes.removed.length} retirées`,
         });
       } else if (changes.added.length > 0) {
-        messages.push({ 
-          type: "info", 
-          text: `Vous avez ${changes.added.length} permission(s) supplémentaire(s) accordée(s)` 
+        messages.push({
+          type: "info",
+          text: `Vous avez ${changes.added.length} permission(s) supplémentaire(s) accordée(s)`,
         });
       } else if (changes.removed.length > 0) {
-        messages.push({ 
-          type: "warning", 
-          text: `${changes.removed.length} permission(s) de base ont été retirées` 
+        messages.push({
+          type: "warning",
+          text: `${changes.removed.length} permission(s) de base ont été retirées`,
         });
       }
     }
-    
+
     if (adminPopup) messages.push({ type: "info", text: adminPopup });
     if (paymentWarning) messages.push({ type: "warning", text: paymentWarning });
     return messages;
@@ -652,13 +618,13 @@ export function UserRoleProvider({ children }) {
 
   const getUserRoleDisplay = () => {
     if (!role) return "Non défini";
-    
-    let baseDisplay = role === "docteur" ? "Docteur" : "Vendeuse";
+
+    let baseDisplay = (role || "").toLowerCase() === "docteur" ? "Docteur" : "Vendeuse";
     if (isOwner) baseDisplay += " (Propriétaire)";
-    
+
     if (hasCustomPermissions()) {
       const changes = getPermissionChanges();
-      
+
       if (changes.added.length > 0 && changes.removed.length > 0) {
         baseDisplay += ` (±${changes.added.length}/${changes.removed.length})`;
       } else if (changes.added.length > 0) {
@@ -667,14 +633,14 @@ export function UserRoleProvider({ children }) {
         baseDisplay += ` (-${changes.removed.length})`;
       }
     }
-    
+
     return baseDisplay;
   };
 
   const getOwnershipStatus = () => {
     if (!user) return "Non connecté";
     if (isOwner) return "Propriétaire";
-    if (role === "docteur") return "Docteur";
+    if ((role || "").toLowerCase() === "docteur") return "Docteur";
     return "Utilisateur standard";
   };
 
@@ -691,6 +657,8 @@ export function UserRoleProvider({ children }) {
     isOwner,
     adminPopup,
     paymentWarning,
+
+    // Permissions
     customPermissions,
     hasCustomPermissions,
     getExtraPermissions,
@@ -698,12 +666,19 @@ export function UserRoleProvider({ children }) {
     getPermissionChanges,
     getUserPermissions,
     refreshCustomPermissions,
-    can,
+    can, // ← matching EXACT (utilise effectivePermissions)
     canAccessApp,
+
+    // Infos & stats
     getBlockMessage,
     isAdmin,
     isSuperAdmin,
     getUserStats,
+    getPermissionMessages,
+    getUserRoleDisplay,
+    getOwnershipStatus,
+
+    // Gestion
     canManageUsers,
     canChangeRoles,
     canDeleteSociete,
@@ -714,9 +689,6 @@ export function UserRoleProvider({ children }) {
     canChangeUserRole,
     canPromoteToDoctor,
     canDemoteToVendeuse,
-    getPermissionMessages,
-    getUserRoleDisplay,
-    getOwnershipStatus,
   };
 
   return (

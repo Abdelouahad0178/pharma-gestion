@@ -1,4 +1,6 @@
-// src/components/users/UsersManagement.js - Version responsive avec gestion des permissions personnalisées
+// src/components/users/UsersManagement.js
+// Version responsive + permissions GRANULAIRES (migration auto des anciennes permissions globales)
+
 import React, { useState, useEffect } from "react";
 import { db } from "../../firebase/config";
 import { useUserRole } from "../../contexts/UserRoleContext";
@@ -17,10 +19,95 @@ import CustomPermissionsManager from "../CustomPermissionsManager";
 import UserPermissionsDisplay from "../UserPermissionsDisplay";
 import permissions, { PERMISSION_LABELS } from "../../utils/permissions";
 
+/* =========================================================
+ * 1) Définition des groupes → permissions fines (mapping)
+ *    On NE stocke JAMAIS la clé "globale" (ex: 'achats')
+ *    On ne stocke QUE les clés fines : voir_/creer_/modifier_
+ * ========================================================= */
+const PERMISSION_GROUPS = {
+  achats: ["voir_achats", "creer_achats", "modifier_achats"],
+  // (Optionnel) Si tu veux déjà préparer d'autres groupes, dé-commente et adapte :
+  // ventes: ["voir_ventes", "creer_ventes", "modifier_ventes"],
+  // stock: ["voir_stock", "creer_stock", "modifier_stock"],
+  // clients: ["voir_clients", "creer_clients", "modifier_clients"],
+};
+
+/* Legacy keys qui doivent être converties vers des clés fines */
+const LEGACY_TO_GROUP = {
+  "achat": "achats",
+  "achats": "achats",
+  "ACHAT": "achats",
+  "ACHATS": "achats",
+  "achats:*": "achats",
+  "achat:*": "achats",
+};
+
+/* =========================================================
+ * 2) Helpers de normalisation / migration
+ * ========================================================= */
+function uniq(arr) {
+  return Array.from(new Set(arr));
+}
+
+/** 
+ * Normalise un tableau de permissions custom :
+ * - Remplace toute permission "globale" (ex: 'achats', 'achats:*') par ses permissions fines.
+ * - Supprime les doublons.
+ * - Enlève les clés globales pour ne garder que les fines.
+ * Retourne { normalized, changed }.
+ */
+function normalizeCustomPermissions(custom) {
+  const input = Array.isArray(custom) ? custom : [];
+  let changed = false;
+  let output = [...input];
+
+  // 1) Étendre les anciennes clés "globale" vers les fines
+  input.forEach((key) => {
+    const maybeGroup =
+      LEGACY_TO_GROUP[key] || // cas exact (achats, achats:*, etc.)
+      LEGACY_TO_GROUP[key?.toLowerCase?.()] || null;
+
+    if (maybeGroup && PERMISSION_GROUPS[maybeGroup]) {
+      // Injecter toutes les permissions fines de ce groupe
+      output = output.concat(PERMISSION_GROUPS[maybeGroup]);
+      changed = true;
+    }
+  });
+
+  // 2) Supprimer toutes les clés "globales" potentielles
+  const globalKeys = new Set([
+    ...Object.keys(LEGACY_TO_GROUP),
+    ...Object.keys(LEGACY_TO_GROUP).map((k) => k.toLowerCase())
+  ]);
+  output = output.filter((k) => !globalKeys.has(k) && !globalKeys.has(k?.toLowerCase?.()));
+
+  // 3) Dédupliquer
+  const deduped = uniq(output);
+
+  // 4) Rien d'autre à normaliser ici (tu peux ajouter d'autres règles si besoin)
+  if (deduped.length !== input.length || changed || deduped.some((k, i) => k !== input[i])) {
+    changed = true;
+  }
+
+  return { normalized: deduped, changed };
+}
+
+/**
+ * Retourne la liste de permissions de base pour un rôle (définies dans utils/permissions)
+ * On suppose que `permissions[role]` contient UNIQUEMENT des clés fines (bonne pratique).
+ */
+function getDefaultPermissionsForRole(role) {
+  const r = (role || "").toLowerCase();
+  return Array.isArray(permissions[r]) ? permissions[r] : [];
+}
+
+/* =========================================================
+ * 3) Composant principal
+ * ========================================================= */
 export default function UsersManagement() {
   const { user, societeId, role, loading, isOwner, canManageUsers, refreshCustomPermissions } = useUserRole();
 
-  // États existants
+  // États
   const [utilisateurs, setUtilisateurs] = useState([]);
   const [invitations, setInvitations] = useState([]);
   const [showInviteForm, setShowInviteForm] = useState(false);
@@ -32,7 +119,7 @@ export default function UsersManagement() {
   const [showInviteCode, setShowInviteCode] = useState(false);
   const [updatingUser, setUpdatingUser] = useState("");
 
-  // NOUVEAUX ÉTATS pour les permissions personnalisées
+  // Permissions personnalisées (dialogs)
   const [permissionDialogOpen, setPermissionDialogOpen] = useState(false);
   const [viewPermissionsOpen, setViewPermissionsOpen] = useState(false);
   const [selectedUser, setSelectedUser] = useState(null);
@@ -56,18 +143,17 @@ export default function UsersManagement() {
     return () => window.removeEventListener("resize", handleResize);
   }, []);
 
-  // Permissions
+  // Accès
   const hasAccess =
     isOwner || ["pharmacien", "admin", "ADMIN", "docteur"].includes((role || "").toLowerCase());
 
-  // NOUVELLE FONCTION : Obtenir les permissions supplémentaires d'un utilisateur
+  // ============== Utils d'affichage ==============
   const getExtraPermissionsCount = (userData) => {
-    if (userData.role !== 'vendeuse' || !userData.customPermissions) return 0;
-    const defaultPermissions = permissions.vendeuse || [];
-    return userData.customPermissions.filter(p => !defaultPermissions.includes(p)).length;
+    const defaults = getDefaultPermissionsForRole(userData.role);
+    const custom = Array.isArray(userData.customPermissions) ? userData.customPermissions : [];
+    return custom.filter((p) => !defaults.includes(p)).length;
   };
 
-  // NOUVELLES FONCTIONS pour les dialogs permissions
   const handleOpenPermissions = (userData) => {
     setSelectedUser(userData);
     setPermissionDialogOpen(true);
@@ -88,18 +174,30 @@ export default function UsersManagement() {
     setSelectedUser(null);
   };
 
+  // Après mise à jour (depuis CustomPermissionsManager) : on rafraîchit + re-normalise
   const handlePermissionsUpdated = async () => {
-    // Rafraîchir les permissions dans le contexte si c'est l'utilisateur actuel
     await refreshCustomPermissions();
-    
-    // Recharger la liste des utilisateurs pour mettre à jour les infos de permissions
+
     if (user && societeId && hasAccess) {
       try {
         const qUsers = query(collection(db, "users"), where("societeId", "==", societeId));
         const snapshot = await getDocs(qUsers);
         const usersList = [];
+
+        // On re-normalise au passage si des anciennes clés existent
+        const updates = [];
         snapshot.forEach((d) => {
           const userData = d.data();
+          const rawCustom = userData.customPermissions || [];
+          const { normalized, changed } = normalizeCustomPermissions(rawCustom);
+
+          if (changed) {
+            updates.push(
+              updateDoc(doc(db, "users", d.id), { customPermissions: normalized, modifieLe: Timestamp.now() })
+                .catch((e) => console.error("Migration permissions (save) échouée:", e))
+            );
+          }
+
           usersList.push({
             id: d.id,
             email: userData.email,
@@ -107,20 +205,24 @@ export default function UsersManagement() {
             nom: userData.nom || "",
             prenom: userData.prenom || "",
             actif: userData.actif !== false,
-            customPermissions: userData.customPermissions || [] // NOUVEAU
+            customPermissions: normalized
           });
         });
+
+        if (updates.length) await Promise.allSettled(updates);
         setUtilisateurs(usersList);
       } catch (error) {
         console.error("Erreur rechargement utilisateurs:", error);
       }
     }
-    
+
     setNotification({ message: "Permissions mises à jour avec succès", type: "success" });
     setTimeout(() => setNotification(null), 3000);
   };
 
-  // Chargement initial MODIFIÉ pour inclure customPermissions
+  /* ===========================
+   * Chargement initial + MIGRATION
+   * ===========================*/
   useEffect(() => {
     if (!user || !societeId || !hasAccess) return;
 
@@ -129,8 +231,20 @@ export default function UsersManagement() {
         const qUsers = query(collection(db, "users"), where("societeId", "==", societeId));
         const snapshot = await getDocs(qUsers);
         const usersList = [];
+        const updates = [];
+
         snapshot.forEach((d) => {
           const userData = d.data();
+          // Normalisation / migration des permissions custom pour CHAQUE utilisateur
+          const rawCustom = userData.customPermissions || [];
+          const { normalized, changed } = normalizeCustomPermissions(rawCustom);
+          if (changed) {
+            updates.push(
+              updateDoc(doc(db, "users", d.id), { customPermissions: normalized, modifieLe: Timestamp.now() })
+                .catch((e) => console.error("Migration permissions (save) échouée:", e))
+            );
+          }
+
           usersList.push({
             id: d.id,
             email: userData.email,
@@ -138,9 +252,11 @@ export default function UsersManagement() {
             nom: userData.nom || "",
             prenom: userData.prenom || "",
             actif: userData.actif !== false,
-            customPermissions: userData.customPermissions || [] // NOUVEAU
+            customPermissions: normalized
           });
         });
+
+        if (updates.length) await Promise.allSettled(updates);
         setUtilisateurs(usersList);
       } catch (error) {
         console.error("Erreur chargement utilisateurs:", error);
@@ -176,7 +292,7 @@ export default function UsersManagement() {
     loadInvitations();
   }, [user?.uid, societeId, hasAccess]);
 
-  // Fonctions existantes inchangées...
+  // ====== Invitations (inchangé) ======
   const sendInvitation = async (e) => {
     e.preventDefault();
     if (!inviteEmail.trim()) {
@@ -277,7 +393,7 @@ export default function UsersManagement() {
     return ["pharmacien", "docteur", "admin"].includes(role?.toLowerCase()) || isOwner;
   };
 
-  // Styles MODIFIÉS pour inclure les nouveaux boutons
+  // ========== Styles (inchangés sauf notes UI) ==========
   const getResponsiveStyles = () => {
     const { isMobile, isTablet, isDesktop } = screenSize;
 
@@ -374,7 +490,6 @@ export default function UsersManagement() {
         color: "#6b7280",
         wordBreak: "break-word"
       },
-      // NOUVEAU : Zone pour les informations de permissions
       permissionsInfo: {
         display: "flex",
         flexWrap: "wrap",
@@ -431,7 +546,6 @@ export default function UsersManagement() {
         whiteSpace: "nowrap",
         transition: "all 0.3s ease"
       },
-      // NOUVEAUX STYLES pour les boutons permissions
       permissionButton: {
         border: "none",
         borderRadius: isMobile ? "6px" : "8px",
@@ -508,7 +622,7 @@ export default function UsersManagement() {
 
   const styles = getResponsiveStyles();
 
-  // Guards inchangés...
+  // ====== Guards ======
   if (loading) {
     return (
       <div style={styles.container}>
@@ -555,7 +669,7 @@ export default function UsersManagement() {
             </div>
           )}
 
-          {/* Section Utilisateurs MODIFIÉE */}
+          {/* Section Utilisateurs */}
           <div style={{ marginBottom: "40px" }}>
             <div style={styles.sectionHeader}>
               <h2 style={styles.sectionTitle}>
@@ -578,7 +692,12 @@ export default function UsersManagement() {
             <div style={styles.usersContainer}>
               {utilisateurs.map((u) => {
                 const extraCount = getExtraPermissionsCount(u);
-                
+
+                // Pour l'affichage, on montre le détail si l'utilisateur a des permissions fines d'achats
+                const achatsFins = (u.customPermissions || []).filter((p) =>
+                  ["voir_achats", "creer_achats", "modifier_achats"].includes(p)
+                );
+
                 return (
                   <div key={u.id} style={styles.userCard}>
                     <div style={styles.userInfo}>
@@ -591,29 +710,25 @@ export default function UsersManagement() {
                         )}
                       </div>
                       <div style={styles.userDetails}>
-                        {u.email} • {u.role === 'docteur' ? 'Pharmacien' : 'Vendeuse'}
+                        {u.email} • {u.role === 'docteur' ? 'Pharmacien' : (u.role || 'Vendeuse')}
                       </div>
 
-                      {/* NOUVELLE SECTION : Informations sur les permissions */}
-                      {u.role === 'vendeuse' && (
-                        <div style={styles.permissionsInfo}>
-                          <span style={styles.permissionChip}>
-                            {permissions.vendeuse?.length || 0} permissions de base
+                      {/* Infos permissions */}
+                      <div style={styles.permissionsInfo}>
+                        <span style={styles.permissionChip}>
+                          {getDefaultPermissionsForRole(u.role).length} permissions de base
+                        </span>
+                        {extraCount > 0 && (
+                          <span style={styles.extraPermissionChip}>
+                            +{extraCount} permissions supplémentaires ✨
                           </span>
-                          {extraCount > 0 && (
-                            <span style={styles.extraPermissionChip}>
-                              +{extraCount} permissions supplémentaires ✨
-                            </span>
-                          )}
-                        </div>
-                      )}
-                      {u.role === 'docteur' && (
-                        <div style={styles.permissionsInfo}>
+                        )}
+                        {achatsFins.length > 0 && (
                           <span style={styles.permissionChip}>
-                            Accès administrateur complet
+                            Achats: {achatsFins.map(p => p.replace("_achats","").toUpperCase()).join(" / ")}
                           </span>
-                        </div>
-                      )}
+                        )}
+                      </div>
                     </div>
 
                     <div style={styles.userActions}>
@@ -628,7 +743,7 @@ export default function UsersManagement() {
                       </div>
 
                       <div style={styles.actionButtons}>
-                        {/* NOUVEAUX BOUTONS : Gestion des permissions */}
+                        {/* Voir permissions */}
                         <button
                           style={{
                             ...styles.permissionButton,
@@ -640,7 +755,8 @@ export default function UsersManagement() {
                           👁️ {screenSize.isMobile ? "" : "Voir"}
                         </button>
 
-                        {u.role === 'vendeuse' && canManageUsers() && (
+                        {/* Gérer permissions personnalisées (vendeuse) */}
+                        {u.role?.toLowerCase() === 'vendeuse' && canManageUsers() && (
                           <button
                             style={{
                               ...styles.permissionButton,
@@ -653,7 +769,7 @@ export default function UsersManagement() {
                           </button>
                         )}
 
-                        {/* Bouton existant de verrouillage */}
+                        {/* Verrouiller / Déverrouiller */}
                         {canManageUser(u) && (
                           <button
                             style={{
@@ -684,7 +800,7 @@ export default function UsersManagement() {
             </div>
           </div>
 
-          {/* Section Invitations — inchangée */}
+          {/* Section Invitations */}
           {showInvitationsSection && (
             <div>
               <h2 style={styles.sectionTitle}>
@@ -722,8 +838,7 @@ export default function UsersManagement() {
         </div>
       </div>
 
-      {/* Modals existants inchangés... */}
-      {/* Modal Invitation */}
+      {/* Modals : Invitation */}
       {showInviteForm && (
         <div style={styles.modalOverlay}>
           <div style={styles.modalContent}>
@@ -788,7 +903,7 @@ export default function UsersManagement() {
         </div>
       )}
 
-      {/* Modal Code Invitation - inchangé */}
+      {/* Modal Code Invitation */}
       {showInviteCode && invitationCode && (
         <div style={styles.modalOverlay}>
           <div style={styles.modalContent}>
@@ -881,20 +996,19 @@ export default function UsersManagement() {
         </div>
       )}
 
-      {/* NOUVEAUX MODALS : Gestion des permissions */}
-      {/* Dialog pour gérer les permissions */}
+      {/* Dialog Permissions (éditer) */}
       <CustomPermissionsManager
         open={permissionDialogOpen}
         onClose={handleClosePermissions}
         userId={selectedUser?.id}
-        userName={selectedUser?.prenom && selectedUser?.nom 
-          ? `${selectedUser.prenom} ${selectedUser.nom}` 
+        userName={selectedUser?.prenom && selectedUser?.nom
+          ? `${selectedUser.prenom} ${selectedUser.nom}`
           : selectedUser?.email}
         societeId={societeId}
         onPermissionsUpdated={handlePermissionsUpdated}
       />
 
-      {/* Dialog pour voir les permissions */}
+      {/* Dialog Voir permissions */}
       {viewPermissionsOpen && selectedUser && (
         <div style={styles.modalOverlay}>
           <div style={{
@@ -902,19 +1016,19 @@ export default function UsersManagement() {
             maxWidth: screenSize.isMobile ? "100%" : "600px",
             maxHeight: "90vh"
           }}>
-            <UserPermissionsDisplay 
+            <UserPermissionsDisplay
               user={{
                 ...selectedUser,
-                displayName: selectedUser.prenom && selectedUser.nom 
-                  ? `${selectedUser.prenom} ${selectedUser.nom}` 
+                displayName: selectedUser.prenom && selectedUser.nom
+                  ? `${selectedUser.prenom} ${selectedUser.nom}`
                   : selectedUser.email
               }}
               variant="dialog"
               showDetails={true}
             />
-            <div style={{ 
-              display: 'flex', 
-              justifyContent: 'flex-end', 
+            <div style={{
+              display: 'flex',
+              justifyContent: 'flex-end',
               marginTop: '20px',
               paddingTop: '15px',
               borderTop: '1px solid #e2e8f0'
@@ -930,7 +1044,7 @@ export default function UsersManagement() {
         </div>
       )}
 
-      {/* Styles additionnels - inchangés */}
+      {/* Styles supplémentaires */}
       <style>
         {`
           .user-actions-scroll::-webkit-scrollbar { display: none; }

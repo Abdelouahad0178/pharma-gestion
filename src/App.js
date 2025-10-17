@@ -1,4 +1,4 @@
-// src/App.js - Synchro ventes -> stock + Clients + Analytics + Legal (complet)
+// src/App.js - Synchro ventes -> stock + Clients + Analytics + Legal + BackToTop (complet)
 
 import React, { useState, useEffect, useRef } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate, useLocation } from 'react-router-dom';
@@ -34,6 +34,9 @@ import LegalDocuments from './components/legal/LegalDocuments';
 
 // 🆕 Page Abonnement (PayPal)
 import Abonnement from './pages/Abonnement';
+
+// 🢁 Bouton flottant “Retour en haut”
+import BackToTop from './components/common/BackToTop';
 
 // Contexte & styles
 import { UserRoleProvider, useUserRole } from './contexts/UserRoleContext';
@@ -315,16 +318,16 @@ function AppWrapper() {
     '/login',
     '/register',
     '/accept-invitation',
-    '/legal' // 🆕 Pas de navbar sur la page légale
+    '/legal' // Pas de navbar sur la page légale
   ].includes(location.pathname) || location.pathname.startsWith('/admin-');
 
   return (
     <>
       <RealtimeSyncBoot />
       {!hideNavbar && <Navbar />}
-      <div style={{ 
-        minHeight: '100vh', 
-        background: hideNavbar && (location.pathname === '/' || location.pathname === '/legal') ? 'transparent' : '#f6f8fa' 
+      <div style={{
+        minHeight: '100vh',
+        background: hideNavbar && (location.pathname === '/' || location.pathname === '/legal') ? 'transparent' : '#f6f8fa'
       }}>
         <Routes>
           <Route path="/" element={<Homepage onLogin={() => (window.location.href = '/login')} onRegister={() => (window.location.href = '/register')} />} />
@@ -332,7 +335,7 @@ function AppWrapper() {
           <Route path="/register" element={<Register />} />
           <Route path="/accept-invitation" element={<AcceptInvitation />} />
 
-          {/* 🆕 Documents Légaux - accessible SANS connexion */}
+          {/* Documents Légaux - accessible SANS connexion */}
           <Route path="/legal" element={<LegalDocuments />} />
 
           <Route path="/dashboard" element={<Protected permission="voir_dashboard"><Dashboard /></Protected>} />
@@ -344,17 +347,17 @@ function AppWrapper() {
           <Route path="/commandes/nouveau" element={<Protected permission="voir_ventes"><NouvelleCommande /></Protected>} />
           <Route path="/devis-factures" element={<Protected permission="voir_ventes"><DevisFactures /></Protected>} />
           <Route path="/paiements" element={<Protected permission="voir_ventes"><Paiements /></Protected>} />
-          
-          {/* 🆕 Analytics - Statistiques */}
+
+          {/* Analytics - Statistiques */}
           <Route path="/analytics" element={<Protected permission="voir_dashboard"><Analytics /></Protected>} />
-          
+
           <Route path="/parametres" element={<Protected permission="parametres"><Parametres /></Protected>} />
           <Route path="/backup" element={<Protected permission="voir_dashboard"><BackupPage /></Protected>} />
           <Route path="/import" element={<Protected permission="voir_dashboard"><div className="fullscreen-table-wrap"><div className="fullscreen-table-title">Import de Sauvegarde</div><ImportBackup /></div></Protected>} />
           <Route path="/gestion-utilisateurs" element={<Protected permission="gerer_utilisateurs"><GestionRolesPage /></Protected>} />
           <Route path="/users" element={<Protected permission="parametres"><UsersPage /></Protected>} />
-          
-          {/* 🆕 Abonnement */}
+
+          {/* Abonnement */}
           <Route path="/abonnement" element={<Protected permission="voir_dashboard"><Abonnement /></Protected>} />
 
           <Route path="/admin-init-owner" element={<InitOwner />} />
@@ -362,6 +365,9 @@ function AppWrapper() {
 
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
+
+        {/* Bouton flottant retour en haut — visible sur toutes les pages */}
+        <BackToTop threshold={400} />
       </div>
     </>
   );

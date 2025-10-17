@@ -1,0 +1,83 @@
+// src/components/security/AntiCopyGuard.js
+import { useEffect } from "react";
+
+/**
+ * AntiCopyGuard
+ * Bloque:
+ *  - clic droit (contextmenu)
+ *  - sélection (hors inputs/textarea/contenteditable)
+ *  - copier/couper/coller/drag
+ *  - raccourcis: Ctrl/Cmd + C, X, S, U, P, I, J, K (devtools/print/view-source), F12
+ *
+ * ⚠️ Ce n'est pas inviolable (un utilisateur avancé peut contourner),
+ * mais ça stoppera la plupart des tentatives "simples".
+ */
+export default function AntiCopyGuard() {
+  useEffect(() => {
+    const isEditable = (el) => {
+      if (!el) return false;
+      const tag = el.tagName?.toLowerCase();
+      const editableTag = tag === "input" || tag === "textarea";
+      const contentEditable = el.getAttribute?.("contenteditable") === "true";
+      return editableTag || contentEditable;
+    };
+
+    const prevent = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      return false;
+    };
+
+    // 1) Clic droit global (hors zones éditables)
+    const onContextMenu = (e) => {
+      if (!isEditable(e.target)) prevent(e);
+    };
+
+    // 2) Sélection de texte (hors zones éditables)
+    const onSelectStart = (e) => {
+      if (!isEditable(e.target)) prevent(e);
+    };
+
+    // 3) Copier / Couper / Coller / Glisser
+    const onCopy = prevent;
+    const onCut = prevent;
+    const onPaste = prevent;
+    const onDragStart = prevent;
+
+    // 4) Raccourcis clavier
+    const onKeyDown = (e) => {
+      // F12 / Ctrl+Shift+I/J/K -> outils dev ; Ctrl/Cmd+P impression, Ctrl/Cmd+U view-source
+      const key = e.key?.toLowerCase();
+      const ctrlOrCmd = e.ctrlKey || e.metaKey;
+
+      const blockedCombos =
+        (ctrlOrCmd && ["c", "x", "s", "u", "p", "i", "j", "k"].includes(key)) ||
+        (e.key === "F12") ||
+        (e.ctrlKey && e.shiftKey && ["i", "j", "c"].includes(key));
+
+      if (blockedCombos && !isEditable(e.target)) prevent(e);
+    };
+
+    // Attache
+    document.addEventListener("contextmenu", onContextMenu, true);
+    document.addEventListener("selectstart", onSelectStart, true);
+    document.addEventListener("copy", onCopy, true);
+    document.addEventListener("cut", onCut, true);
+    document.addEventListener("paste", onPaste, true);
+    document.addEventListener("dragstart", onDragStart, true);
+    document.addEventListener("keydown", onKeyDown, true);
+
+    // Nettoyage
+    return () => {
+      document.removeEventListener("contextmenu", onContextMenu, true);
+      document.removeEventListener("selectstart", onSelectStart, true);
+      document.removeEventListener("copy", onCopy, true);
+      document.removeEventListener("cut", onCut, true);
+      document.removeEventListener("paste", onPaste, true);
+      document.removeEventListener("dragstart", onDragStart, true);
+      document.removeEventListener("keydown", onKeyDown, true);
+    };
+  }, []);
+
+  return null;
+}
