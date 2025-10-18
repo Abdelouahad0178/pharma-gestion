@@ -1,4 +1,6 @@
-// src/contexts/UserRoleContext.js - VERSION CORRIGÉE (matching strict des permissions)
+// src/contexts/UserRoleContext.js - VERSION LOGIQUE INVERSÉE
+// La vendeuse a TOUS les droits par défaut, on RETIRE ce qu'on ne veut pas
+
 import React, {
   createContext,
   useContext,
@@ -11,14 +13,10 @@ import { getAuth, onAuthStateChanged } from "firebase/auth";
 import { doc, getDoc, onSnapshot } from "firebase/firestore";
 import { db, disableFirestoreNetwork, enableFirestoreNetwork } from "../firebase/config";
 
-// ⚠️ On importe maintenant les helpers stricts
 import permissions, {
   DOCTOR_ONLY_PERMISSIONS,
   normalizePermissions,
   getDefaultPermissionsForRole,
-  hasPerm,
-  hasAll,
-  hasAny,
 } from "../utils/permissions";
 
 const UserRoleContext = createContext();
@@ -50,8 +48,8 @@ export function UserRoleProvider({ children }) {
   const [adminPopup, setAdminPopup] = useState(null);
   const [paymentWarning, setPaymentWarning] = useState(null);
 
-  // --- Permissions personnalisées (telles que stockées en DB) ---
-  const [customPermissions, setCustomPermissions] = useState([]);
+  // ✅ NOUVELLE LOGIQUE : Permissions RETIRÉES au lieu de permissions ajoutées
+  const [removedPermissions, setRemovedPermissions] = useState([]);
 
   // ✅ Refs pour garantir 1 seul listener actif
   const authUnsubRef = useRef(null);
@@ -119,7 +117,7 @@ export function UserRoleProvider({ children }) {
         setAdminPopup(null);
         setPaymentWarning(null);
         setSocieteName(null);
-        setCustomPermissions([]);
+        setRemovedPermissions([]);
         setLoading(false);
         currentUserIdRef.current = null;
         currentSocieteIdRef.current = null;
@@ -160,9 +158,9 @@ export function UserRoleProvider({ children }) {
               setAdminPopup(data.adminPopup || null);
               setPaymentWarning(data.paymentWarning || null);
 
-              // ⚠️ Important : on NORMALISE ce qui vient de Firestore
-              const normalizedCustom = normalizePermissions(data.customPermissions || []);
-              setCustomPermissions(normalizedCustom);
+              // ✅ LOGIQUE INVERSÉE : On charge les permissions RETIRÉES
+              const normalizedRemoved = normalizePermissions(data.removedPermissions || []);
+              setRemovedPermissions(normalizedRemoved);
 
               setUser({
                 ...firebaseUser,
@@ -175,7 +173,7 @@ export function UserRoleProvider({ children }) {
                 active: data.active !== false && data.isActive !== false,
                 adminPopup: data.adminPopup || null,
                 paymentWarning: data.paymentWarning || null,
-                customPermissions: normalizedCustom,
+                removedPermissions: normalizedRemoved,
               });
             } else {
               // Document utilisateur absent → valeurs par défaut
@@ -188,7 +186,7 @@ export function UserRoleProvider({ children }) {
                 active: true,
                 adminPopup: null,
                 paymentWarning: null,
-                customPermissions: [],
+                removedPermissions: [],
               };
 
               setRole(defaultData.role);
@@ -199,7 +197,7 @@ export function UserRoleProvider({ children }) {
               setIsActive(defaultData.active);
               setAdminPopup(defaultData.adminPopup);
               setPaymentWarning(defaultData.paymentWarning);
-              setCustomPermissions([]);
+              setRemovedPermissions([]);
 
               setUser({
                 ...firebaseUser,
@@ -210,7 +208,7 @@ export function UserRoleProvider({ children }) {
             setLoading(false);
           },
           async (error) => {
-            // Gestion d’erreur : fallback permissif minimal
+            // Gestion d'erreur : fallback permissif minimal
             if (error?.code === "permission-denied") {
               setRole("vendeuse");
               setSocieteId(null);
@@ -220,7 +218,7 @@ export function UserRoleProvider({ children }) {
               setIsActive(false);
               setAdminPopup("Erreur de permissions - contactez l'administrateur");
               setPaymentWarning(null);
-              setCustomPermissions([]);
+              setRemovedPermissions([]);
 
               setUser({
                 ...firebaseUser,
@@ -232,7 +230,7 @@ export function UserRoleProvider({ children }) {
                 active: false,
                 adminPopup: "Erreur de permissions - contactez l'administrateur",
                 paymentWarning: null,
-                customPermissions: [],
+                removedPermissions: [],
               });
             } else {
               setRole("vendeuse");
@@ -243,7 +241,7 @@ export function UserRoleProvider({ children }) {
               setIsActive(true);
               setAdminPopup(null);
               setPaymentWarning(null);
-              setCustomPermissions([]);
+              setRemovedPermissions([]);
 
               setUser({
                 ...firebaseUser,
@@ -255,7 +253,7 @@ export function UserRoleProvider({ children }) {
                 active: true,
                 adminPopup: null,
                 paymentWarning: null,
-                customPermissions: [],
+                removedPermissions: [],
               });
             }
 
@@ -264,7 +262,7 @@ export function UserRoleProvider({ children }) {
           }
         );
       } catch (e) {
-        // Erreur d’attachement → défauts
+        // Erreur d'attachement → défauts
         setRole("vendeuse");
         setSocieteId(null);
         setIsLocked(false);
@@ -273,7 +271,7 @@ export function UserRoleProvider({ children }) {
         setIsActive(true);
         setAdminPopup(null);
         setPaymentWarning(null);
-        setCustomPermissions([]);
+        setRemovedPermissions([]);
 
         setUser({
           ...firebaseUser,
@@ -285,7 +283,7 @@ export function UserRoleProvider({ children }) {
           active: true,
           adminPopup: null,
           paymentWarning: null,
-          customPermissions: [],
+          removedPermissions: [],
         });
 
         setLoading(false);
@@ -375,37 +373,47 @@ export function UserRoleProvider({ children }) {
   }, [user?.uid, societeId, isDeleted]);
 
   // =========================
-  // Permissions & Helpers
+  // ✅ NOUVELLE LOGIQUE : Permissions avec système inversé
   // =========================
 
   /**
-   * Calcul des permissions EFFECTIVES :
-   * - Si customPermissions (normalisées) est non vide → on les prend telles quelles (override complet)
-   * - Sinon → on prend les permissions par défaut du rôle
-   * - On retire implicitement les permissions "doctor-only" si role === vendeuse (sécurité)
-   *
-   * NB: Toute la logique de matching se fait ensuite en EXACT via hasPerm/hasAll/hasAny
+   * Calcul des permissions EFFECTIVES avec logique inversée :
+   * - Si pharmacien/propriétaire → toutes les permissions
+   * - Si vendeuse :
+   *   - SANS removedPermissions → toutes les permissions (sauf DOCTOR_ONLY)
+   *   - AVEC removedPermissions → toutes les permissions SAUF celles retirées
    */
   const effectivePermissions = useMemo(() => {
-    const base =
-      customPermissions && customPermissions.length > 0
-        ? normalizePermissions(customPermissions)
-        : normalizePermissions(getDefaultPermissionsForRole(role));
-
-    if ((role || "").toLowerCase() === "vendeuse") {
-      // On filtre toute permission doctor-only par sécurité
-      return base.filter((p) => !DOCTOR_ONLY_PERMISSIONS.includes(p));
+    // Pharmacien/Propriétaire = accès complet
+    if (isOwner || (role || "").toLowerCase() === "docteur") {
+      return permissions.docteur || [];
     }
-    return base;
-  }, [role, customPermissions]);
 
-  /** Vérification d'une permission (exact match) */
+    // Vendeuse : toutes les permissions SAUF doctor-only
+    const allAvailablePermissions = (permissions.docteur || []).filter(p => 
+      !DOCTOR_ONLY_PERMISSIONS.includes(p)
+    );
+
+    // Si aucune restriction, accès complet
+    if (!removedPermissions || removedPermissions.length === 0) {
+      return allAvailablePermissions;
+    }
+
+    // Retirer les permissions interdites
+    return allAvailablePermissions.filter(p => 
+      !removedPermissions.includes(p)
+    );
+  }, [role, isOwner, removedPermissions]);
+
+  /**
+   * ✅ Vérification d'une permission (logique inversée)
+   */
   const can = (permission) => {
     if (isDeleted || !user || !authReady) return false;
     if (isLocked && !isOwner) return false;
     if (!isActive && !isOwner) return false;
 
-    // Permissions “owner-only” implicites (ex. gestion forte des comptes)
+    // Permissions "owner-only" implicites
     const ownerOnly = [
       "gerer_utilisateurs",
       "modifier_roles",
@@ -417,57 +425,87 @@ export function UserRoleProvider({ children }) {
       return isOwner && (role || "").toLowerCase() === "docteur" && !isDeleted && isActive && authReady;
     }
 
-    // Le propriétaire a tous les droits applicatifs (sauf cas admin système non prévu ici)
+    // Le propriétaire a tous les droits
     if (isOwner && user && !isDeleted) return true;
 
-    // Bloque explicitement ce qui est doctor-only pour les vendeuses
-    if ((role || "").toLowerCase() === "vendeuse") {
-      if (DOCTOR_ONLY_PERMISSIONS.includes(permission)) return false;
+    // Permissions réservées pharmacien
+    if (DOCTOR_ONLY_PERMISSIONS.includes(permission)) {
+      return (role || "").toLowerCase() === "docteur";
     }
 
-    // Match EXACT
-    return hasPerm(effectivePermissions, permission);
+    // ✅ LOGIQUE INVERSÉE : Vérifier si la permission est retirée
+    if (removedPermissions && removedPermissions.includes(permission)) {
+      return false; // Permission explicitement retirée
+    }
+
+    // Sinon, la permission est autorisée
+    return true;
   };
 
-  /** Expose la liste effective (utile pour affichage / debug) */
+  /** Expose la liste effective */
   const getUserPermissions = () => [...effectivePermissions];
 
-  const hasCustomPermissions = () => customPermissions.length > 0;
+  /** ✅ Vérifier si des restrictions sont actives */
+  const hasRestrictions = () => removedPermissions && removedPermissions.length > 0;
 
-  // Diff par rapport aux permissions par défaut du rôle (pour badges UI)
-  const getExtraPermissions = () => {
-    if (!role || customPermissions.length === 0) return [];
-    const defaults = normalizePermissions(getDefaultPermissionsForRole(role));
-    return normalizePermissions(customPermissions).filter((p) => !defaults.includes(p));
-  };
+  /** ✅ RÉTROCOMPATIBILITÉ : hasCustomPermissions (alias de hasRestrictions) */
+  const hasCustomPermissions = () => hasRestrictions();
 
+  /** ✅ Obtenir les permissions retirées */
   const getRemovedPermissions = () => {
-    if (!role || customPermissions.length === 0) return [];
-    const defaults = normalizePermissions(getDefaultPermissionsForRole(role));
-    const customSet = new Set(normalizePermissions(customPermissions));
-    return defaults.filter((p) => !customSet.has(p));
+    return removedPermissions || [];
   };
 
-  const getPermissionChanges = () => {
-    if (!hasCustomPermissions()) {
-      return {
-        hasChanges: false,
-        added: [],
-        removed: [],
-        total: getUserPermissions().length,
-      };
+  /** ✅ RÉTROCOMPATIBILITÉ : getExtraPermissions pour l'UI existante */
+  const getExtraPermissions = () => {
+    // Dans la logique inversée, on retourne un tableau vide 
+    // car il n'y a plus de "permissions supplémentaires" mais des "permissions retirées"
+    // Pour l'affichage, on peut montrer le nombre de permissions actives
+    return [];
+  };
+
+  /** ✅ Vérifier si accès complet (aucune restriction) */
+  const hasFullAccess = () => {
+    if (isOwner || (role || "").toLowerCase() === "docteur") return true;
+    return !hasRestrictions();
+  };
+
+  /** ✅ Obtenir le statut d'une permission */
+  const getPermissionStatus = (permission) => {
+    if (DOCTOR_ONLY_PERMISSIONS.includes(permission)) {
+      return 'doctor_only';
     }
-    const added = getExtraPermissions();
+    
+    if (!removedPermissions || removedPermissions.length === 0) {
+      return 'allowed_full_access';
+    }
+    
+    if (removedPermissions.includes(permission)) {
+      return 'removed';
+    }
+    
+    return 'allowed';
+  };
+
+  /** Statistiques sur les permissions */
+  const getPermissionChanges = () => {
+    const allAvailable = (permissions.docteur || []).filter(p => 
+      !DOCTOR_ONLY_PERMISSIONS.includes(p)
+    );
+    
     const removed = getRemovedPermissions();
+    const allowed = allAvailable.length - removed.length;
+    
     return {
-      hasChanges: added.length > 0 || removed.length > 0,
-      added,
-      removed,
-      total: getUserPermissions().length,
+      hasChanges: removed.length > 0,
+      total: allAvailable.length,
+      allowed: allowed,
+      removed: removed.length,
+      removedList: removed,
     };
   };
 
-  const refreshCustomPermissions = async (userId = null) => {
+  const refreshRemovedPermissions = async (userId = null) => {
     const targetUserId = userId || user?.uid;
     if (!targetUserId) return;
 
@@ -475,13 +513,15 @@ export function UserRoleProvider({ children }) {
       const userDoc = await getDoc(doc(db, "users", targetUserId));
       if (userDoc.exists()) {
         const userData = userDoc.data();
-        // On normalise à l’entrée
-        setCustomPermissions(normalizePermissions(userData.customPermissions || []));
+        setRemovedPermissions(normalizePermissions(userData.removedPermissions || []));
       }
     } catch (error) {
       console.error("[UserRoleContext] Erreur rechargement permissions:", error);
     }
   };
+
+  // ✅ RÉTROCOMPATIBILITÉ : refreshCustomPermissions (alias)
+  const refreshCustomPermissions = refreshRemovedPermissions;
 
   const canAccessApp = () => {
     if (!user || !authReady) return false;
@@ -494,6 +534,7 @@ export function UserRoleProvider({ children }) {
   const canManageUsers = () => {
     return isOwner && user && !isDeleted && isActive && authReady && (role || "").toLowerCase() === "docteur";
   };
+
   const canChangeRoles = () => canManageUsers();
   const canDeleteSociete = () => canManageUsers();
   const canPromoteToOwner = () => false;
@@ -556,10 +597,9 @@ export function UserRoleProvider({ children }) {
       hasAccess: canAccessApp(),
       blockReason: getBlockMessage(),
       authReady,
-      customPermissions,
-      hasCustomPermissions: hasCustomPermissions(),
-      extraPermissions: getExtraPermissions(),
       removedPermissions: getRemovedPermissions(),
+      hasRestrictions: hasRestrictions(),
+      hasFullAccess: hasFullAccess(),
       permissionChanges: changes,
       totalPermissions: getUserPermissions().length,
       privileges: {
@@ -579,9 +619,11 @@ export function UserRoleProvider({ children }) {
       messages.push({ type: "info", text: "Vérification des permissions en cours..." });
       return messages;
     }
+    
     if (isOwner) {
       messages.push({ type: "success", text: "Vous êtes le propriétaire permanent de cette pharmacie" });
     }
+    
     if (isDeleted) {
       messages.push({ type: "error", text: "Ce compte a été supprimé par l'administrateur" });
     } else if (isLocked && !isOwner) {
@@ -590,48 +632,36 @@ export function UserRoleProvider({ children }) {
       messages.push({ type: "warning", text: "Votre compte est désactivé" });
     }
 
-    if (hasCustomPermissions()) {
+    if (hasRestrictions()) {
       const changes = getPermissionChanges();
-
-      if (changes.added.length > 0 && changes.removed.length > 0) {
-        messages.push({
-          type: "info",
-          text: `Permissions personnalisées : +${changes.added.length} ajoutées, -${changes.removed.length} retirées`,
-        });
-      } else if (changes.added.length > 0) {
-        messages.push({
-          type: "info",
-          text: `Vous avez ${changes.added.length} permission(s) supplémentaire(s) accordée(s)`,
-        });
-      } else if (changes.removed.length > 0) {
-        messages.push({
-          type: "warning",
-          text: `${changes.removed.length} permission(s) de base ont été retirées`,
-        });
-      }
+      messages.push({
+        type: "warning",
+        text: `${changes.removed} permission(s) ont été retirées par l'administrateur`,
+      });
+    } else if ((role || "").toLowerCase() === "vendeuse") {
+      messages.push({
+        type: "success",
+        text: "Vous avez un accès complet à toutes les fonctionnalités",
+      });
     }
 
     if (adminPopup) messages.push({ type: "info", text: adminPopup });
     if (paymentWarning) messages.push({ type: "warning", text: paymentWarning });
+    
     return messages;
   };
 
   const getUserRoleDisplay = () => {
     if (!role) return "Non défini";
 
-    let baseDisplay = (role || "").toLowerCase() === "docteur" ? "Docteur" : "Vendeuse";
+    let baseDisplay = (role || "").toLowerCase() === "docteur" ? "Pharmacien" : "Vendeuse";
     if (isOwner) baseDisplay += " (Propriétaire)";
 
-    if (hasCustomPermissions()) {
+    if (hasRestrictions()) {
       const changes = getPermissionChanges();
-
-      if (changes.added.length > 0 && changes.removed.length > 0) {
-        baseDisplay += ` (±${changes.added.length}/${changes.removed.length})`;
-      } else if (changes.added.length > 0) {
-        baseDisplay += ` (+${changes.added.length})`;
-      } else if (changes.removed.length > 0) {
-        baseDisplay += ` (-${changes.removed.length})`;
-      }
+      baseDisplay += ` (-${changes.removed})`;
+    } else if ((role || "").toLowerCase() === "vendeuse") {
+      baseDisplay += " (Accès complet)";
     }
 
     return baseDisplay;
@@ -640,7 +670,7 @@ export function UserRoleProvider({ children }) {
   const getOwnershipStatus = () => {
     if (!user) return "Non connecté";
     if (isOwner) return "Propriétaire";
-    if ((role || "").toLowerCase() === "docteur") return "Docteur";
+    if ((role || "").toLowerCase() === "docteur") return "Pharmacien";
     return "Utilisateur standard";
   };
 
@@ -658,16 +688,22 @@ export function UserRoleProvider({ children }) {
     adminPopup,
     paymentWarning,
 
-    // Permissions
-    customPermissions,
-    hasCustomPermissions,
-    getExtraPermissions,
+    // ✅ Permissions (logique inversée)
+    removedPermissions,
+    hasRestrictions,
     getRemovedPermissions,
+    hasFullAccess,
+    getPermissionStatus,
     getPermissionChanges,
     getUserPermissions,
-    refreshCustomPermissions,
-    can, // ← matching EXACT (utilise effectivePermissions)
+    refreshRemovedPermissions,
+    refreshCustomPermissions,  // ⭐ AJOUTER CETTE LIGNE
+    can,
     canAccessApp,
+
+    // ✅ RÉTROCOMPATIBILITÉ pour l'UI existante
+    hasCustomPermissions, // Alias de hasRestrictions
+    getExtraPermissions,  // Retourne [] dans la logique inversée
 
     // Infos & stats
     getBlockMessage,
