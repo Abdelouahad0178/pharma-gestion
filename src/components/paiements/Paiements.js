@@ -190,13 +190,6 @@ const useInjectStyles = () => {
       .chip{ padding:4px 8px; border-radius:8px; background:#eef2ff; color:var(--p); font-weight:800; display:inline-block; }
       .soft{ color:#6b7280; }
       .money{ color:var(--p); font-weight:800; }
-      .rowbtn{ background:transparent; border:0; cursor:pointer; font-weight:800; color:#4b5563; padding:4px 8px; border-radius:6px; }
-      .rowbtn:hover{ color:#1f2937; background:#f3f4f6; }
-      .subcard{ background:#f8fafc; border:1px solid var(--border); border-radius:12px; padding:12px; }
-      .payment-group{ background:#fff; border:1px solid var(--border); border-radius:10px; padding:12px; margin-bottom:8px; }
-      .payment-badge{ display:inline-flex; align-items:center; gap:6px; padding:6px 12px; border-radius:8px; font-size:13px; font-weight:700; }
-      .grid-add{ display:grid; grid-template-columns: 130px 1fr 140px 150px 1fr 130px 1fr auto; gap:8px; }
-      @media (max-width:1100px){ .grid-add{ grid-template-columns: 1fr 1fr; } }
       .tbl tfoot td{ padding:12px 10px; font-weight:900; border-top:2px solid var(--border); background:#f8fafc; }
       .mode-summary{ display:inline-flex; align-items:center; gap:4px; padding:3px 8px; border-radius:6px; font-size:11px; font-weight:700; margin:2px; }
       .modal-overlay{ position:fixed; inset:0; background:rgba(0,0,0,0.5); display:flex; align-items:center; justify-content:center; z-index:1000; padding:16px; backdrop-filter:blur(4px); }
@@ -217,7 +210,7 @@ const useInjectStyles = () => {
 /* ================= Component ================= */
 export default function Paiements() {
   useInjectStyles();
-  const { societeId, user, loading } = useUserRole();
+  const { societeId, user, role, loading } = useUserRole();
 
   const [relatedTo, setRelatedTo] = useState("ventes");
   const [notification, setNotification] = useState(null);
@@ -417,6 +410,14 @@ export default function Paiements() {
     };
   }, [societeId, relatedTo, loadDocuments, loadPaiements]);
 
+  useEffect(() => {
+    if (role === "vendeuse") {
+      setRelatedTo("ventes");
+    } else {
+      setRelatedTo("achats");
+    }
+  }, [role]);
+
   const filteredDocs = useMemo(() => {
     const nameTerm = norm(filterName);
     const from = dateFrom ? new Date(`${dateFrom}T00:00:00`) : null;
@@ -549,13 +550,14 @@ export default function Paiements() {
           lastPaymentUpdate: Timestamp.now(),
           modifiePar: user.uid,
           modifieParEmail: user.email,
+          modifieParRole: role,
           modifieLe: Timestamp.now(),
         });
       } catch (e) {
         console.error("maj statut", e);
       }
     },
-    [societeId, user, relatedTo]
+    [societeId, user, role, relatedTo]
   );
 
   const handleSelectDocPay = useCallback(
@@ -651,6 +653,7 @@ export default function Paiements() {
         date: Timestamp.now(),
         creePar: user.uid,
         creeParEmail: user.email,
+        creeParRole: role,
         creeLe: Timestamp.now(),
         societeId,
         ...payloadExtra,
@@ -670,6 +673,7 @@ export default function Paiements() {
   }, [
     societeId,
     user,
+    role,
     selectedDocPay,
     payMode,
     cashAmount,
@@ -717,6 +721,7 @@ export default function Paiements() {
         modifieLe: Timestamp.now(),
         modifiePar: user.uid,
         modifieParEmail: user.email,
+        modifieParRole: role,
       };
 
       const isCheque = norm(editPaymentMode) === "cheque" || norm(editPaymentMode) === "chèque";
@@ -774,6 +779,7 @@ export default function Paiements() {
   }, [
     societeId,
     user,
+    role,
     editingPayment,
     editPaymentMode,
     editPaymentDate,
@@ -903,7 +909,8 @@ export default function Paiements() {
         { 
           instruments: clean, 
           montant: newTotal,
-          modifieLe: Timestamp.now() 
+          modifieLe: Timestamp.now(),
+          modifieParRole: role
         }
       );
 
@@ -925,7 +932,7 @@ export default function Paiements() {
       console.error(e);
       showNote("Erreur d'enregistrement des instruments", "error");
     }
-  }, [societeId, draftInstruments, editingInstrumentsFor, paiementsByDoc, docIndex, updateDocStatus, closeInstrumentsEditor, showNote]);
+  }, [societeId, role, draftInstruments, editingInstrumentsFor, paiementsByDoc, docIndex, updateDocStatus, closeInstrumentsEditor, showNote]);
 
   const docsWithBalance = useMemo(() => {
     return documents
@@ -1192,6 +1199,8 @@ export default function Paiements() {
   if (!user) return <div style={{ padding: 16, color: "#e11d48" }}>Non connecté.</div>;
   if (!societeId) return <div style={{ padding: 16, color: "#e11d48" }}>Aucune société.</div>;
 
+  const isVendeuse = role === "vendeuse";
+
   return (
     <div className="paie-wrap">
       <div className="hdr">
@@ -1211,32 +1220,36 @@ export default function Paiements() {
 
       <div className="card" style={{ marginBottom: 16 }}>
         <div className="controls" style={{ marginBottom: 10 }}>
-          <button
-            className={`btn ${relatedTo === "ventes" ? "on" : ""}`}
-            onClick={() => {
-              setRelatedTo("ventes");
-              setExpandedDocId(null);
-              setSelectedDocPay("");
-              setCashAmount("");
-              setPayMode("Espèces");
-              setCreateInstr([]);
-            }}
-          >
-            📊 Ventes
-          </button>
-          <button
-            className={`btn ${relatedTo === "achats" ? "on" : ""}`}
-            onClick={() => {
-              setRelatedTo("achats");
-              setExpandedDocId(null);
-              setSelectedDocPay("");
-              setCashAmount("");
-              setPayMode("Espèces");
-              setCreateInstr([]);
-            }}
-          >
-            🛒 Achats
-          </button>
+          {isVendeuse && (
+            <button
+              className={`btn ${relatedTo === "ventes" ? "on" : ""}`}
+              onClick={() => {
+                setRelatedTo("ventes");
+                setExpandedDocId(null);
+                setSelectedDocPay("");
+                setCashAmount("");
+                setPayMode("Espèces");
+                setCreateInstr([]);
+              }}
+            >
+              📊 Ventes
+            </button>
+          )}
+          {!isVendeuse && (
+            <button
+              className={`btn ${relatedTo === "achats" ? "on" : ""}`}
+              onClick={() => {
+                setRelatedTo("achats");
+                setExpandedDocId(null);
+                setSelectedDocPay("");
+                setCashAmount("");
+                setPayMode("Espèces");
+                setCreateInstr([]);
+              }}
+            >
+              🛒 Achats
+            </button>
+          )}
 
           <input
             className="field"
@@ -1615,7 +1628,7 @@ export default function Paiements() {
                                         📅 {formatDateTime(p.date)}
                                         {p.creeParEmail && (
                                           <span style={{ marginLeft: 12 }}>
-                                            👤 Par: {p.creeParEmail}
+                                            👤 Par: {p.creeParEmail} {p.creeParRole ? `(${p.creeParRole})` : ''}
                                           </span>
                                         )}
                                       </div>

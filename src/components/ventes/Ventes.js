@@ -109,13 +109,137 @@ const findAnyBarcode = (obj) => {
   return "";
 };
 
+/* ========== Helpers PRODUIT UNIQUE (compteurs distincts) ========== */
+const normalizeName = (s) => String(s || "").trim().toLowerCase();
+const distinctCountByProduit = (list) => {
+  const set = new Set();
+  (Array.isArray(list) ? list : []).forEach((a) => {
+    set.add(normalizeName(a?.produit));
+  });
+  return set.size;
+};
+
+/* ====== Composants séparés (hors Ventes) pour éviter l'erreur hooks ====== */
+function RealtimeBeat({ lastRealtimeBeat }) {
+  return (
+    <span style={{ fontSize: 12, color: "#059669" }}>
+      {lastRealtimeBeat ? `Sync: ${lastRealtimeBeat.toLocaleTimeString("fr-FR")}` : "Sync..."}
+    </span>
+  );
+}
+
+function CameraBarcodeInlineModal({ open, onClose, onDetected }) {
+  const videoRef = React.useRef(null);
+  const [error, setError] = React.useState("");
+
+  React.useEffect(() => {
+    let stream;
+    let stopRequested = false;
+    let rafId = null;
+    let reader = null;
+    let controls = null;
+
+    async function start() {
+      setError("");
+      try {
+        if (!open) return;
+        stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: "environment" } }, audio: false });
+        if (!videoRef.current) return;
+        videoRef.current.srcObject = stream;
+        await videoRef.current.play();
+
+        if ("BarcodeDetector" in window) {
+          const supported = await window.BarcodeDetector.getSupportedFormats?.();
+          const detector = new window.BarcodeDetector({
+            formats: supported && supported.length ? supported : ["ean_13", "ean_8", "code_128", "upc_a", "upc_e"],
+          });
+          const scan = async () => {
+            if (!open || stopRequested) return;
+            try {
+              const track = stream.getVideoTracks?.()[0];
+              if (!track) return;
+              const imageCapture = new ImageCapture(track);
+              const bitmap = await imageCapture.grabFrame();
+              const codes = await detector.detect(bitmap);
+              if (codes && codes[0]?.rawValue) {
+                onDetected?.(codes[0].rawValue);
+              } else {
+                rafId = requestAnimationFrame(scan);
+              }
+            } catch {
+              rafId = requestAnimationFrame(scan);
+            }
+          };
+          rafId = requestAnimationFrame(scan);
+        } else {
+          try {
+            const lib = await import(/* webpackChunkName: "zxing" */ "@zxing/browser");
+            const { BrowserMultiFormatReader } = lib;
+            reader = new BrowserMultiFormatReader();
+            controls = await reader.decodeFromVideoDevice(null, videoRef.current, (result) => {
+              const txt = result?.getText?.();
+              if (txt) onDetected?.(txt);
+            });
+          } catch (e) {
+            setError("ZXing non installé. Lance: npm i @zxing/browser");
+          }
+        }
+      } catch (e) {
+        console.error(e);
+        setError(e.message || "Caméra indisponible");
+      }
+    }
+
+    if (open) start();
+
+    return () => {
+      stopRequested = true;
+      if (rafId) cancelAnimationFrame(rafId);
+      try { controls?.stop(); } catch {}
+      try { reader?.reset(); } catch {}
+      try { const tracks = stream?.getTracks?.() || []; tracks.forEach((t) => t.stop()); } catch {}
+    };
+  }, [open, onDetected]);
+
+  if (!open) return null;
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      onClick={(e) => e.target === e.currentTarget && onClose?.()}
+      style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.6)", display: "grid", placeItems: "center", zIndex: 9999, padding: 16 }}
+    >
+      <div style={{ background: "#fff", borderRadius: 14, width: "min(100%, 680px)", padding: 16, boxShadow: "0 10px 30px rgba(0,0,0,.2)", position: "relative" }}>
+        <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 10 }}>
+          <h3 style={{ margin: 0, fontWeight: 800, fontSize: 17 }}>Scanner un code-barres</h3>
+          <button onClick={onClose} style={{ marginLeft: "auto", border: "none", borderRadius: 8, padding: "6px 10px", background: "#111827", color: "#fff", cursor: "pointer", fontSize: 13 }}>
+            Fermer
+          </button>
+        </div>
+
+        <div style={{ position: "relative", borderRadius: 12, overflow: "hidden", background: "#000", aspectRatio: "16/9" }}>
+          <video ref={videoRef} muted playsInline style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+          <div style={{ position: "absolute", inset: "15% 10%", border: "3px solid rgba(255,255,255,.8)", borderRadius: 12, boxShadow: "0 0 20px rgba(0,0,0,.5) inset" }} />
+        </div>
+
+        {error ? (
+          <p style={{ marginTop: 8, color: "#b91c1c", fontSize: 12 }}>{error}</p>
+        ) : (
+          <p style={{ marginTop: 8, color: "#6b7280", fontSize: 12 }}>Astuce : place le code bien à plat et évite les reflets.</p>
+        )}
+      </div>
+    </div>
+  );
+}
+
 /* ======================================================
    Composant principal
 ====================================================== */
 export default function Ventes() {
   /* ===== Audio (bip) ===== */
   const audioCtxRef = useRef(null);
-  const getAudioCtx = () => {
+  const getAudioCtx = useCallback(() => {
     if (!audioCtxRef.current) {
       const Ctx = window.AudioContext || window.webkitAudioContext;
       if (Ctx) {
@@ -123,7 +247,7 @@ export default function Ventes() {
       }
     }
     return audioCtxRef.current;
-  };
+  }, []);
   const playBeep = useCallback((freq = 880, dur = 120, type = "sine", volume = 0.15) => {
     try {
       const ctx = getAudioCtx();
@@ -140,7 +264,7 @@ export default function Ventes() {
         try { osc.stop(); osc.disconnect(); gain.disconnect(); } catch {}
       }, dur);
     } catch {}
-  }, []);
+  }, [getAudioCtx]);
   const beepSuccess = useCallback(() => { playBeep(1175, 90); setTimeout(()=>playBeep(1568,110), 100); }, [playBeep]);
   const beepError   = useCallback(() => playBeep(220, 220, "square", 0.2), [playBeep]);
 
@@ -148,7 +272,11 @@ export default function Ventes() {
     const unlock = () => { try { getAudioCtx()?.resume?.(); } catch {} };
     window.addEventListener("click", unlock, { once: true });
     window.addEventListener("keydown", unlock, { once: true });
-  }, []);
+    return () => {
+      window.removeEventListener("click", unlock);
+      window.removeEventListener("keydown", unlock);
+    };
+  }, [getAudioCtx]);
 
   /* ===== Contexte utilisateur ===== */
   const { user, societeId, loading } = useUserRole();
@@ -196,8 +324,6 @@ export default function Ventes() {
   const [selectedVente, setSelectedVente] = useState(null);
   const [showDetails, setShowDetails] = useState(false);
   const [showScanner, setShowScanner] = useState(false);
-
-  // NOUVEAU: État pour contrôler l'affichage de la section finalisation
   const [showFinalizationSection, setShowFinalizationSection] = useState(false);
 
   const [appliedSet, setAppliedSet] = useState(new Set());
@@ -311,6 +437,9 @@ export default function Ventes() {
     [articles]
   );
 
+  // >>>>> NOUVEAU : compte d'articles DISTINCTS dans le panier
+  const distinctPanierCount = useMemo(() => distinctCountByProduit(articles), [articles]);
+
   const ventesFiltrees = useMemo(() => {
     return ventes.filter((v) => {
       let keep = true;
@@ -330,7 +459,7 @@ export default function Ventes() {
   }, [ventes, filterStatut, searchTerm]);
 
   /* ===================== Formulaire ===================== */
-  const handleProduitChange = (value) => {
+  const handleProduitChange = useCallback((value) => {
     setProduit(value);
     setSelectedLot("");
     setAvailableLots([]);
@@ -357,9 +486,9 @@ export default function Ventes() {
         setNumeroArticle(String(code || ""));
       }
     }
-  };
+  }, [stockEntries, medicaments]);
 
-  const handleLotSelection = (lotId) => {
+  const handleLotSelection = useCallback((lotId) => {
     setSelectedLot(lotId);
     const selectedLotData = (availableLots || []).find((lot) => lot.id === lotId);
     if (selectedLotData) {
@@ -367,7 +496,7 @@ export default function Ventes() {
       const code = findAnyBarcode(selectedLotData);
       setNumeroArticle(String(code || ""));
     }
-  };
+  }, [availableLots]);
 
   /* ===================== Ajouter article ===================== */
   const handleAddArticle = useCallback((e) => {
@@ -445,8 +574,7 @@ export default function Ventes() {
     setNumeroArticle("");
     setError("");
     beepSuccess();
-    
-    // NOUVEAU: Message de succès temporaire
+
     setSuccess("✓ Article ajouté ! Vous pouvez ajouter d'autres articles ou finaliser la vente.");
     setTimeout(() => setSuccess(""), 2000);
   }, [
@@ -454,10 +582,10 @@ export default function Ventes() {
     getAllAvailableMedicaments, medicaments, numeroArticle, beepError, beepSuccess
   ]);
 
-  const handleRemoveArticle = (idx) => setArticles((prev) => prev.filter((_, i) => i !== idx));
+  const handleRemoveArticle = useCallback((idx) => setArticles((prev) => prev.filter((_, i) => i !== idx)), []);
 
   /* ===================== Enregistrement vente ===================== */
-  const handleAddVente = async (e) => {
+  const handleAddVente = useCallback(async (e) => {
     e.preventDefault();
     if (!user || !societeId || !client || !dateVente || articles.length === 0) {
       setError("Veuillez remplir tous les champs et ajouter au moins un article");
@@ -491,7 +619,7 @@ export default function Ventes() {
           ? doc(db, "societe", societeId, "ventes", editId)
           : doc(collection(db, "societe", societeId, "ventes"));
 
-        // ========== PHASE 1: TOUTES LES LECTURES D'ABORD ==========
+        // PHASE 1: Lectures
         const lotSnapshots = [];
         for (const article of normalizedArticles) {
           if (article.stockEntryId) {
@@ -503,8 +631,8 @@ export default function Ventes() {
           }
         }
 
-        // ========== PHASE 2: TOUTES LES ÉCRITURES ENSUITE ==========
-        // 2.1 - Mettre à jour les stocks des lots
+        // PHASE 2: Écritures
+        // 2.1 - MAJ stocks
         for (const { lotRef, lotSnap, article } of lotSnapshots) {
           if (lotRef && lotSnap && lotSnap.exists()) {
             const lotData = lotSnap.data();
@@ -547,7 +675,7 @@ export default function Ventes() {
           }
         }
 
-        // 2.2 - Créer ou mettre à jour la vente
+        // 2.2 - Vente
         const venteData = {
           client,
           date: Timestamp.fromDate(parsedDate),
@@ -574,7 +702,7 @@ export default function Ventes() {
           transaction.set(venteRef, venteData);
         }
 
-        // 2.3 - Créer le paiement si nécessaire
+        // 2.3 - Paiement automatique si payé et création
         if (statutPaiement === "payé" && !isEditing) {
           const paiementRef = doc(collection(db, "societe", societeId, "paiements"));
           transaction.set(paiementRef, {
@@ -589,7 +717,7 @@ export default function Ventes() {
           });
         }
 
-        // 2.4 - Marquer les lignes comme appliquées
+        // 2.4 - Flags lignes appliquées
         for (let i = 0; i < normalizedArticles.length; i++) {
           const opId = `${venteRef.id}#${i}`;
           const appliedRef = doc(db, "societe", societeId, APPLIED_SALES_COLL, opId);
@@ -617,9 +745,9 @@ export default function Ventes() {
     } finally {
       setIsSaving(false);
     }
-  };
+  }, [user, societeId, client, dateVente, articles, isEditing, editId, statutPaiement, modePaiement, notesVente, beepSuccess]);
 
-  const handleEditVente = (vente) => {
+  const handleEditVente = useCallback((vente) => {
     setEditId(vente.id);
     setIsEditing(true);
     setClient(vente.client || "(passant)");
@@ -629,11 +757,11 @@ export default function Ventes() {
     setNotesVente(vente.notes || "");
     setArticles(vente.articles || []);
     setShowForm(true);
-    setShowFinalizationSection(true); // NOUVEAU: Afficher directement la section finalisation
-  };
+    setShowFinalizationSection(true);
+  }, []);
 
   /* ===================== Suppression ===================== */
-  const handleDeleteVente = async (vente) => {
+  const handleDeleteVente = useCallback(async (vente) => {
     if (!window.confirm(`Supprimer la vente de ${vente.client} ?\n\nLe stock sera automatiquement restauré pour tous les articles de cette vente.`)) return;
 
     setIsSaving(true);
@@ -705,12 +833,12 @@ export default function Ventes() {
     } finally {
       setIsSaving(false);
     }
-  };
+  }, [societeId, beepSuccess, beepError, user]);
 
-  const handleViewDetails = (vente) => { setSelectedVente(vente); setShowDetails(true); };
+  const handleViewDetails = useCallback((vente) => { setSelectedVente(vente); setShowDetails(true); }, []);
 
   /* ===================== Dismiss / Undismiss ===================== */
-  const toggleDismissLine = async (venteId, lineIndex, dismiss) => {
+  const toggleDismissLine = useCallback(async (venteId, lineIndex, dismiss) => {
     if (!societeId || !venteId) return;
     const opId = `${venteId}#${lineIndex}`;
     const ref = doc(db, "societe", societeId, DISMISSED_COLL, opId);
@@ -727,19 +855,19 @@ export default function Ventes() {
       console.error(e);
       setError("Impossible de modifier le statut de sync de la ligne.");
     }
-  };
+  }, [societeId, user]);
 
   /* ===================== Impression ===================== */
-  const generateCachetHtml = () => {
+  const generateCachetHtml = useCallback(() => {
     if (!parametres.afficherCachet) return "";
     const taille = parametres.tailleCachet || 120;
     if (parametres.typeCachet === "image" && parametres.cachetImage) {
       return `<div style="text-align: center; flex: 1;"><img src="${parametres.cachetImage}" alt="Cachet" style="max-width: ${taille}px; max-height: ${taille}px; border-radius: 8px;" /></div>`;
     }
     return `<div style="text-align: center; flex: 1;"><div style="display: inline-block; border: 3px solid #1976d2; color: #1976d2; border-radius: 50%; padding: 25px 40px; font-size: 16px; font-weight: bold; text-transform: uppercase; letter-spacing: 1px; background: rgba(25,118,210,.05); box-shadow: 0 4px 8px rgba(25,118,210,.2); transform: rotate(-5deg); max-width: ${taille}px;">${parametres.cachetTexte || "Cachet Société"}</div></div>`;
-  };
+  }, [parametres]);
 
-  const handlePrintVente = (vente) => {
+  const handlePrintVente = useCallback((vente) => {
     const articlesV = Array.isArray(vente.articles) ? vente.articles : [];
     const total =
       vente.montantTotal ||
@@ -789,10 +917,10 @@ export default function Ventes() {
     <div class="footer"><p>${parametres.pied}</p><p style="font-size:12px;color:#6b7280;margin-top:10px;">Document imprimé le ${new Date().toLocaleString("fr-FR")} par ${user?.email || "Utilisateur"}</p></div>
     </body></html>`);
     w.document.close(); w.print();
-  };
+  }, [generateCachetHtml, parametres.entete, parametres.pied, user?.email]);
 
   /* ===================== Utils ===================== */
-  const resetForm = () => {
+  const resetForm = useCallback(() => {
     setClient("(passant)");
     setDateVente(getTodayDateString());
     setStatutPaiement("payé");
@@ -809,8 +937,8 @@ export default function Ventes() {
     setEditId(null);
     setIsEditing(false);
     setError("");
-    setShowFinalizationSection(false); // NOUVEAU: Cacher la section finalisation
-  };
+    setShowFinalizationSection(false);
+  }, []);
 
   /* ===================== Scan ===================== */
   const onBarcodeDetected = useCallback((barcode) => {
@@ -899,12 +1027,6 @@ export default function Ventes() {
     );
   }
 
-  const RealtimeBeat = () => (
-    <span style={{ fontSize: 12, color: "#059669" }}>
-      {lastRealtimeBeat ? `Sync: ${lastRealtimeBeat.toLocaleTimeString("fr-FR")}` : "Sync..."}
-    </span>
-  );
-
   return (
     <div style={{minHeight:"100vh",background:"linear-gradient(135deg,#667eea 0%,#764ba2 100%)",padding:20,fontFamily:'"Inter",-apple-system,BlinkMacSystemFont,sans-serif'}}>
       {/* Header */}
@@ -913,7 +1035,7 @@ export default function Ventes() {
           <div>
             <h1 style={{margin:0,fontSize:32,fontWeight:800,background:"linear-gradient(135deg,#667eea,#764ba2)",WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent",backgroundClip:"text"}}>Gestion des Ventes Multi-Articles</h1>
             <p style={{margin:"6px 0 0",color:"#6b7280",fontSize:16}}>Système de vente multi-lots avec restauration automatique du stock.</p>
-            <div style={{marginTop:6}}><RealtimeBeat /></div>
+            <div style={{marginTop:6}}><RealtimeBeat lastRealtimeBeat={lastRealtimeBeat} /></div>
           </div>
 
           <button
@@ -953,11 +1075,11 @@ export default function Ventes() {
             {isEditing ? "Modifier la vente" : "Nouvelle vente - Ajoutez vos articles"}
           </h2>
 
-          {/* NOUVEAU: Indicateur visuel du nombre d'articles */}
+          {/* Indicateur panier */}
           {articles.length > 0 && (
             <div style={{background:"linear-gradient(135deg,#dcfce7,#bbf7d0)",borderRadius:12,padding:12,marginBottom:16,border:"2px solid #16a34a",textAlign:"center"}}>
               <div style={{fontSize:20,fontWeight:800,color:"#15803d",marginBottom:4}}>
-                🛒 {articles.length} article{articles.length > 1 ? "s" : ""} dans le panier
+                🛒 {distinctPanierCount} produit{distinctPanierCount > 1 ? "s" : ""} distinct{distinctPanierCount > 1 ? "s" : ""}
               </div>
               <div style={{fontSize:14,color:"#16a34a"}}>
                 Total actuel: <span style={{fontWeight:700,fontSize:16}}>{safeToFixed(totalVenteCourante)} DH</span>
@@ -985,7 +1107,7 @@ export default function Ventes() {
                 📦 Étape 1 : Ajoutez vos articles
               </h3>
               <span style={{background:"linear-gradient(135deg,#8b5cf6,#7c3aed)",color:"white",padding:"4px 12px",borderRadius:20,fontSize:12,fontWeight:700}}>
-                ARTICLES : {articles.length}
+                ARTICLES : {distinctPanierCount}
               </span>
             </div>
             <p style={{margin:"0 0 12px",fontSize:13,color:"#0369a1"}}>
@@ -1095,9 +1217,9 @@ export default function Ventes() {
             <div style={{background:"linear-gradient(135deg,#fff7ed,#fed7aa)",borderRadius:16,padding:16,marginBottom:12,border:"2px solid #f97316"}}>
               <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
                 <h3 style={{margin:0,color:"#c2410c",fontSize:18,fontWeight:700}}>
-                  🛒 Articles du panier ({articles.length})
+                  🛒 Produits du panier ({distinctPanierCount})
                 </h3>
-                <button 
+                <button
                   onClick={() => setArticles([])}
                   style={{background:"linear-gradient(135deg,#ef4444,#dc2626)",color:"white",border:"none",padding:"6px 14px",borderRadius:10,fontSize:12,fontWeight:600,cursor:"pointer"}}
                 >
@@ -1160,9 +1282,9 @@ export default function Ventes() {
                 </div>
               </div>
 
-              {/* NOUVEAU: Bouton pour passer à la finalisation */}
+              {/* Bouton finalisation */}
               <div style={{marginTop:16,textAlign:"center"}}>
-                <button 
+                <button
                   onClick={() => setShowFinalizationSection(true)}
                   style={{background:"linear-gradient(135deg,#8b5cf6,#7c3aed)",color:"white",border:"none",padding:"14px 40px",borderRadius:12,fontSize:16,fontWeight:700,cursor:"pointer",boxShadow:"0 8px 24px rgba(139,92,246,0.4)"}}
                 >
@@ -1312,7 +1434,9 @@ export default function Ventes() {
                     (Array.isArray(v.articles) ? v.articles : []).reduce((sum, a) =>
                       sum + (safeNumber(a.prixUnitaire) * safeNumber(a.quantite) - safeNumber(a.remise || 0)), 0
                     );
-                  const totalArticles = (v.articles || []).length;
+
+                  // >>>>> NOUVEAU : nombre de PRODUITS DISTINCTS dans la vente (peu importe S1/S2)
+                  const distinctInVente = distinctCountByProduit(v.articles || []);
 
                   const stockCounts = { stock1: 0, stock2: 0, unknown: 0 };
                   (v.articles || []).forEach((a) => {
@@ -1328,7 +1452,7 @@ export default function Ventes() {
                     if (appliedSet.has(opId)) applied++;
                     if (dismissedSet.has(opId)) dismissed++;
                   });
-                  const pending = totalArticles - applied - dismissed;
+                  const pending = (v.articles || []).length - applied - dismissed;
 
                   const principalStock = v.stockSource || v.stock || "stock1";
 
@@ -1348,9 +1472,13 @@ export default function Ventes() {
                       </td>
                       <td style={{ padding: 16, textAlign: "center", borderRight: "1px solid #f1f5f9" }}>
                         <div style={{ display: "flex", gap: 6, justifyContent: "center", alignItems: "center", flexWrap: "wrap" }}>
-                          <span style={{ background: "linear-gradient(135deg, #8b5cf6, #7c3aed)", color: "white", padding: "3px 7px", borderRadius: 10, fontSize: 10, fontWeight: 600 }}>{totalArticles} art.</span>
-                          {stockCounts.stock1 > 0 && (<span style={{ background: "linear-gradient(135deg, #3b82f6, #2563eb)", color: "white", padding: "2px 5px", borderRadius: 8, fontSize: 9, fontWeight: 600 }} title={`${stockCounts.stock1} articles depuis Stock1`}>S1:{stockCounts.stock1}</span>)}
-                          {stockCounts.stock2 > 0 && (<span style={{ background: "linear-gradient(135deg, #10b981, #059669)", color: "white", padding: "2px 5px", borderRadius: 8, fontSize: 9, fontWeight: 600 }} title={`${stockCounts.stock2} articles depuis Stock2`}>S2:{stockCounts.stock2}</span>)}
+                          {/* Distinct products */}
+                          <span style={{ background: "linear-gradient(135deg, #8b5cf6, #7c3aed)", color: "white", padding: "3px 7px", borderRadius: 10, fontSize: 10, fontWeight: 700 }} title="Produits distincts (S1 et S2 considérés comme le même produit)">
+                            {distinctInVente} prod.
+                          </span>
+                          {/* Répartition par stock (reste en lignes, utile pour la traçabilité) */}
+                          {stockCounts.stock1 > 0 && (<span style={{ background: "linear-gradient(135deg, #3b82f6, #2563eb)", color: "white", padding: "2px 5px", borderRadius: 8, fontSize: 9, fontWeight: 600 }} title={`${stockCounts.stock1} lignes depuis Stock1`}>S1:{stockCounts.stock1}</span>)}
+                          {stockCounts.stock2 > 0 && (<span style={{ background: "linear-gradient(135deg, #10b981, #059669)", color: "white", padding: "2px 5px", borderRadius: 8, fontSize: 9, fontWeight: 600 }} title={`${stockCounts.stock2} lignes depuis Stock2`}>S2:{stockCounts.stock2}</span>)}
                           {applied > 0 && (<span style={{ background: "linear-gradient(135deg, #22c55e, #16a34a)", color: "white", padding: "2px 6px", borderRadius: 8, fontSize: 9, fontWeight: 700 }} title="Lignes appliquées au stock">✓ {applied}</span>)}
                           {dismissed > 0 && (<span style={{ background: "linear-gradient(135deg, #6b7280, #4b5563)", color: "white", padding: "2px 6px", borderRadius: 8, fontSize: 9, fontWeight: 700 }} title="Lignes ignorées">⊗ {dismissed}</span>)}
                           {pending > 0 && (<span style={{ background: "linear-gradient(135deg, #f59e0b, #d97706)", color: "white", padding: "2px 6px", borderRadius: 8, fontSize: 9, fontWeight: 700 }} title="En attente d'application">… {pending}</span>)}
@@ -1426,7 +1554,11 @@ export default function Ventes() {
               </div>
             </div>
 
-            <h3 style={{margin:"0 0 10px",fontSize:"clamp(15px, 2.2vw, 18px)",fontWeight:600,color:"#374151"}}>Articles ({selectedVente?.articles?.length || 0})</h3>
+            {/* >>>>> NOUVEAU : compteur distinct dans le titre */}
+            <h3 style={{margin:"0 0 10px",fontSize:"clamp(15px, 2.2vw, 18px)",fontWeight:600,color:"#374151"}}>
+              Produits distincts ({distinctCountByProduit(selectedVente?.articles || [])})
+            </h3>
+
             <div style={{background:"#fff",borderRadius:12,boxShadow:"0 8px 20px rgba(0, 0, 0, 0.05)",marginBottom:16,overflowX:"auto"}}>
               <table style={{ width: "100%", minWidth: 700, borderCollapse: "collapse" }}>
                 <thead>
@@ -1503,106 +1635,6 @@ export default function Ventes() {
             </div>
           </div>
         </div>, document.body)}
-    </div>
-  );
-}
-
-/* ====== Modal Scanner Caméra (inline) ====== */
-function CameraBarcodeInlineModal({ open, onClose, onDetected }) {
-  const videoRef = React.useRef(null);
-  const [error, setError] = React.useState("");
-
-  React.useEffect(() => {
-    let stream;
-    let stopRequested = false;
-    let rafId = null;
-    let reader = null;
-    let controls = null;
-
-    async function start() {
-      setError("");
-      try {
-        if (!open) return;
-        stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: "environment" } }, audio: false });
-        if (!videoRef.current) return;
-        videoRef.current.srcObject = stream;
-        await videoRef.current.play();
-
-        if ("BarcodeDetector" in window) {
-          const supported = await window.BarcodeDetector.getSupportedFormats?.();
-          const detector = new window.BarcodeDetector({
-            formats: supported && supported.length ? supported : ["ean_13", "ean_8", "code_128", "upc_a", "upc_e"],
-          });
-          const scan = async () => {
-            if (!open || stopRequested) return;
-            try {
-              const track = stream.getVideoTracks?.()[0];
-              if (!track) return;
-              const imageCapture= new ImageCapture(track);
-              const bitmap = await imageCapture.grabFrame();
-              const codes = await detector.detect(bitmap);
-              if (codes && codes[0]?.rawValue) {
-                onDetected?.(codes[0].rawValue);
-              } else {
-                rafId = requestAnimationFrame(scan);
-              }
-            } catch {
-              rafId = requestAnimationFrame(scan);
-            }
-          };
-          rafId = requestAnimationFrame(scan);
-        } else {
-          try {
-            const lib = await import(/* webpackChunkName: "zxing" */ "@zxing/browser");
-            const { BrowserMultiFormatReader } = lib;
-            reader = new BrowserMultiFormatReader();
-            controls = await reader.decodeFromVideoDevice(null, videoRef.current, (result) => {
-              const txt = result?.getText?.();
-              if (txt) onDetected?.(txt);
-            });
-          } catch (e) {
-            setError("ZXing non installé. Lance: npm i @zxing/browser");
-          }
-        }
-      } catch (e) {
-        console.error(e);
-        setError(e.message || "Caméra indisponible");
-      }
-    }
-
-    if (open) start();
-
-    return () => {
-      stopRequested = true;
-      if (rafId) cancelAnimationFrame(rafId);
-      try { controls?.stop(); } catch {}
-      try { reader?.reset(); } catch {}
-      try { const tracks = stream?.getTracks?.() || []; tracks.forEach((t) => t.stop()); } catch {}
-    };
-  }, [open, onDetected]);
-
-  if (!open) return null;
-
-  return (
-    <div role="dialog" aria-modal="true" onClick={(e) => e.target === e.currentTarget && onClose?.()}
-         style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.6)", display: "grid", placeItems: "center", zIndex: 9999, padding: 16 }}>
-      <div style={{ background: "#fff", borderRadius: 14, width: "min(100%, 680px)", padding: 16, boxShadow: "0 10px 30px rgba(0,0,0,.2)", position: "relative" }}>
-        <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 10 }}>
-          <h3 style={{ margin: 0, fontWeight: 800, fontSize: 17 }}>Scanner un code-barres</h3>
-          <button onClick={onClose} style={{ marginLeft: "auto", border: "none", borderRadius: 8, padding: "6px 10px", background: "#111827", color: "#fff", cursor: "pointer", fontSize: 13 }}>Fermer</button>
-        </div>
-
-        <div style={{ position: "relative", borderRadius: 12, overflow: "hidden", background: "#000", aspectRatio: "16/9" }}>
-          <video ref={videoRef} muted playsInline style={{ width: "100%", height: "100%", objectFit: "cover" }} />
-          <div style={{ position: "absolute", inset: "15% 10%", border: "3px solid rgba(255,255,255,.8)", borderRadius: 12, boxShadow: "0 0 20px rgba(0,0,0,.5) inset" }} />
-        </div>
-
-        {error ? (
-          <p style={{ marginTop: 8, color: "#b91c1c", fontSize: 12 }}>{error}</p>
-        ) : (
-          <p style={{ marginTop: 8, color: "#6b7280", fontSize: 12 }}>Astuce : place le code bien à plat et évite les reflets.</p>
-        )}
-      </div>
     </div>
   );
 }

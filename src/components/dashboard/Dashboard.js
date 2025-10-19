@@ -1,5 +1,5 @@
-// src/components/dashboard/Dashboard.js
-import React, { useState, useEffect, useMemo, useCallback } from "react";
+// src/components/dashboard/Dashboard.js - DASHBOARD FUSION S1/S2 (uniquement affichage)
+import React, { useState, useEffect, useMemo, useCallback, memo } from "react";
 import { db } from "../../firebase/config";
 import {
   collection,
@@ -8,7 +8,6 @@ import {
   query,
   orderBy,
   getDoc,
-  where,
 } from "firebase/firestore";
 import { useUserRole } from "../../contexts/UserRoleContext";
 import { usePermissions } from "../hooks/usePermissions";
@@ -95,58 +94,49 @@ function isCash(mode) {
 }
 
 /* =========================
-   🆕 VALIDATION STRICTE DES ACHATS
+   Nettoyage transferts (affichage)
+========================= */
+// Retire les tags du nom comme "[TRANSFERT S2]" etc.
+function cleanTransferTagName(name) {
+  return String(name || "").replace(/\[transfert.*?\]/gi, "").replace(/\s{2,}/g, " ").trim();
+}
+// Normalise un nom pour une clé Set
+function normalizedProductKey(name) {
+  return norm(cleanTransferTagName(name));
+}
+// Normalise numéro de lot (utile pour ruptures)
+function normalizeLotNumber(lot) {
+  if (!lot) return "-";
+  return String(lot)
+    .replace(/\[TRANSFERT\s+S\d+\]/gi, "")
+    .replace(/-S\d+$/i, "")
+    .replace(/-TRANSFERT.*$/i, "")
+    .trim() || "-";
+}
+
+/* =========================
+   VALIDATION STRICTE DES ACHATS
 ========================= */
 function isValidAchat(achat) {
-  // 1. Vérifier que l'achat existe et a un ID valide
-  if (!achat || !achat.id || typeof achat.id !== 'string') {
-    console.log('❌ Achat rejeté: pas d\'ID', achat);
-    return false;
-  }
+  if (!achat || !achat.id || typeof achat.id !== "string") return false;
 
-  // 2. 🔥 NOUVEAU: Exclure explicitement les bons de transfert si souhaité
-  // Décommentez cette ligne pour masquer aussi les transferts:
-  // if (achat.isTransferred === true) return false;
-
-  // 3. Vérifier les statuts de suppression/annulation
   const statut = norm(achat?.statut || achat?.status || achat?.etat || achat?.statutReception || "");
   const statutsInvalides = [
     "supprime", "supprimé", "deleted", "removed",
     "annule", "annulé", "cancelled", "canceled",
     "inactif", "inactive", "archived", "archive"
   ];
-  
-  if (statutsInvalides.includes(statut)) {
-    console.log('❌ Achat rejeté: statut invalide', achat.id, statut);
-    return false;
-  }
+  if (statutsInvalides.includes(statut)) return false;
 
-  // 4. Vérifier tous les flags de suppression possibles
   const suppressionFlags = [
-    achat.deleted,
-    achat.isDeleted, 
-    achat.supprime,
-    achat.supprimé,
-    achat.removed,
-    achat.isRemoved,
-    achat.archived,
-    achat.isArchived,
-    achat.active === false,
-    achat.actif === false
+    achat.deleted, achat.isDeleted, achat.supprime, achat.supprimé,
+    achat.removed, achat.isRemoved, achat.archived, achat.isArchived,
+    achat.active === false, achat.actif === false
   ];
+  if (suppressionFlags.some(Boolean)) return false;
 
-  if (suppressionFlags.some(flag => flag === true)) {
-    console.log('❌ Achat rejeté: flag de suppression détecté', achat.id);
-    return false;
-  }
+  if (!Array.isArray(achat.articles) || achat.articles.length === 0) return false;
 
-  // 5. Vérifier qu'il y a des articles
-  if (!Array.isArray(achat.articles) || achat.articles.length === 0) {
-    console.log('❌ Achat rejeté: pas d\'articles', achat.id);
-    return false;
-  }
-
-  // 6. Vérifier qu'au moins un article est valide (quantité > 0 ET prix > 0)
   const hasValidArticle = achat.articles.some(article => {
     const base = article?.recu || article?.commandee || article || {};
     const quantite = Number(base?.quantite || 0);
@@ -154,13 +144,7 @@ function isValidAchat(achat) {
     return quantite > 0 && prixUnitaire > 0;
   });
 
-  if (!hasValidArticle) {
-    console.log('❌ Achat rejeté: aucun article valide', achat.id);
-    return false;
-  }
-
-  // ✅ L'achat est valide
-  return true;
+  return hasValidArticle;
 }
 
 /* =========================
@@ -220,25 +204,14 @@ function getLineStockTag(line, parentDoc) {
   return parent !== "unknown" ? parent : "stock1";
 }
 
-function normalizeLotNumber(lot) {
-  if (!lot) return "-";
-  return String(lot)
-    .replace(/\[TRANSFERT\s+S\d+\]/gi, "")
-    .replace(/-S\d+$/i, "")
-    .replace(/-TRANSFERT.*$/i, "")
-    .trim() || "-";
-}
-
 /* =========================
    Paiements – détection type
 ========================= */
 function isSupplierPayment(p) {
   const t = norm(p?.type || p?.relatedTo || p?.for || p?.category);
   return [
-    "achat","achats",
-    "fournisseur","fournisseurs",
-    "supplier","suppliers",
-    "purchase","purchases",
+    "achat","achats","fournisseur","fournisseurs",
+    "supplier","suppliers","purchase","purchases",
     "reglementfournisseur","reglement_fournisseur"
   ].includes(t);
 }
@@ -246,17 +219,9 @@ function isSupplierPayment(p) {
 function isSalePayment(p) {
   const t = norm(p?.type || p?.relatedTo || p?.for || p?.category);
   return [
-    "vente","ventes",
-    "sale","sales",
+    "vente","ventes","sale","sales",
     "reglementclient","reglement_client"
   ].includes(t);
-}
-
-/* =========================
-   Détection ventes: espèces & annulée
-========================= */
-function getVenteId(v) {
-  return v?.id || v?.venteId || v?.saleId || v?.reference || v?.numero || null;
 }
 
 function getVentePaymentMode(v) {
@@ -265,25 +230,6 @@ function getVentePaymentMode(v) {
 
 function isCashSale(v) {
   return isCash(getVentePaymentMode(v));
-}
-
-function isCanceledSale(v) {
-  const status = norm(v?.statut || v?.status || v?.etat || v?.state || v?.situation);
-  const flags = [v?.annule, v?.annulée, v?.annulee, v?.canceled, v?.cancelled, v?.isCanceled, v?.active === false];
-  if (["annulee","annule","annulée","cancelled","canceled"].includes(status)) return true;
-  if (flags.some(Boolean)) return true;
-  return false;
-}
-
-function getCancelDate(v) {
-  return v?.dateAnnulation
-    ?? v?.timestampAnnulation
-    ?? v?.cancelledAt
-    ?? v?.annuleAt
-    ?? v?.dateCanceled
-    ?? v?.dateCancel
-    ?? v?.updatedAt
-    ?? null;
 }
 
 function getSaleAmountFromLines(vente) {
@@ -328,7 +274,36 @@ function getPeriodLabel(period) {
 }
 
 /* =========================
-   Composant
+   🚀 COMPOSANTS OPTIMISÉS
+========================= */
+
+const KPICard = memo(({ 
+  badge, emoji, value, label, subValue,
+  onDoubleClick, style, title, isMobile 
+}) => {
+  return (
+    <div style={style} onDoubleClick={onDoubleClick} title={title}>
+      {badge && (
+        <div style={{
+          position:"absolute", top:8, right:8, fontSize:12, fontWeight:800,
+          padding:"4px 8px", borderRadius:999, background:"#e2e8f0", color:"#111827"
+        }}>{badge}</div>
+      )}
+      <div style={{fontSize:isMobile?"2.1em":"2.4em", marginBottom:10}}>{emoji}</div>
+      <div style={value.style}>{value.text}</div>
+      <div>{label}</div>
+      {subValue && (
+        <div style={{
+          fontSize: isMobile ? "0.75em" : "0.85em",
+          color: "#6b7280", marginTop: 4, fontWeight: 600
+        }}>{subValue}</div>
+      )}
+    </div>
+  );
+});
+
+/* =========================
+   Composant Principal
 ========================= */
 
 export default function Dashboard() {
@@ -356,21 +331,27 @@ export default function Dashboard() {
   const [showAllAchats, setShowAllAchats] = useState(false);
   const [showSalesPayments, setShowSalesPayments] = useState(false);
 
+  // Debounce resize
   useEffect(() => {
     let rafId = null;
+    let timeout = null;
     const onResize = () => {
-      if (rafId) cancelAnimationFrame(rafId);
-      rafId = requestAnimationFrame(() => {
-        const w = window.innerWidth;
-        setIsMobile(w < 768);
-        setIsTablet(w >= 768 && w < 1024);
-      });
+      if (timeout) clearTimeout(timeout);
+      timeout = setTimeout(() => {
+        if (rafId) cancelAnimationFrame(rafId);
+        rafId = requestAnimationFrame(() => {
+          const w = window.innerWidth;
+          setIsMobile(w < 768);
+          setIsTablet(w >= 768 && w < 1024);
+        });
+      }, 150);
     };
     onResize();
     window.addEventListener("resize", onResize, { passive: true });
     return () => {
       window.removeEventListener("resize", onResize);
       if (rafId) cancelAnimationFrame(rafId);
+      if (timeout) clearTimeout(timeout);
     };
   }, []);
 
@@ -399,64 +380,33 @@ export default function Dashboard() {
     })();
 
     const qVentes = query(collection(db, "societe", societeId, "ventes"), orderBy("date", "desc"));
-    
-    // 🔥 NOUVELLE APPROCHE: Query Firestore avec exclusion DIRECTE
-    const qAchats = query(
-      collection(db, "societe", societeId, "achats"),
-      orderBy("timestamp", "desc")
-    );
-    
+    const qAchats = query(collection(db, "societe", societeId, "achats"), orderBy("timestamp", "desc"));
     const qStock = collection(db, "societe", societeId, "stock");
     const qStockEntries = query(collection(db, "societe", societeId, "stock_entries"), orderBy("nom"));
     const qPaiements = query(collection(db, "societe", societeId, "paiements"), orderBy("date", "desc"));
 
     unsubs.push(onSnapshot(qVentes, s => setVentes(s.docs.map(d => ({ id:d.id, ...d.data() }))), () => setVentes([])));
-    
-    // 🔥 FILTRAGE TRIPLE SÉCURITÉ pour les achats
+
     unsubs.push(onSnapshot(
       qAchats,
       (snapshot) => {
-        console.log(`📊 Dashboard: ${snapshot.docs.length} achats récupérés depuis Firestore`);
-        
         const arr = snapshot.docs
-          .map(d => {
-            const data = d.data();
-            return { id: d.id, ...data };
-          })
-          .filter(achat => {
-            const isValid = isValidAchat(achat);
-            if (!isValid) {
-              console.log(`🗑️ Achat ${achat.id} filtré (invalide/supprimé)`);
-            }
-            return isValid;
-          });
-        
-        console.log(`✅ Dashboard: ${arr.length} achats valides après filtrage`);
-        
+          .map(d => ({ id: d.id, ...d.data() }))
+          .filter(isValidAchat);
         arr.sort((a,b) => (toDate(achatDate(b))||0) - (toDate(achatDate(a))||0));
         setAchats(arr);
       },
-      (error) => {
-        console.error('❌ Erreur onSnapshot achats:', error);
-        setAchats([]);
-      }
+      () => setAchats([])
     ));
-    
+
     unsubs.push(onSnapshot(qStock, s => setStock(s.docs.map(d => ({ id:d.id, ...d.data() }))), () => setStock([])));
     unsubs.push(onSnapshot(qStockEntries, s => setStockEntries(s.docs.map(d => ({ id:d.id, ...d.data() }))), () => setStockEntries([])));
     unsubs.push(onSnapshot(qPaiements, s => setPaiements(s.docs.map(d => ({ id:d.id, ...d.data() }))), () => setPaiements([])));
 
     toast("Données (temps réel) prêtes ✅");
 
-    return () => { 
-      console.log('🔌 Dashboard: Déconnexion des listeners Firestore');
-      unsubs.forEach(u => { try { u && u(); } catch {} }); 
-    };
+    return () => unsubs.forEach(u => { try { u && u(); } catch {} });
   }, [loading, user, societeId, toast]);
-
-  /* =========================
-     CALCULS VENTES (ligne S1/S2)
-  ========================= */
 
   const computeMontantVenteAll = useCallback((vente) => {
     const m = Number(vente?.montantTotal) || 0;
@@ -490,15 +440,10 @@ export default function Dashboard() {
   }, []);
 
   const computeMontantAchat = useCallback((achat) => {
-    // 🔥 Vérification de sécurité supplémentaire
-    if (!isValidAchat(achat)) {
-      console.warn(`⚠️ Tentative de calcul sur achat invalide: ${achat?.id}`);
-      return 0;
-    }
-
+    if (!isValidAchat(achat)) return 0;
     const m = Number(achat?.montantTotal) || Number(achat?.montant) || 0;
     if (m > 0) return m;
-    
+
     const arts = Array.isArray(achat?.articles) ? achat.articles : [];
     const subtotal = arts.reduce((sum, a) => {
       const base = (a && (a.recu || a.commandee)) ? (a.recu || a.commandee) : a || {};
@@ -511,89 +456,66 @@ export default function Dashboard() {
     return Math.max(0, subtotal - rg);
   }, []);
 
-  const {
-    totalVentes,
-    totalAchats,
-    totalPaiements,
-    produitsStock,
-    caisseEncaissements,
-    caisseDecaissements,
-    caisseSolde,
-    ruptures,
-  } = useMemo(() => {
-    // 🔥 QUADRUPLE FILTRAGE de sécurité
-    const achatsValides = achats.filter(a => {
-      const valid = isValidAchat(a);
-      if (!valid) {
-        console.log(`🚫 Achat ${a.id} exclu des calculs (invalide)`);
-      }
-      return valid;
-    });
-    
-    console.log(`📈 Calcul des totaux: ${achatsValides.length}/${achats.length} achats valides`);
-    
+  const achatsValides = useMemo(() => achats.filter(isValidAchat), [achats]);
+
+  const stats = useMemo(() => {
     const vPer = ventes.filter(v => inPeriod(v.date || v.timestamp, periode, dateMin, dateMax));
     const aPer = achatsValides.filter(a => inPeriod(achatDate(a), periode, dateMin, dateMax));
     const pPer = paiements.filter(p => inPeriod(p.date || p.timestamp, periode, dateMin, dateMax));
 
-    // VENTES – S1 par défaut (somme des lignes S1), TOUS en double-clic
     const totalVentes = showAllVentes
       ? vPer.reduce((s,v) => s + computeMontantVenteAll(v), 0)
       : vPer.reduce((s,v) => s + computeMontantVenteByTag(v, "stock1"), 0);
 
-    // ACHATS – filtre doc
     const aUsed = showAllAchats ? aPer : aPer.filter(isStock1);
     const totalAchats = aUsed.reduce((s,a) => s + computeMontantAchat(a), 0);
 
-    // PAIEMENTS – Fournisseurs (def) ⇄ Ventes (tous modes)
     const totalPaiements = pPer
       .filter(p => showSalesPayments ? isSalePayment(p) : isSupplierPayment(p))
       .reduce((s,p) => s + (Number(p?.montant) || 0), 0);
 
-    // ====== PRODUITS EN STOCK (S1+S2) – DÉDUPLIQUÉ ======
-    const uniqueIds = new Set();
+    // === MEDICAMENTS (KPI) : fusion par NOM, S1+S2, nettoyage des tags transfert ===
+    const produitsSet = new Set();
 
-    const totalQtyOfStockItem = (item) => {
-      const q = Number(item?.quantite);
-      if (Number.isFinite(q) && q > 0) return q;
+    // 1) Collection "stock" (produit global)
+    (Array.isArray(stock) ? stock : []).forEach((item) => {
+      const rawName = item?.nom || item?.name || "";
+      if (!rawName) return;
+
+      const qGlobal = Number(item?.quantite);
       const s1 = Number(item?.stock1) || 0;
       const s2 = Number(item?.stock2) || 0;
-      return s1 + s2;
-    };
 
-    (Array.isArray(stock) ? stock : []).forEach((item) => {
-      const nom = item?.nom || item?.name || "";
-      const key = `p|${norm(nom)}`;
-      const qty = totalQtyOfStockItem(item);
-      if (qty > 0 && nom) uniqueIds.add(key);
+      if ((Number.isFinite(qGlobal) && qGlobal > 0) || s1 > 0 || s2 > 0) {
+        produitsSet.add(normalizedProductKey(rawName));
+      }
     });
 
+    // 2) Collection "stock_entries" (lots) – ne compte que les noms non déjà vus
     (Array.isArray(stockEntries) ? stockEntries : []).forEach((lot) => {
-      const nom = lot?.nom || "";
-      const lotNum = normalizeLotNumber(lot?.numeroLot);
-      const qty = (Number(lot?.stock1) || 0) + (Number(lot?.stock2) || 0);
-      const key = `l|${norm(nom)}|${norm(lotNum)}`;
-      if (qty > 0 && nom) uniqueIds.add(key);
+      const rawName = lot?.nom || lot?.name || "";
+      if (!rawName) return;
+      const key = normalizedProductKey(rawName);
+      if (produitsSet.has(key)) return; // déjà compté via "stock"
+
+      const s1 = Number(lot?.stock1) || 0;
+      const s2 = Number(lot?.stock2) || 0;
+      if (s1 > 0 || s2 > 0) {
+        produitsSet.add(key);
+      }
     });
 
-    const produitsStock = uniqueIds.size;
+    const produitsStock = produitsSet.size;
 
-    // CAISSE
+    // Caisse (espèces)
     const pPeriod = paiements.filter(p => inPeriod(p.date || p.timestamp, periode, dateMin, dateMax));
-
-    const pSaleCash = pPeriod.filter(p =>
-      isSalePayment(p) && isCash(p?.mode ?? p?.paymentMode ?? p?.moyen ?? p?.typePaiement)
-    );
+    const pSaleCash = pPeriod.filter(p => isSalePayment(p) && isCash(p?.mode ?? p?.paymentMode ?? p?.moyen ?? p?.typePaiement));
     const caisseEncaissements = pSaleCash.reduce((s, p) => s + (Number(p?.montant) || 0), 0);
-
-    const pSupplierCash = pPeriod.filter(p =>
-      isSupplierPayment(p) && isCash(p?.mode ?? p?.paymentMode ?? p?.moyen ?? p?.typePaiement)
-    );
+    const pSupplierCash = pPeriod.filter(p => isSupplierPayment(p) && isCash(p?.mode ?? p?.paymentMode ?? p?.moyen ?? p?.typePaiement));
     const caisseDecaissements = pSupplierCash.reduce((s, p) => s + (Number(p?.montant) || 0), 0);
-
     const caisseSolde = caisseEncaissements - caisseDecaissements;
 
-    // Ruptures & péremptions
+    // Ruptures & péremptions (on laisse les lots distincts, mais on nettoie -S2 pour lisibilité)
     let rows = [];
     (Array.isArray(stock) ? stock : []).forEach((item) => {
       const q = Number(item.quantite) || 0;
@@ -602,7 +524,7 @@ export default function Dashboard() {
       const byQty = (q <= 0) || (q <= seuil);
       const byExp = dluo !== null && dluo <= EXPIRY_THRESHOLD_DAYS;
       if (byQty || byExp) {
-        rows.push({ type:"Produit", nom:item.nom || "Produit", lot:"—", quantite:q, seuil, dluoJours:dluo });
+        rows.push({ type:"Produit", nom: cleanTransferTagName(item.nom || "Produit"), lot:"—", quantite:q, seuil, dluoJours:dluo });
       }
     });
     (Array.isArray(stockEntries) ? stockEntries : []).forEach((lot) => {
@@ -612,7 +534,12 @@ export default function Dashboard() {
       const byQty = (q <= 0) || (q <= seuil);
       const byExp = dluo !== null && dluo <= EXPIRY_THRESHOLD_DAYS;
       if (byQty || byExp) {
-        rows.push({ type:"Lot", nom:lot.nom || "Produit", lot:lot.numeroLot || "N/A", quantite:q, seuil, dluoJours:dluo });
+        rows.push({
+          type:"Lot",
+          nom: cleanTransferTagName(lot.nom || "Produit"),
+          lot: normalizeLotNumber(lot.numeroLot || "N/A"),
+          quantite:q, seuil, dluoJours:dluo
+        });
       }
     });
     rows.sort((a,b) => {
@@ -635,7 +562,7 @@ export default function Dashboard() {
       ruptures: rows 
     };
   }, [
-    ventes, achats, paiements, stock, stockEntries,
+    ventes, achatsValides, paiements, stock, stockEntries,
     periode, dateMin, dateMax,
     showAllVentes, showAllAchats, showSalesPayments,
     computeMontantVenteAll, computeMontantVenteByTag,
@@ -646,8 +573,8 @@ export default function Dashboard() {
   const styles = useMemo(() => {
     const tile = isMobile ? 140 : isTablet ? 170 : 200;
     return {
-      container: { background: "linear-gradient(135deg,#667eea,#764ba2)", minHeight: "100vh", padding: isMobile ? 10 : isTablet ? 15 : 20, fontFamily: "Inter,system-ui,Arial" },
-      card: { background: "#fff", borderRadius: isMobile ? 14 : 22, boxShadow: "0 24px 60px rgba(0,0,0,.15)", overflow: "hidden", margin: "0 auto", maxWidth: isMobile ? "100%" : isTablet ? "95%" : 1500 },
+      container: { background: "linear-gradient(135deg,#667eea,#764ba2)", minHeight: "100vh", padding: isMobile ? 10 : isTablet ? 15 : 20, fontFamily: "Inter,system-ui,Arial", contain:"content" },
+      card: { background: "#fff", borderRadius: isMobile ? 14 : 22, boxShadow: "0 24px 60px rgba(0,0,0,.15)", overflow: "hidden", margin: "0 auto", maxWidth: isMobile ? "100%" : isTablet ? "95%" : 1500, contain:"content" },
       header: { background: "linear-gradient(135deg,#4a5568,#2d3748)", color: "#fff", padding: isMobile ? 14 : 28 },
       chipRow: { display: "flex", justifyContent: "flex-end", gap: 10, marginBottom: 10, flexWrap: "wrap" },
       chip: { display: "flex", alignItems: "center", gap: 10, background: "rgba(255,255,255,.08)", border: "1px solid rgba(255,255,255,.18)", padding: "8px 12px", borderRadius: 999 },
@@ -655,17 +582,14 @@ export default function Dashboard() {
       title: { textAlign: "center", fontSize: isMobile ? "1.8em" : "2.6em", fontWeight: 800, margin: "6px 0 0" },
       subtitle: { textAlign: "center", opacity: .9, marginTop: 6 },
       actions: { marginTop: 16, display: "flex", gap: 12, justifyContent: "center", flexWrap: "wrap" },
-      btn: { width: tile, height: tile, border: "none", borderRadius: isMobile ? 14 : 18, background: "linear-gradient(135deg,#667eea,#764ba2)", color:"#fff", fontWeight:800, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", gap:10, textDecoration:"none", boxShadow:"0 16px 40px rgba(0,0,0,.2)", position: "relative" },
+      btn: { width: tile, height: tile, border: "none", borderRadius: isMobile ? 14 : 18, background: "linear-gradient(135deg,#667eea,#764ba2)", color:"#fff", fontWeight:800, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", gap:10, textDecoration:"none", boxShadow:"0 16px 40px rgba(0,0,0,.2)", position: "relative", transition:"transform .2s ease, opacity .2s ease, box-shadow .2s ease" },
       extendedBadge: { position: "absolute", top: 8, right: 8, background: "linear-gradient(90deg, #ffd700, #ffed4a)", color: "#1a2332", fontSize: "10px", fontWeight: "bold", padding: "2px 6px", borderRadius: "8px", boxShadow: "0 2px 4px rgba(0,0,0,0.2)" },
-      content: { padding: isMobile ? 18 : 34 },
+      content: { padding: isMobile ? 18 : 34, contain:"content" },
       grid: { display: "grid", gridTemplateColumns: isMobile ? "1fr" : isTablet ? "1fr 1fr" : "repeat(5,1fr)", gap: isMobile ? 14 : 22, marginBottom: isMobile ? 16 : 24 },
-      kpiCard: { background: "linear-gradient(135deg,#f8fafc,#edf2f7)", border: "3px solid #e2e8f0", borderRadius: isMobile ? 14 : 20, padding: isMobile ? 16 : 24, position: "relative", cursor: "pointer" },
-      badge: { position:"absolute", top:8, right:8, fontSize:12, fontWeight:800, padding:"4px 8px", borderRadius:999, background:"#e2e8f0", color:"#111827" },
-      kpiValue: (c)=>({ fontSize: isMobile ? "1.5em" : "2em", fontWeight: 800, color:c, marginBottom: 6 }),
-      kpiSubValue: { fontSize: isMobile ? "0.75em" : "0.85em", color: "#6b7280", marginTop: 4, fontWeight: 600 },
-      table: { width:"100%", borderCollapse:"collapse", borderRadius:12, overflow:"hidden", fontSize: isMobile ? ".95em" : "1em" },
+      kpiCard: { background: "linear-gradient(135deg,#f8fafc,#edf2f7)", border: "3px solid #e2e8f0", borderRadius: isMobile ? 14 : 20, padding: isMobile ? 16 : 24, position: "relative", cursor: "pointer", contain:"content", transition:"transform .2s ease, opacity .2s ease, box-shadow .2s ease" },
+      table: { width:"100%", borderCollapse:"collapse", borderRadius:12, overflow:"hidden", fontSize: isMobile ? ".95em" : "1em", tableLayout:"fixed" },
       th: { background:"linear-gradient(135deg,#2d3748,#1a202c)", color:"#fff", textAlign:"left", padding:"10px 12px" },
-      td: { background:"#fff", borderBottom:"1px solid #e2e8f0", padding:"10px 12px", fontWeight:600, color:"#1a202c" },
+      td: { background:"#fff", borderBottom:"1px solid #e2e8f0", padding:"10px 12px", fontWeight:600, color:"#1a202c", wordWrap:"break-word" },
       pill: (bg)=>({ display:"inline-block", padding:"6px 10px", borderRadius:999, fontWeight:800, background:bg, color:"#fff" }),
       notif: (ok)=>({ position:"fixed", top:isMobile?14:24, right:isMobile?14:24, background: ok?"linear-gradient(135deg,#22c55e,#16a34a)":"linear-gradient(135deg,#ef4444,#dc2626)", color:"#fff", padding:"14px 18px", borderRadius:12, boxShadow:"0 18px 40px rgba(0,0,0,.2)", zIndex:1000 }),
     };
@@ -736,9 +660,7 @@ export default function Dashboard() {
 
             {can("voir_achats") && (
               <Link to="/achats" style={{...styles.btn, background:"linear-gradient(135deg,#4299e1,#3182ce)"}} title="Nouvel achat">
-                {isAchatsExtended && (
-                  <div style={styles.extendedBadge}>✨ Étendue</div>
-                )}
+                {isAchatsExtended && (<div style={styles.extendedBadge}>✨ Étendue</div>)}
                 <div style={{fontSize:isMobile?"2.1em":"2.4em"}}>🛒</div><div>Nouvel Achat</div>
               </Link>
             )}
@@ -754,16 +676,9 @@ export default function Dashboard() {
 
             {can("parametres") && (
               <Link to="/parametres" style={{...styles.btn, background:"linear-gradient(135deg,#718096,#4a5568)"}} title="Paramètres & sauvegarde">
-                {isParametresExtended && (
-                  <div style={styles.extendedBadge}>✨ Étendue</div>
-                )}
+                {isParametresExtended && (<div style={styles.extendedBadge}>✨ Étendue</div>)}
                 <div style={{fontSize:isMobile?"2.1em":"2.4em"}}>⚙️</div>
-                <div style={{
-                  whiteSpace: "nowrap",
-                  textAlign: "center",
-                  fontSize: isMobile ? "0.85em" : "1em",
-                  lineHeight: "1.2"
-                }}>
+                <div style={{whiteSpace: "nowrap",textAlign: "center",fontSize: isMobile ? "0.85em" : "1em",lineHeight: "1.2"}}>
                   Paramètres/Sauve
                 </div>
               </Link>
@@ -773,53 +688,72 @@ export default function Dashboard() {
 
         <div style={styles.content}>
           <div style={styles.grid}>
-            <div
-              style={styles.kpiCard}
+            <KPICard
+              badge={showAllVentes ? "TOUS" : "S1"}
+              emoji="💰"
+              value={{ 
+                text: formatDH(stats.totalVentes),
+                style: { fontSize: isMobile ? "1.5em" : "2em", fontWeight: 800, color: "#667eea", marginBottom: 6 }
+              }}
+              label={`Ventes (${periode})`}
               onDoubleClick={() => setShowAllVentes(v => !v)}
-              title="Double-clic: basculer S1 / S1+S2"
-            >
-              <div style={styles.badge}>{showAllVentes ? "TOUS" : "S1"}</div>
-              <div style={{fontSize:isMobile?"2.1em":"2.4em", marginBottom:10}}>💰</div>
-              <div style={styles.kpiValue("#667eea")}>{formatDH(totalVentes)}</div>
-              <div>Ventes ({periode})</div>
-            </div>
-
-            <div
               style={styles.kpiCard}
+              title="Double-clic: basculer S1 / S1+S2"
+              isMobile={isMobile}
+            />
+
+            <KPICard
+              badge={showAllAchats ? "TOUS" : "S1"}
+              emoji="🛒"
+              value={{ 
+                text: formatDH(stats.totalAchats),
+                style: { fontSize: isMobile ? "1.5em" : "2em", fontWeight: 800, color: "#4299e1", marginBottom: 6 }
+              }}
+              label={`Achats (${periode})`}
               onDoubleClick={() => setShowAllAchats(v => !v)}
-              title="Double-clic: basculer S1 / S1+S2"
-            >
-              <div style={styles.badge}>{showAllAchats ? "TOUS" : "S1"}</div>
-              <div style={{fontSize:isMobile?"2.1em":"2.4em", marginBottom:10}}>🛒</div>
-              <div style={styles.kpiValue("#4299e1")}>{formatDH(totalAchats)}</div>
-              <div>Achats ({periode})</div>
-            </div>
-
-            <div
               style={styles.kpiCard}
+              title="Double-clic: basculer S1 / S1+S2"
+              isMobile={isMobile}
+            />
+
+            <KPICard
+              badge={showSalesPayments ? "VENTES" : "FOURNISSEURS"}
+              emoji="💵"
+              value={{ 
+                text: formatDH(stats.totalPaiements),
+                style: { fontSize: isMobile ? "1.5em" : "2em", fontWeight: 800, color: "#16a34a", marginBottom: 6 }
+              }}
+              label={`Paiements (${showSalesPayments ? "Ventes" : "Fournisseurs"})`}
               onDoubleClick={() => setShowSalesPayments(v => !v)}
-              title="Double-clic: basculer Fournisseurs / Ventes (tous modes)"
-            >
-              <div style={styles.badge}>{showSalesPayments ? "VENTES" : "FOURNISSEURS"}</div>
-              <div style={{fontSize:isMobile?"2.1em":"2.4em", marginBottom:10}}>💵</div>
-              <div style={styles.kpiValue("#16a34a")}>{formatDH(totalPaiements)}</div>
-              <div>Paiements ({showSalesPayments ? "Ventes" : "Fournisseurs"})</div>
-            </div>
+              style={styles.kpiCard}
+              title="Double-clic: basculer Fournisseurs / Ventes"
+              isMobile={isMobile}
+            />
 
-            <div style={{...styles.kpiCard, cursor:"default"}} title="Produits (stock + lots) – dédupliqué">
-              <div style={{fontSize:isMobile?"2.1em":"2.4em", marginBottom:10}}>📚</div>
-              <div style={styles.kpiValue("#06b6d4")}>{produitsStock}</div>
-              <div>Médicaments(Stock)</div>
-            </div>
+            <KPICard
+              emoji="📚"
+              value={{ 
+                text: stats.produitsStock,
+                style: { fontSize: isMobile ? "1.5em" : "2em", fontWeight: 800, color: "#06b6d4", marginBottom: 6 }
+              }}
+              label="Médicaments(Stock)"
+              style={{...styles.kpiCard, cursor:"default"}}
+              title="Comptage fusionné S1+S2 par NOM (transferts nettoyés)"
+              isMobile={isMobile}
+            />
 
-            <div style={{...styles.kpiCard, cursor:"default"}} title={`Caisse espèces (${getPeriodLabel(periode)}) - Encaissements: ${formatDH(caisseEncaissements)} | Décaissements: ${formatDH(caisseDecaissements)}`}>
-              <div style={{fontSize:isMobile?"2.1em":"2.4em", marginBottom:10}}>💶</div>
-              <div style={styles.kpiValue(caisseSolde >= 0 ? "#10b981" : "#ef4444")}>{formatDH(caisseSolde)}</div>
-              <div>Caisse - {getPeriodLabel(periode)}</div>
-              <div style={styles.kpiSubValue}>
-                IN: {formatDH(caisseEncaissements)} | OUT: {formatDH(caisseDecaissements)}
-              </div>
-            </div>
+            <KPICard
+              emoji="💶"
+              value={{ 
+                text: formatDH(stats.caisseSolde),
+                style: { fontSize: isMobile ? "1.5em" : "2em", fontWeight: 800, color: stats.caisseSolde >= 0 ? "#10b981" : "#ef4444", marginBottom: 6 }
+              }}
+              label={`Caisse - ${getPeriodLabel(periode)}`}
+              subValue={`IN: ${formatDH(stats.caisseEncaissements)} | OUT: ${formatDH(stats.caisseDecaissements)}`}
+              style={{...styles.kpiCard, cursor:"default"}}
+              title={`Caisse espèces (${getPeriodLabel(periode)})`}
+              isMobile={isMobile}
+            />
           </div>
 
           <div style={{ margin: "10px 0 20px", display: "flex", gap: 12, flexWrap: "wrap" }}>
@@ -851,6 +785,14 @@ export default function Dashboard() {
           </h3>
           <div style={{ overflowX: "auto" }}>
             <table style={styles.table}>
+              <colgroup>
+                <col style={{ width:"10%" }} />
+                <col style={{ width:"34%" }} />
+                <col style={{ width:"16%" }} />
+                <col style={{ width:"12%" }} />
+                <col style={{ width:"12%" }} />
+                <col style={{ width:"16%" }} />
+              </colgroup>
               <thead>
                 <tr>
                   <th style={styles.th}>Type</th>
@@ -862,10 +804,10 @@ export default function Dashboard() {
                 </tr>
               </thead>
               <tbody>
-                {ruptures.length === 0 && (
+                {stats.ruptures.length === 0 && (
                   <tr><td style={styles.td} colSpan={6}>Aucune rupture ni péremption proche 🎉</td></tr>
                 )}
-                {ruptures.map((r, i) => {
+                {stats.ruptures.map((r, i) => {
                   const pill =
                     r.quantite <= 0
                       ? styles.pill("linear-gradient(135deg,#ef4444,#dc2626)")
