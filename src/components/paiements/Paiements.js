@@ -413,8 +413,6 @@ export default function Paiements() {
   useEffect(() => {
     if (role === "vendeuse") {
       setRelatedTo("ventes");
-    } else {
-      setRelatedTo("achats");
     }
   }, [role]);
 
@@ -1220,21 +1218,19 @@ export default function Paiements() {
 
       <div className="card" style={{ marginBottom: 16 }}>
         <div className="controls" style={{ marginBottom: 10 }}>
-          {isVendeuse && (
-            <button
-              className={`btn ${relatedTo === "ventes" ? "on" : ""}`}
-              onClick={() => {
-                setRelatedTo("ventes");
-                setExpandedDocId(null);
-                setSelectedDocPay("");
-                setCashAmount("");
-                setPayMode("Espèces");
-                setCreateInstr([]);
-              }}
-            >
-              📊 Ventes
-            </button>
-          )}
+          <button
+            className={`btn ${relatedTo === "ventes" ? "on" : ""}`}
+            onClick={() => {
+              setRelatedTo("ventes");
+              setExpandedDocId(null);
+              setSelectedDocPay("");
+              setCashAmount("");
+              setPayMode("Espèces");
+              setCreateInstr([]);
+            }}
+          >
+            📊 Ventes
+          </button>
           {!isVendeuse && (
             <button
               className={`btn ${relatedTo === "achats" ? "on" : ""}`}
