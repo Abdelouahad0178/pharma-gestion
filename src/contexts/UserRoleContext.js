@@ -1,5 +1,5 @@
-// src/contexts/UserRoleContext.js - VERSION LOGIQUE INVERSÉE
-// La vendeuse a TOUS les droits par défaut, on RETIRE ce qu'on ne veut pas
+// src/contexts/UserRoleContext.js - VERSION CORRIGÉE
+// Logique inversée : la vendeuse a TOUS les droits par défaut
 
 import React, {
   createContext,
@@ -48,15 +48,19 @@ export function UserRoleProvider({ children }) {
   const [adminPopup, setAdminPopup] = useState(null);
   const [paymentWarning, setPaymentWarning] = useState(null);
 
-  // ✅ NOUVELLE LOGIQUE : Permissions RETIRÉES au lieu de permissions ajoutées
+  // Permissions retirées (logique inversée)
   const [removedPermissions, setRemovedPermissions] = useState([]);
 
-  // ✅ Refs pour garantir 1 seul listener actif
+  // ✅ Refs pour garantir 1 seul listener actif ET pour avoir les valeurs actuelles
   const authUnsubRef = useRef(null);
   const userUnsubRef = useRef(null);
   const socUnsubRef = useRef(null);
   const currentUserIdRef = useRef(null);
   const currentSocieteIdRef = useRef(null);
+  
+  // ✅ NOUVEAU : Refs pour les valeurs actuelles (évite les stales closures)
+  const currentRoleRef = useRef(null);
+  const currentUserRef = useRef(null);
 
   // Utilitaire : reset réseau si "Target ID already exists"
   const tryRecoverWatchError = async (err) => {
@@ -118,9 +122,10 @@ export function UserRoleProvider({ children }) {
         setPaymentWarning(null);
         setSocieteName(null);
         setRemovedPermissions([]);
-        setLoading(false);
         currentUserIdRef.current = null;
         currentSocieteIdRef.current = null;
+        currentRoleRef.current = null;
+        currentUserRef.current = null;
         return;
       }
 
@@ -148,9 +153,13 @@ export function UserRoleProvider({ children }) {
             if (snap.exists()) {
               const data = snap.data();
 
+              // ✅ CORRECTION : Vérifier que nous avons bien un rôle valide
+              const userRole = (data.role || "vendeuse").toLowerCase();
+              console.log(`[UserRoleContext] User ${firebaseUser.email} - Role: ${userRole}`);
+
               // États principaux
               setIsDeleted(data.deleted === true);
-              setRole(data.role || "vendeuse");
+              setRole(userRole);
               setSocieteId(data.societeId || null);
               setIsLocked(data.locked === true || data.isLocked === true);
               setIsOwner(data.isOwner === true);
@@ -158,15 +167,18 @@ export function UserRoleProvider({ children }) {
               setAdminPopup(data.adminPopup || null);
               setPaymentWarning(data.paymentWarning || null);
 
-              // ✅ LOGIQUE INVERSÉE : On charge les permissions RETIRÉES
+              // Permissions retirées
               const normalizedRemoved = normalizePermissions(data.removedPermissions || []);
               setRemovedPermissions(normalizedRemoved);
 
-              setUser({
+              // ✅ NOUVEAU : Mettre à jour les refs avec les valeurs actuelles
+              currentRoleRef.current = userRole;
+              
+              const userData = {
                 ...firebaseUser,
                 ...data,
                 societeId: data.societeId || null,
-                role: data.role || "vendeuse",
+                role: userRole,
                 locked: data.locked === true || data.isLocked === true,
                 deleted: data.deleted === true,
                 isOwner: data.isOwner === true,
@@ -174,11 +186,17 @@ export function UserRoleProvider({ children }) {
                 adminPopup: data.adminPopup || null,
                 paymentWarning: data.paymentWarning || null,
                 removedPermissions: normalizedRemoved,
-              });
+              };
+              
+              currentUserRef.current = userData;
+              setUser(userData);
             } else {
               // Document utilisateur absent → valeurs par défaut
+              const defaultRole = "vendeuse";
+              console.warn(`[UserRoleContext] Pas de document pour ${firebaseUser.uid} - Rôle par défaut: ${defaultRole}`);
+
               const defaultData = {
-                role: "vendeuse",
+                role: defaultRole,
                 societeId: null,
                 locked: false,
                 deleted: false,
@@ -199,71 +217,61 @@ export function UserRoleProvider({ children }) {
               setPaymentWarning(defaultData.paymentWarning);
               setRemovedPermissions([]);
 
-              setUser({
+              currentRoleRef.current = defaultRole;
+              
+              const userData = {
                 ...firebaseUser,
                 ...defaultData,
-              });
+              };
+              
+              currentUserRef.current = userData;
+              setUser(userData);
             }
 
             setLoading(false);
           },
           async (error) => {
-            // Gestion d'erreur : fallback permissif minimal
-            if (error?.code === "permission-denied") {
-              setRole("vendeuse");
-              setSocieteId(null);
-              setIsLocked(true);
-              setIsDeleted(false);
-              setIsOwner(false);
-              setIsActive(false);
-              setAdminPopup("Erreur de permissions - contactez l'administrateur");
-              setPaymentWarning(null);
-              setRemovedPermissions([]);
+            console.error("[UserRoleContext] Erreur listener user:", error);
+            
+            // Gestion d'erreur : fallback
+            const defaultRole = "vendeuse";
+            setRole(defaultRole);
+            setSocieteId(null);
+            setIsLocked(false);
+            setIsDeleted(false);
+            setIsOwner(false);
+            setIsActive(true);
+            setAdminPopup(null);
+            setPaymentWarning(null);
+            setRemovedPermissions([]);
 
-              setUser({
-                ...firebaseUser,
-                societeId: null,
-                role: "vendeuse",
-                locked: true,
-                deleted: false,
-                isOwner: false,
-                active: false,
-                adminPopup: "Erreur de permissions - contactez l'administrateur",
-                paymentWarning: null,
-                removedPermissions: [],
-              });
-            } else {
-              setRole("vendeuse");
-              setSocieteId(null);
-              setIsLocked(false);
-              setIsDeleted(false);
-              setIsOwner(false);
-              setIsActive(true);
-              setAdminPopup(null);
-              setPaymentWarning(null);
-              setRemovedPermissions([]);
-
-              setUser({
-                ...firebaseUser,
-                societeId: null,
-                role: "vendeuse",
-                locked: false,
-                deleted: false,
-                isOwner: false,
-                active: true,
-                adminPopup: null,
-                paymentWarning: null,
-                removedPermissions: [],
-              });
-            }
+            currentRoleRef.current = defaultRole;
+            
+            const userData = {
+              ...firebaseUser,
+              societeId: null,
+              role: defaultRole,
+              locked: false,
+              deleted: false,
+              isOwner: false,
+              active: true,
+              adminPopup: null,
+              paymentWarning: null,
+              removedPermissions: [],
+            };
+            
+            currentUserRef.current = userData;
+            setUser(userData);
 
             setLoading(false);
             await tryRecoverWatchError(error);
           }
         );
       } catch (e) {
-        // Erreur d'attachement → défauts
-        setRole("vendeuse");
+        console.error("[UserRoleContext] Erreur attachement listener:", e);
+        
+        const defaultRole = "vendeuse";
+        setRole(defaultRole);
         setSocieteId(null);
         setIsLocked(false);
         setIsDeleted(false);
@@ -273,10 +281,12 @@ export function UserRoleProvider({ children }) {
         setPaymentWarning(null);
         setRemovedPermissions([]);
 
-        setUser({
+        currentRoleRef.current = defaultRole;
+        
+        const userData = {
           ...firebaseUser,
           societeId: null,
-          role: "vendeuse",
+          role: defaultRole,
           locked: false,
           deleted: false,
           isOwner: false,
@@ -284,7 +294,10 @@ export function UserRoleProvider({ children }) {
           adminPopup: null,
           paymentWarning: null,
           removedPermissions: [],
-        });
+        };
+        
+        currentUserRef.current = userData;
+        setUser(userData);
 
         setLoading(false);
         await tryRecoverWatchError(e);
@@ -373,47 +386,32 @@ export function UserRoleProvider({ children }) {
   }, [user?.uid, societeId, isDeleted]);
 
   // =========================
-  // ✅ NOUVELLE LOGIQUE : Permissions avec système inversé
+  // Permissions (logique inversée)
   // =========================
 
-  /**
-   * Calcul des permissions EFFECTIVES avec logique inversée :
-   * - Si pharmacien/propriétaire → toutes les permissions
-   * - Si vendeuse :
-   *   - SANS removedPermissions → toutes les permissions (sauf DOCTOR_ONLY)
-   *   - AVEC removedPermissions → toutes les permissions SAUF celles retirées
-   */
   const effectivePermissions = useMemo(() => {
-    // Pharmacien/Propriétaire = accès complet
     if (isOwner || (role || "").toLowerCase() === "docteur") {
       return permissions.docteur || [];
     }
 
-    // Vendeuse : toutes les permissions SAUF doctor-only
     const allAvailablePermissions = (permissions.docteur || []).filter(p => 
       !DOCTOR_ONLY_PERMISSIONS.includes(p)
     );
 
-    // Si aucune restriction, accès complet
     if (!removedPermissions || removedPermissions.length === 0) {
       return allAvailablePermissions;
     }
 
-    // Retirer les permissions interdites
     return allAvailablePermissions.filter(p => 
       !removedPermissions.includes(p)
     );
   }, [role, isOwner, removedPermissions]);
 
-  /**
-   * ✅ Vérification d'une permission (logique inversée)
-   */
   const can = (permission) => {
     if (isDeleted || !user || !authReady) return false;
     if (isLocked && !isOwner) return false;
     if (!isActive && !isOwner) return false;
 
-    // Permissions "owner-only" implicites
     const ownerOnly = [
       "gerer_utilisateurs",
       "modifier_roles",
@@ -425,52 +423,34 @@ export function UserRoleProvider({ children }) {
       return isOwner && (role || "").toLowerCase() === "docteur" && !isDeleted && isActive && authReady;
     }
 
-    // Le propriétaire a tous les droits
     if (isOwner && user && !isDeleted) return true;
 
-    // Permissions réservées pharmacien
     if (DOCTOR_ONLY_PERMISSIONS.includes(permission)) {
       return (role || "").toLowerCase() === "docteur";
     }
 
-    // ✅ LOGIQUE INVERSÉE : Vérifier si la permission est retirée
     if (removedPermissions && removedPermissions.includes(permission)) {
-      return false; // Permission explicitement retirée
+      return false;
     }
 
-    // Sinon, la permission est autorisée
     return true;
   };
 
-  /** Expose la liste effective */
   const getUserPermissions = () => [...effectivePermissions];
 
-  /** ✅ Vérifier si des restrictions sont actives */
   const hasRestrictions = () => removedPermissions && removedPermissions.length > 0;
 
-  /** ✅ RÉTROCOMPATIBILITÉ : hasCustomPermissions (alias de hasRestrictions) */
   const hasCustomPermissions = () => hasRestrictions();
 
-  /** ✅ Obtenir les permissions retirées */
-  const getRemovedPermissions = () => {
-    return removedPermissions || [];
-  };
+  const getRemovedPermissions = () => removedPermissions || [];
 
-  /** ✅ RÉTROCOMPATIBILITÉ : getExtraPermissions pour l'UI existante */
-  const getExtraPermissions = () => {
-    // Dans la logique inversée, on retourne un tableau vide 
-    // car il n'y a plus de "permissions supplémentaires" mais des "permissions retirées"
-    // Pour l'affichage, on peut montrer le nombre de permissions actives
-    return [];
-  };
+  const getExtraPermissions = () => [];
 
-  /** ✅ Vérifier si accès complet (aucune restriction) */
   const hasFullAccess = () => {
     if (isOwner || (role || "").toLowerCase() === "docteur") return true;
     return !hasRestrictions();
   };
 
-  /** ✅ Obtenir le statut d'une permission */
   const getPermissionStatus = (permission) => {
     if (DOCTOR_ONLY_PERMISSIONS.includes(permission)) {
       return 'doctor_only';
@@ -487,7 +467,6 @@ export function UserRoleProvider({ children }) {
     return 'allowed';
   };
 
-  /** Statistiques sur les permissions */
   const getPermissionChanges = () => {
     const allAvailable = (permissions.docteur || []).filter(p => 
       !DOCTOR_ONLY_PERMISSIONS.includes(p)
@@ -520,7 +499,6 @@ export function UserRoleProvider({ children }) {
     }
   };
 
-  // ✅ RÉTROCOMPATIBILITÉ : refreshCustomPermissions (alias)
   const refreshCustomPermissions = refreshRemovedPermissions;
 
   const canAccessApp = () => {
@@ -674,6 +652,10 @@ export function UserRoleProvider({ children }) {
     return "Utilisateur standard";
   };
 
+  // ✅ NOUVEAU : Getter pour les valeurs actuelles (évite stale closures)
+  const getCurrentRole = () => currentRoleRef.current || role;
+  const getCurrentUser = () => currentUserRef.current || user;
+
   const contextValue = {
     role,
     user,
@@ -688,7 +670,7 @@ export function UserRoleProvider({ children }) {
     adminPopup,
     paymentWarning,
 
-    // ✅ Permissions (logique inversée)
+    // Permissions
     removedPermissions,
     hasRestrictions,
     getRemovedPermissions,
@@ -697,13 +679,13 @@ export function UserRoleProvider({ children }) {
     getPermissionChanges,
     getUserPermissions,
     refreshRemovedPermissions,
-    refreshCustomPermissions,  // ⭐ AJOUTER CETTE LIGNE
+    refreshCustomPermissions,
     can,
     canAccessApp,
 
-    // ✅ RÉTROCOMPATIBILITÉ pour l'UI existante
-    hasCustomPermissions, // Alias de hasRestrictions
-    getExtraPermissions,  // Retourne [] dans la logique inversée
+    // Rétrocompatibilité
+    hasCustomPermissions,
+    getExtraPermissions,
 
     // Infos & stats
     getBlockMessage,
@@ -725,6 +707,10 @@ export function UserRoleProvider({ children }) {
     canChangeUserRole,
     canPromoteToDoctor,
     canDemoteToVendeuse,
+
+    // ✅ NOUVEAU : Getters pour valeurs actuelles
+    getCurrentRole,
+    getCurrentUser,
   };
 
   return (

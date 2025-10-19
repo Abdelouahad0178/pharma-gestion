@@ -154,7 +154,7 @@ export default function Parametres() {
     showNotification("Image du cachet supprimée", "info");
   }, [showNotification]);
 
-  /* ===== CONVERSION DATES AVEC FUSEAU HORAIRE MAROC (UTC+1) ===== */
+  /* ===== FORMAT DATE AVEC FUSEAU HORAIRE MAROC (UTC+1) ===== */
   const formatDate = useCallback((date) => {
     if (!date) return "Date inconnue";
     let dateObj;
@@ -175,17 +175,38 @@ export default function Parametres() {
 
     if (isNaN(dateObj.getTime())) return "Date invalide";
 
-    // Convertir au fuseau horaire Maroc (UTC+1)
-    // Ajouter 1 heure au timestamp
-    const marocTime = new Date(dateObj.getTime() + (1 * 60 * 60 * 1000));
-
-    const year = marocTime.getUTCFullYear();
-    const month = String(marocTime.getUTCMonth() + 1).padStart(2, "0");
-    const day = String(marocTime.getUTCDate()).padStart(2, "0");
-    const hours = String(marocTime.getUTCHours()).padStart(2, "0");
-    const minutes = String(marocTime.getUTCMinutes()).padStart(2, "0");
-
-    return `${day}/${month}/${year} ${hours}:${minutes}`;
+    try {
+      // Format avec fuseau horaire Maroc (Africa/Casablanca = UTC+1)
+      const options = {
+        timeZone: 'Africa/Casablanca',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: false
+      };
+      
+      const formatter = new Intl.DateTimeFormat('fr-FR', options);
+      const parts = formatter.formatToParts(dateObj);
+      
+      let day = '', month = '', year = '', hour = '', minute = '';
+      
+      parts.forEach(part => {
+        if (part.type === 'day') day = part.value;
+        if (part.type === 'month') month = part.value;
+        if (part.type === 'year') year = part.value;
+        if (part.type === 'hour') hour = part.value;
+        if (part.type === 'minute') minute = part.value;
+      });
+      
+      return `${day}/${month}/${year} ${hour}:${minute}`;
+    } catch (e) {
+      console.warn("Erreur formatage date:", e);
+      // Fallback simple
+      return dateObj.toLocaleString('fr-FR');
+    }
   }, []);
 
   /* ===== FETCHING UTILISATEURS ===== */
@@ -394,6 +415,8 @@ export default function Parametres() {
   const getActivityTypeLabel = useCallback((type) => {
     const labels = {
       vente: "Vente",
+      vente_modifiee: "Vente Modifiée",
+      vente_supprimee: "Vente Supprimée",
       achat: "Achat",
       paiement: "Paiement",
       stock_ajout: "Ajout Stock",
@@ -414,7 +437,10 @@ export default function Parametres() {
   const formatActivityDetails = useCallback((type, details) => {
     switch (type) {
       case "vente":
-        return `Client: ${details.client || "N/A"}${details.hasLots ? ` (${details.nombreLots || 0} lots)` : ""}`;
+      case "vente_modifiee":
+        return `Client: ${details.client || "N/A"}${details.hasLots ? ` (${details.nombreLots || 0} lots)` : ""} • ${details.montant?.toFixed(2) || 0} DH`;
+      case "vente_supprimee":
+        return `Client: ${details.client || "N/A"} • ${details.montant?.toFixed(2) || 0} DH (Supprimée)`;
       case "achat":
         return `Fournisseur: ${details.fournisseur || "N/A"}${details.hasLots ? ` (${details.nombreLots || 0} lots)` : ""}`;
       case "paiement":
@@ -587,6 +613,8 @@ export default function Parametres() {
 
   const getTypeColor = useCallback((type) => {
     if ((type || "").includes("Multi-Lots")) return "#667eea";
+    if ((type || "").includes("Supprimée")) return "#ef4444";
+    if ((type || "").includes("Modifiée")) return "#f59e0b";
     switch ((type || "").split(" ")[0]) {
       case "Vente":
         return "#48bb78";

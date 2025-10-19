@@ -15,6 +15,7 @@ import {
   where,
   setDoc,
   runTransaction,
+  addDoc,
 } from "firebase/firestore";
 
 /* ======================================================
@@ -332,6 +333,26 @@ export default function Ventes() {
   const [lastRealtimeBeat, setLastRealtimeBeat] = useState(null);
   const lastAddTsRef = useRef(0);
 
+  /* ===== LOGGING ACTIVITÉ ===== */
+  const logActivity = useCallback(async (type, details) => {
+    if (!societeId || !user) return;
+    try {
+      await addDoc(collection(db, "societe", societeId, "activities"), {
+        type,
+        userId: user.uid,
+        userEmail: user.email,
+        timestamp: Timestamp.now(),
+        details: {
+          ...details,
+          action: type,
+        },
+      });
+      console.log(`✅ Activité enregistrée: ${type}`);
+    } catch (e) {
+      console.error("Erreur logging activity:", e);
+    }
+  }, [societeId, user]);
+
   /* ===== CHARGEMENT ===== */
   useEffect(() => { setWaiting(loading || !societeId || !user); }, [loading, societeId, user]);
 
@@ -437,7 +458,6 @@ export default function Ventes() {
     [articles]
   );
 
-  // >>>>> NOUVEAU : compte d'articles DISTINCTS dans le panier
   const distinctPanierCount = useMemo(() => distinctCountByProduit(articles), [articles]);
 
   const ventesFiltrees = useMemo(() => {
@@ -736,6 +756,23 @@ export default function Ventes() {
         }
       });
 
+      // LOG ACTIVITÉ
+      const hasLots = articles.some((a) => a.numeroLot);
+      const nombreLots = new Set(articles.map((a) => a.numeroLot).filter(Boolean)).size;
+      const montantTotal = articles.reduce(
+        (sum, a) => sum + (safeNumber(a.prixUnitaire) * safeNumber(a.quantite) - safeNumber(a.remise)), 0
+      );
+
+      await logActivity(isEditing ? "vente_modifiee" : "vente", {
+        client,
+        montant: montantTotal,
+        articles: articles.length,
+        statutPaiement,
+        modePaiement,
+        hasLots,
+        nombreLots: nombreLots > 0 ? nombreLots : 0,
+      });
+
       setSuccess(isEditing ? "Vente modifiée avec succès !" : "Vente enregistrée avec succès !");
       resetForm();
       setTimeout(() => { setShowForm(false); setSuccess(""); }, 1200);
@@ -745,7 +782,7 @@ export default function Ventes() {
     } finally {
       setIsSaving(false);
     }
-  }, [user, societeId, client, dateVente, articles, isEditing, editId, statutPaiement, modePaiement, notesVente, beepSuccess]);
+  }, [user, societeId, client, dateVente, articles, isEditing, editId, statutPaiement, modePaiement, notesVente, logActivity]);
 
   const handleEditVente = useCallback((vente) => {
     setEditId(vente.id);
@@ -823,6 +860,13 @@ export default function Ventes() {
         } catch (e) { console.warn("Suppression paiement liée: ", e); }
       });
 
+      // LOG ACTIVITÉ
+      await logActivity("vente_supprimee", {
+        client: vente.client,
+        montant: vente.montantTotal,
+        articles: (vente.articles || []).length,
+      });
+
       beepSuccess();
       setSuccess("Vente supprimée et stock restauré avec succès !");
       setTimeout(() => setSuccess(""), 2400);
@@ -833,7 +877,7 @@ export default function Ventes() {
     } finally {
       setIsSaving(false);
     }
-  }, [societeId, beepSuccess, beepError, user]);
+  }, [societeId, beepSuccess, beepError, user, logActivity]);
 
   const handleViewDetails = useCallback((vente) => { setSelectedVente(vente); setShowDetails(true); }, []);
 
@@ -1034,7 +1078,7 @@ export default function Ventes() {
         <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:16}}>
           <div>
             <h1 style={{margin:0,fontSize:32,fontWeight:800,background:"linear-gradient(135deg,#667eea,#764ba2)",WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent",backgroundClip:"text"}}>Gestion des Ventes Multi-Articles</h1>
-            <p style={{margin:"6px 0 0",color:"#6b7280",fontSize:16}}>Système de vente multi-lots avec restauration automatique du stock.</p>
+            <p style={{margin:"6px 0 0",color:"#6b7280",fontSize:16}}>Système de vente multi-lots avec restauration automatique du stock et suivi d'activités.</p>
             <div style={{marginTop:6}}><RealtimeBeat lastRealtimeBeat={lastRealtimeBeat} /></div>
           </div>
 
@@ -1217,7 +1261,7 @@ export default function Ventes() {
             <div style={{background:"linear-gradient(135deg,#fff7ed,#fed7aa)",borderRadius:16,padding:16,marginBottom:12,border:"2px solid #f97316"}}>
               <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
                 <h3 style={{margin:0,color:"#c2410c",fontSize:18,fontWeight:700}}>
-                  🛒 Produits du panier ({distinctPanierCount})
+                  🛍️ Produits du panier ({distinctPanierCount})
                 </h3>
                 <button
                   onClick={() => setArticles([])}
@@ -1435,7 +1479,6 @@ export default function Ventes() {
                       sum + (safeNumber(a.prixUnitaire) * safeNumber(a.quantite) - safeNumber(a.remise || 0)), 0
                     );
 
-                  // >>>>> NOUVEAU : nombre de PRODUITS DISTINCTS dans la vente (peu importe S1/S2)
                   const distinctInVente = distinctCountByProduit(v.articles || []);
 
                   const stockCounts = { stock1: 0, stock2: 0, unknown: 0 };
@@ -1472,11 +1515,9 @@ export default function Ventes() {
                       </td>
                       <td style={{ padding: 16, textAlign: "center", borderRight: "1px solid #f1f5f9" }}>
                         <div style={{ display: "flex", gap: 6, justifyContent: "center", alignItems: "center", flexWrap: "wrap" }}>
-                          {/* Distinct products */}
                           <span style={{ background: "linear-gradient(135deg, #8b5cf6, #7c3aed)", color: "white", padding: "3px 7px", borderRadius: 10, fontSize: 10, fontWeight: 700 }} title="Produits distincts (S1 et S2 considérés comme le même produit)">
                             {distinctInVente} prod.
                           </span>
-                          {/* Répartition par stock (reste en lignes, utile pour la traçabilité) */}
                           {stockCounts.stock1 > 0 && (<span style={{ background: "linear-gradient(135deg, #3b82f6, #2563eb)", color: "white", padding: "2px 5px", borderRadius: 8, fontSize: 9, fontWeight: 600 }} title={`${stockCounts.stock1} lignes depuis Stock1`}>S1:{stockCounts.stock1}</span>)}
                           {stockCounts.stock2 > 0 && (<span style={{ background: "linear-gradient(135deg, #10b981, #059669)", color: "white", padding: "2px 5px", borderRadius: 8, fontSize: 9, fontWeight: 600 }} title={`${stockCounts.stock2} lignes depuis Stock2`}>S2:{stockCounts.stock2}</span>)}
                           {applied > 0 && (<span style={{ background: "linear-gradient(135deg, #22c55e, #16a34a)", color: "white", padding: "2px 6px", borderRadius: 8, fontSize: 9, fontWeight: 700 }} title="Lignes appliquées au stock">✓ {applied}</span>)}
@@ -1554,7 +1595,6 @@ export default function Ventes() {
               </div>
             </div>
 
-            {/* >>>>> NOUVEAU : compteur distinct dans le titre */}
             <h3 style={{margin:"0 0 10px",fontSize:"clamp(15px, 2.2vw, 18px)",fontWeight:600,color:"#374151"}}>
               Produits distincts ({distinctCountByProduit(selectedVente?.articles || [])})
             </h3>
@@ -1604,9 +1644,9 @@ export default function Ventes() {
                         </td>
                         <td style={{ padding: 11, textAlign: "center" }}>
                           {isApplied ? (
-                            <span title="Appliquée au stock" style={{ background: "linear-gradient(135deg, #22c55e, #16a34a)", color: "white", padding: "3px 8px", borderRadius: 10, fontSize: 10, fontWeight: 700 }}>✓ appliqué</span>
+                            <span title="Appliquée au stock" style={{ background: "linear-gradient(135deg, #22c55e, #16a34a)", color: "white", padding: "3px 8px", borderRadius: 10, fontSize: 10, fontWeight: 700 }}>✓ appliquée</span>
                           ) : isDismissed ? (
-                            <span title="Ignorée" style={{ background: "linear-gradient(135deg, #6b7280, #4b5563)", color: "white", padding: "3px 8px", borderRadius: 10, fontSize: 10, fontWeight: 700 }}>⊗ ignoré</span>
+                            <span title="Ignorée" style={{ background: "linear-gradient(135deg, #6b7280, #4b5563)", color: "white", padding: "3px 8px", borderRadius: 10, fontSize: 10, fontWeight: 700 }}>⊗ ignorée</span>
                           ) : (
                             <span title="En attente" style={{ background: "linear-gradient(135deg, #f59e0b, #d97706)", color: "white", padding: "3px 8px", borderRadius: 10, fontSize: 10, fontWeight: 700 }}>… attente</span>
                           )}
