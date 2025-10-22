@@ -95,7 +95,8 @@ export default function Parametres() {
   }, [loading, societeId, user]);
 
   /* ===== Rôles autorisés ===== */
-  const isRoleAutorise = (r) => ["pharmacien", "admin", "ADMIN", "docteur"].includes((r || "").toLowerCase());
+  const isRoleAutorise = (r) =>
+    ["pharmacien", "admin", "ADMIN", "docteur"].includes((r || "").toLowerCase());
 
   /* ===== Upload image (cachet) ===== */
   const handleImageUpload = useCallback(async (event) => {
@@ -154,69 +155,85 @@ export default function Parametres() {
     showNotification("Image du cachet supprimée", "info");
   }, [showNotification]);
 
-  /* ===== FORMAT DATE AVEC FUSEAU HORAIRE MAROC (UTC+1) ===== */
+  /* ===================== Utilitaires Date & Compteurs ===================== */
+
+  // Transforme divers formats Firestore en Date JS
+  const toDate = (date) => {
+    if (!date) return null;
+    if (date instanceof Date) return date;
+    if (date?.seconds) return new Date(date.seconds * 1000);
+    if (date?.toDate && typeof date.toDate === "function") return date.toDate();
+    if (typeof date === "number") return new Date(date);
+    if (typeof date === "string") {
+      const iso = date.includes("T") ? date : date.replace(" ", "T");
+      return new Date(iso);
+    }
+    return null;
+  };
+
+  // Affiche au fuseau Africa/Casablanca
   const formatDate = useCallback((date) => {
-    if (!date) return "Date inconnue";
-    let dateObj;
-
-    if (date.seconds) {
-      dateObj = new Date(date.seconds * 1000);
-    } else if (date.toDate && typeof date.toDate === "function") {
-      dateObj = date.toDate();
-    } else if (date instanceof Date) {
-      dateObj = date;
-    } else if (typeof date === "string") {
-      dateObj = new Date(date);
-    } else if (typeof date === "number") {
-      dateObj = new Date(date);
-    } else {
-      return "Date invalide";
-    }
-
-    if (isNaN(dateObj.getTime())) return "Date invalide";
-
-    try {
-      // Format avec fuseau horaire Maroc (Africa/Casablanca = UTC+1)
-      const options = {
-        timeZone: 'Africa/Casablanca',
-        year: 'numeric',
-        month: '2-digit',
-        day: '2-digit',
-        hour: '2-digit',
-        minute: '2-digit',
-        second: '2-digit',
-        hour12: false
-      };
-      
-      const formatter = new Intl.DateTimeFormat('fr-FR', options);
-      const parts = formatter.formatToParts(dateObj);
-      
-      let day = '', month = '', year = '', hour = '', minute = '';
-      
-      parts.forEach(part => {
-        if (part.type === 'day') day = part.value;
-        if (part.type === 'month') month = part.value;
-        if (part.type === 'year') year = part.value;
-        if (part.type === 'hour') hour = part.value;
-        if (part.type === 'minute') minute = part.value;
-      });
-      
-      return `${day}/${month}/${year} ${hour}:${minute}`;
-    } catch (e) {
-      console.warn("Erreur formatage date:", e);
-      // Fallback simple
-      return dateObj.toLocaleString('fr-FR');
-    }
+    const d = toDate(date);
+    if (!d || isNaN(d.getTime())) return "Date invalide";
+    const opts = {
+      timeZone: "Africa/Casablanca",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    };
+    const parts = new Intl.DateTimeFormat("fr-FR", opts).formatToParts(d);
+    const get = (t) => parts.find((p) => p.type === t)?.value || "";
+    return `${get("day")}/${get("month")}/${get("year")} ${get("hour")}:${get("minute")}`;
   }, []);
 
-  /* ===== FETCHING UTILISATEURS ===== */
+  // >>> Coerceur universel de "nombre d'articles"
+  const coerceCount = (value) => {
+    if (Array.isArray(value)) return value.length;
+    if (typeof value === "number") return value;
+    if (value && typeof value === "object") {
+      if (Array.isArray(value.items)) return value.items.length;
+      if (Array.isArray(value.lignes)) return value.lignes.length;
+      if (typeof value.count === "number") return value.count;
+      if (typeof value.total === "number") return value.total;
+      if (typeof value.value === "number") return value.value;
+    }
+    return 0;
+  };
+
+  // Pour le dédoublonnage (bucket 10 min)
+  const minuteBucket = (date) => {
+    const d = toDate(date);
+    if (!d || isNaN(d.getTime())) return 0;
+    return Math.floor(d.getTime() / (10 * 60 * 1000));
+    // 10 minutes par bucket
+  };
+
+  const normalizeTypeGroup = (type = "") => {
+    const t = (type || "").toLowerCase();
+    if (t.includes("vente")) return "vente";
+    if (t.includes("achat") || t.includes("réception achat")) return "achat";
+    if (t.includes("paiement")) return "paiement";
+    return t;
+  };
+
+  const extractParty = (details = "") => {
+    const m1 = /Client:\s*([^•(]+)/i.exec(details);
+    if (m1) return m1[1].trim().toLowerCase();
+    const m2 = /Fournisseur:\s*([^•(]+)/i.exec(details);
+    if (m2) return m2[1].trim().toLowerCase();
+    return "";
+  };
+
+  /* ===================== FETCH UTILISATEURS ===================== */
   const fetchUtilisateurs = useCallback(async () => {
     if (!societeId) return;
     try {
       const qUsers = query(collection(db, "users"), where("societeId", "==", societeId));
       const snapshot = await getDocs(qUsers);
       const usersList = [];
-
       snapshot.forEach((d) => {
         const userData = d.data();
         usersList.push({
@@ -229,8 +246,6 @@ export default function Parametres() {
           createdAt: userData.createdAt,
         });
       });
-
-      console.log("Utilisateurs chargés:", usersList);
       setUtilisateurs(usersList);
     } catch (err) {
       console.error("Erreur chargement utilisateurs:", err);
@@ -238,65 +253,77 @@ export default function Parametres() {
     }
   }, [societeId, showNotification]);
 
-  /* ===== Fetch Activités ===== */
+  /* ===================== FETCH ACTIVITÉS (avec dédoublonnage) ===================== */
   const fetchActivites = useCallback(async () => {
     if (!societeId || utilisateurs.length === 0) return;
     setLoadingActivites(true);
     try {
-      const activitesList = [];
+      const list = [];
 
-      // Fonction helper pour récupérer le rôle
       const getUserRoleFromList = (userId, email) => {
         if (!userId && !email) return "N/A";
         if (userId) {
-          const user = utilisateurs.find((u) => u.id === userId);
-          if (user && user.role) return user.role;
+          const u = utilisateurs.find((x) => x.id === userId);
+          if (u?.role) return u.role;
         }
         if (email) {
-          const user = utilisateurs.find((u) => u.email === email);
-          if (user && user.role) return user.role;
+          const u = utilisateurs.find((x) => x.email === email);
+          if (u?.role) return u.role;
         }
         return "N/A";
       };
 
+      // ---- 1) activities
       try {
-        const activitiesSnap = await getDocs(
+        const snap = await getDocs(
           query(
             collection(db, "societe", societeId, "activities"),
             orderBy("timestamp", "desc"),
             limit(200)
           )
         );
-        if (!activitiesSnap.empty) {
-          activitiesSnap.forEach((d) => {
-            const data = d.data();
-            const details = data.details || {};
-            activitesList.push({
-              id: d.id,
-              type: getActivityTypeLabel(data.type),
-              utilisateurId: data.userId || data.utilisateurId || user?.uid,
-              utilisateurEmail: data.userEmail || data.utilisateurEmail || user?.email || "",
-              utilisateurRole: getUserRoleFromList(data.userId || data.utilisateurId, data.userEmail || data.utilisateurEmail),
-              date: data.timestamp || data.date || Timestamp.now(),
-              details: formatActivityDetails(data.type, details),
-              montant: details.montant || 0,
-              nombreArticles: details.articles || 0,
-              statut: details.statutPaiement || details.action || "Effectué",
-              collection: "activities",
-              hasLots: !!details.hasLots,
-              nombreLots: details.nombreLots || 0,
-            });
+        snap.forEach((d) => {
+          const data = d.data();
+          const details = data.details || {};
+
+          // << corrige nbre d'articles ici >>
+          const nArticles =
+            coerceCount(details.articles) ||
+            coerceCount(details.article_count) ||
+            coerceCount(details.items) ||
+            coerceCount(details.lignes) ||
+            coerceCount(details.nbArticles) ||
+            coerceCount(details.count);
+
+          list.push({
+            id: d.id,
+            type: getActivityTypeLabel(data.type),
+            utilisateurId: data.userId || data.utilisateurId || user?.uid,
+            utilisateurEmail: data.userEmail || data.utilisateurEmail || user?.email || "",
+            utilisateurRole: getUserRoleFromList(
+              data.userId || data.utilisateurId,
+              data.userEmail || data.utilisateurEmail
+            ),
+            date: data.timestamp || data.date || Timestamp.now(),
+            details: formatActivityDetails(data.type, { ...details, __coercedCount: nArticles }),
+            montant: Number(details.montant || 0),
+            nombreArticles: nArticles,
+            statut: details.statutPaiement || details.action || details.statut || "Effectué",
+            collection: "activities",
+            hasLots: !!details.hasLots,
+            nombreLots: details.nombreLots || 0,
           });
-        }
+        });
       } catch (e) {
         console.warn("Erreur chargement activities:", e);
       }
 
+      // ---- 2) ventes
       try {
-        const ventesSnap = await getDocs(
+        const snap = await getDocs(
           query(collection(db, "societe", societeId, "ventes"), orderBy("date", "desc"), limit(100))
         );
-        ventesSnap.forEach((d) => {
+        snap.forEach((d) => {
           const data = d.data();
           const total = (data.articles || []).reduce(
             (sum, a) => sum + ((a.prixUnitaire || 0) * (a.quantite || 0) - (a.remise || 0)),
@@ -305,12 +332,11 @@ export default function Parametres() {
           const dateField = data.date || data.creeLe || data.createdAt;
           const hasLots = (data.articles || []).some((a) => a.numeroLot);
           const nombreLots = new Set((data.articles || []).map((a) => a.numeroLot).filter(Boolean)).size;
-
           const userId = data.creePar || data.userId || data.createdBy || user?.uid;
           const userEmail = data.creeParEmail || data.userEmail || user?.email || "";
 
-          activitesList.push({
-            id: d.id,
+          list.push({
+            id: `vente:${d.id}`,
             type: "Vente" + (hasLots ? " Multi-Lots" : ""),
             utilisateurId: userId,
             utilisateurEmail: userEmail,
@@ -329,26 +355,28 @@ export default function Parametres() {
         console.warn("Erreur chargement ventes:", e);
       }
 
+      // ---- 3) achats
       try {
-        const achatsSnap = await getDocs(
+        const snap = await getDocs(
           query(collection(db, "societe", societeId, "achats"), orderBy("date", "desc"), limit(100))
         );
-        achatsSnap.forEach((d) => {
+        snap.forEach((d) => {
           const data = d.data();
           const total =
             (data.articles || []).reduce(
-              (sum, a) => sum + ((a.prixAchat || a.prixUnitaire || 0) * (a.quantite || 0) - (a.remise || 0)),
+              (sum, a) =>
+                sum + ((a.prixAchat || a.prixUnitaire || 0) * (a.quantite || 0) - (a.remise || 0)),
               0
             ) - (data.remiseGlobale || 0);
+
           const dateField = data.date || data.creeLe || data.createdAt;
           const hasLots = (data.articles || []).some((a) => a.numeroLot || a.fournisseurArticle);
           const nombreLots = new Set((data.articles || []).map((a) => a.numeroLot).filter(Boolean)).size;
-
           const userId = data.creePar || data.userId || data.createdBy || user?.uid;
           const userEmail = data.creeParEmail || data.userEmail || user?.email || "";
 
-          activitesList.push({
-            id: d.id,
+          list.push({
+            id: `achat:${d.id}`,
             type: "Achat" + (hasLots ? " Multi-Lots" : ""),
             utilisateurId: userId,
             utilisateurEmail: userEmail,
@@ -367,19 +395,18 @@ export default function Parametres() {
         console.warn("Erreur chargement achats:", e);
       }
 
+      // ---- 4) paiements
       try {
-        const paiementsSnap = await getDocs(
+        const snap = await getDocs(
           query(collection(db, "societe", societeId, "paiements"), orderBy("date", "desc"), limit(100))
         );
-        paiementsSnap.forEach((d) => {
+        snap.forEach((d) => {
           const data = d.data();
           const dateField = data.date || data.timestamp || data.createdAt;
-
           const userId = data.creePar || data.userId || data.createdBy || user?.uid;
           const userEmail = data.creeParEmail || data.userEmail || user?.email || "";
-
-          activitesList.push({
-            id: d.id,
+          list.push({
+            id: `paiement:${d.id}`,
             type: "Paiement",
             utilisateurId: userId,
             utilisateurEmail: userEmail,
@@ -395,23 +422,39 @@ export default function Parametres() {
         console.warn("Erreur chargement paiements:", e);
       }
 
-      activitesList.sort((a, b) => {
-        const dateA = a.date?.seconds || a.date?.getTime?.() / 1000 || 0;
-        const dateB = b.date?.seconds || b.date?.getTime?.() / 1000 || 0;
-        return dateB - dateA;
-      });
+      // ===== DÉDOUBLONNAGE =====
+      const byKey = new Map();
+      const score = (x) => {
+        let s = 0;
+        if (x.collection !== "activities") s += 10; // métier > activities
+        if ((x.montant || 0) > 0) s += 5;
+        if (x.nombreArticles > 0) s += 2;
+        return s;
+      };
 
-      console.log("Activités chargées:", activitesList.length);
-      setActivites(activitesList);
+      for (const it of list) {
+        const group = normalizeTypeGroup(it.type);
+        const party = extractParty(it.details) || "";
+        const bucket = minuteBucket(it.date);
+        const key = `${group}|${party}|${bucket}`;
+        const prev = byKey.get(key);
+        if (!prev || score(it) > score(prev)) byKey.set(key, it);
+      }
+
+      const deduped = Array.from(byKey.values()).sort(
+        (a, b) => (toDate(b.date)?.getTime() || 0) - (toDate(a.date)?.getTime() || 0)
+      );
+
+      setActivites(deduped);
     } catch (err) {
       console.error("Erreur chargement activités:", err);
       showNotification("Erreur lors du chargement des activités", "error");
     } finally {
       setLoadingActivites(false);
     }
-  }, [societeId, user, utilisateurs, showNotification]);
+  }, [societeId, user, utilisateurs]); // ok
 
-  /* ===== Libellés type activité ===== */
+  /* ===================== Libellés / Détails ===================== */
   const getActivityTypeLabel = useCallback((type) => {
     const labels = {
       vente: "Vente",
@@ -433,69 +476,75 @@ export default function Parametres() {
     return labels[type] || type;
   }, []);
 
-  /* ===== Détails activité ===== */
   const formatActivityDetails = useCallback((type, details) => {
     switch (type) {
       case "vente":
       case "vente_modifiee":
-        return `Client: ${details.client || "N/A"}${details.hasLots ? ` (${details.nombreLots || 0} lots)` : ""} • ${details.montant?.toFixed(2) || 0} DH`;
+        return `Client: ${details.client || "N/A"}${
+          details.hasLots ? ` (${details.nombreLots || 0} lots)` : ""
+        } • ${Number(details.montant || 0).toFixed(2)} DH`;
+
       case "vente_supprimee":
-        return `Client: ${details.client || "N/A"} • ${details.montant?.toFixed(2) || 0} DH (Supprimée)`;
+        return `Client: ${details.client || "N/A"} • ${Number(details.montant || 0).toFixed(2)} DH (Supprimée)`;
+
       case "achat":
-        return `Fournisseur: ${details.fournisseur || "N/A"}${details.hasLots ? ` (${details.nombreLots || 0} lots)` : ""}`;
+        return `Fournisseur: ${details.fournisseur || "N/A"}${
+          details.hasLots ? ` (${details.nombreLots || 0} lots)` : ""
+        }`;
+
       case "paiement":
         return `${details.mode || "Espèces"} - ${details.montant || 0} DH`;
-      case "reception_achat":
-        return `Statut: ${details.statut || "N/A"} - ${details.article_count || 0} article(s)`;
+
+      case "reception_achat": {
+        // << corrige le 0 article(s) >>
+        const n =
+          (typeof details.__coercedCount === "number" ? details.__coercedCount : 0) ||
+          coerceCount(details.article_count) ||
+          coerceCount(details.articles) ||
+          coerceCount(details.items) ||
+          coerceCount(details.lignes) ||
+          coerceCount(details.nbArticles) ||
+          coerceCount(details.count);
+        return `Statut: ${details.statut || "N/A"} - ${n} article(s)`;
+      }
+
+      case "reception_achat_confirme":
+        return `Réception confirmée - ${coerceCount(details.articles)} article(s)`;
+
       case "transfert_mensuel":
         return `${details.produit || "N/A"} - ${details.quantite || 0} unités (S1->S2)`;
+
       default:
         return (
           Object.entries(details)
-            .filter(([key]) => key !== "montant" && key !== "action")
-            .map(([key, value]) => `${key}: ${value}`)
+            .filter(([k]) => k !== "montant" && k !== "action" && k !== "__coercedCount")
+            .map(([k, v]) => `${k}: ${v}`)
             .join(", ") || "N/A"
         );
     }
-  }, []);
+  }, []); // ok
 
-  /* ===== GET USER NAME - AFFICHE LE PRENOM EN PRIORITE ===== */
+  /* ===================== GET USER NAME / ROLE ===================== */
   const getUserName = useCallback(
     (userId, userEmail = "") => {
       const u = utilisateurs.find((x) => x.id === userId);
       if (u) {
-        if (u.prenom && u.prenom.trim() !== "") {
-          return u.prenom.trim();
-        }
-        if (u.displayName && u.displayName.trim() !== "") {
-          return u.displayName.trim();
-        }
-        if (u.nom && u.nom.trim() !== "") {
-          return u.nom.trim();
-        }
-        if (u.email) {
-          return u.email.split("@")[0];
-        }
+        if (u.prenom?.trim()) return u.prenom.trim();
+        if (u.displayName?.trim()) return u.displayName.trim();
+        if (u.nom?.trim()) return u.nom.trim();
+        if (u.email) return u.email.split("@")[0];
         return "Utilisateur inconnu";
       }
-
       if (userEmail) {
-        const uByEmail = utilisateurs.find((x) => x.email === userEmail);
-        if (uByEmail) {
-          if (uByEmail.prenom && uByEmail.prenom.trim() !== "") {
-            return uByEmail.prenom.trim();
-          }
-          if (uByEmail.displayName && uByEmail.displayName.trim() !== "") {
-            return uByEmail.displayName.trim();
-          }
-          if (uByEmail.nom && uByEmail.nom.trim() !== "") {
-            return uByEmail.nom.trim();
-          }
-          return uByEmail.email.split("@")[0];
+        const u2 = utilisateurs.find((x) => x.email === userEmail);
+        if (u2) {
+          if (u2.prenom?.trim()) return u2.prenom.trim();
+          if (u2.displayName?.trim()) return u2.displayName.trim();
+          if (u2.nom?.trim()) return u2.nom.trim();
+          return u2.email.split("@")[0];
         }
         return userEmail.split("@")[0];
       }
-
       if (userId === user?.uid) return user?.email?.split("@")[0] || "Vous";
       return "Utilisateur inconnu";
     },
@@ -512,10 +561,9 @@ export default function Parametres() {
     [utilisateurs, user, role]
   );
 
-  /* ===== Chargement initial ===== */
+  /* ===================== Chargement initial ===================== */
   useEffect(() => {
     if (!user || !societeId) return;
-
     let mounted = true;
     (async () => {
       try {
@@ -573,10 +621,7 @@ export default function Parametres() {
         showNotification("Erreur lors du chargement des paramètres: " + err.message, "error");
       }
     })();
-
-    return () => {
-      mounted = false;
-    };
+    return () => { mounted = false; };
   }, [user, societeId, fetchUtilisateurs, showNotification]);
 
   useEffect(() => {
@@ -585,29 +630,16 @@ export default function Parametres() {
     }
   }, [activeTab, utilisateurs.length, fetchActivites]);
 
-  /* ===== Filtrage activités ===== */
-  const activitesFiltrees = activites.filter((activite) => {
+  /* ===================== Filtrage activités ===================== */
+  const activitesFiltrees = activites.filter((a) => {
     let keep = true;
-    if (selectedUserId && activite.utilisateurId !== selectedUserId) keep = false;
-    if (filterType && !activite.type.toLowerCase().includes(filterType.toLowerCase())) keep = false;
-    if (filterRole && (activite.utilisateurRole || "").toLowerCase() !== filterRole.toLowerCase()) keep = false;
+    if (selectedUserId && a.utilisateurId !== selectedUserId) keep = false;
+    if (filterType && !a.type.toLowerCase().includes(filterType.toLowerCase())) keep = false;
+    if (filterRole && (a.utilisateurRole || "").toLowerCase() !== filterRole.toLowerCase()) keep = false;
 
-    if (filterDateMin) {
-      const actDate = activite.date?.seconds
-        ? new Date(activite.date.seconds * 1000)
-        : activite.date?.toDate?.()
-        ? activite.date.toDate()
-        : null;
-      if (!actDate || actDate < new Date(filterDateMin)) keep = false;
-    }
-    if (filterDateMax) {
-      const actDate = activite.date?.seconds
-        ? new Date(activite.date.seconds * 1000)
-        : activite.date?.toDate?.()
-        ? activite.date.toDate()
-        : null;
-      if (!actDate || actDate > new Date(filterDateMax + "T23:59:59")) keep = false;
-    }
+    const d = toDate(a.date);
+    if (filterDateMin && d && d < new Date(filterDateMin)) keep = false;
+    if (filterDateMax && d && d > new Date(filterDateMax + "T23:59:59")) keep = false;
     return keep;
   });
 
@@ -616,162 +648,122 @@ export default function Parametres() {
     if ((type || "").includes("Supprimée")) return "#ef4444";
     if ((type || "").includes("Modifiée")) return "#f59e0b";
     switch ((type || "").split(" ")[0]) {
-      case "Vente":
-        return "#48bb78";
-      case "Achat":
-        return "#4299e1";
-      case "Stock":
-        return "#ed8936";
-      case "Retour":
-        return "#f56565";
-      case "Paiement":
-        return "#38a169";
-      case "Entrée":
-        return "#805ad5";
-      case "Lot":
-        return "#d69e2e";
-      case "Réception":
-        return "#9f7aea";
-      case "Transfert":
-        return "#38b2ac";
-      default:
-        return "#6b7280";
+      case "Vente": return "#48bb78";
+      case "Achat": return "#4299e1";
+      case "Stock": return "#ed8936";
+      case "Retour": return "#f56565";
+      case "Paiement": return "#38a169";
+      case "Entrée": return "#805ad5";
+      case "Lot": return "#d69e2e";
+      case "Réception": return "#9f7aea";
+      case "Transfert": return "#38b2ac";
+      default: return "#6b7280";
     }
   }, []);
 
-  /* ===== Sauvegardes ===== */
-  const handleSaveDocuments = useCallback(
-    async (e) => {
-      e.preventDefault();
-      if (!user || !societeId) return;
-
-      setSaving(true);
-      setError("");
-
-      try {
-        if (typeCachet === "image" && !cachetImage) {
-          showNotification("Veuillez télécharger une image pour le cachet ou choisir le mode texte", "error");
-          setSaving(false);
-          return;
-        }
-
-        const dataToSave = {
-          entete: entete.trim(),
-          pied: pied.trim(),
-          cachetTexte: cachetTexte.trim(),
-          cachetImage: cachetImage || null,
-          afficherCachet: !!afficherCachet,
-          typeCachet,
-          tailleCachet: Number(tailleCachet) || 120,
-          modifiePar: user.uid,
-          modifieParEmail: user.email || "",
-          modifieLe: Timestamp.now(),
-          version: "2.0",
-        };
-
-        await setDoc(doc(db, "societe", societeId, "parametres", "documents"), dataToSave);
-        showNotification("Paramètres documents sauvegardés avec succès!", "success");
-        setSaved(true);
-        setTimeout(() => setSaved(false), 3000);
-      } catch (err) {
-        console.error("Erreur sauvegarde documents:", err);
-        showNotification("Erreur lors de la sauvegarde: " + err.message, "error");
-      } finally {
+  /* ===================== Sauvegardes ===================== */
+  const handleSaveDocuments = useCallback(async (e) => {
+    e.preventDefault();
+    if (!user || !societeId) return;
+    setSaving(true); setError("");
+    try {
+      if (typeCachet === "image" && !cachetImage) {
+        showNotification("Veuillez télécharger une image pour le cachet ou choisir le mode texte", "error");
         setSaving(false);
+        return;
       }
-    },
-    [user, societeId, typeCachet, cachetImage, cachetTexte, entete, pied, afficherCachet, tailleCachet, showNotification]
-  );
+      await setDoc(doc(db, "societe", societeId, "parametres", "documents"), {
+        entete: entete.trim(),
+        pied: pied.trim(),
+        cachetTexte: cachetTexte.trim(),
+        cachetImage: cachetImage || null,
+        afficherCachet: !!afficherCachet,
+        typeCachet,
+        tailleCachet: Number(tailleCachet) || 120,
+        modifiePar: user.uid,
+        modifieParEmail: user.email || "",
+        modifieLe: Timestamp.now(),
+        version: "2.0",
+      });
+      showNotification("Paramètres documents sauvegardés avec succès!", "success");
+      setSaved(true); setTimeout(() => setSaved(false), 3000);
+    } catch (err) {
+      console.error("Erreur sauvegarde documents:", err);
+      showNotification("Erreur lors de la sauvegarde: " + err.message, "error");
+    } finally { setSaving(false); }
+  }, [user, societeId, typeCachet, cachetImage, cachetTexte, entete, pied, afficherCachet, tailleCachet, showNotification]);
 
-  const handleSaveInformations = useCallback(
-    async (e) => {
-      e.preventDefault();
-      if (!user || !societeId) return;
-      setSaving(true);
-      try {
-        await setDoc(doc(db, "societe", societeId, "parametres", "informations"), {
-          nomPharmacie: nomPharmacie.trim(),
-          adresse: adresse.trim(),
-          telephone: telephone.trim(),
-          email: email.trim(),
-          rc: rc.trim(),
-          ice: ice.trim(),
-          if: if_.trim(),
-          cnss: cnss.trim(),
-          modifiePar: user.uid,
-          modifieParEmail: user.email || "",
-          modifieLe: Timestamp.now(),
-        });
-        showNotification("Informations pharmacie sauvegardées avec succès!", "success");
-        setSaved(true);
-        setTimeout(() => setSaved(false), 3000);
-      } catch (err) {
-        console.error("Erreur sauvegarde informations:", err);
-        showNotification("Erreur lors de la sauvegarde: " + err.message, "error");
-      } finally {
-        setSaving(false);
-      }
-    },
-    [user, societeId, nomPharmacie, adresse, telephone, email, rc, ice, if_, cnss, showNotification]
-  );
+  const handleSaveInformations = useCallback(async (e) => {
+    e.preventDefault();
+    if (!user || !societeId) return;
+    setSaving(true);
+    try {
+      await setDoc(doc(db, "societe", societeId, "parametres", "informations"), {
+        nomPharmacie: nomPharmacie.trim(),
+        adresse: adresse.trim(),
+        telephone: telephone.trim(),
+        email: email.trim(),
+        rc: rc.trim(),
+        ice: ice.trim(),
+        if: if_.trim(),
+        cnss: cnss.trim(),
+        modifiePar: user.uid,
+        modifieParEmail: user.email || "",
+        modifieLe: Timestamp.now(),
+      });
+      showNotification("Informations pharmacie sauvegardées avec succès!", "success");
+      setSaved(true); setTimeout(() => setSaved(false), 3000);
+    } catch (err) {
+      console.error("Erreur sauvegarde informations:", err);
+      showNotification("Erreur lors de la sauvegarde: " + err.message, "error");
+    } finally { setSaving(false); }
+  }, [user, societeId, nomPharmacie, adresse, telephone, email, rc, ice, if_, cnss, showNotification]);
 
-  const handleSaveGestion = useCallback(
-    async (e) => {
-      e.preventDefault();
-      if (!user || !societeId) return;
-      setSaving(true);
-      try {
-        await setDoc(doc(db, "societe", societeId, "parametres", "gestion"), {
-          seuilAlerteGlobal: Number(seuilAlerteGlobal),
-          delaiPeremptionAlerte: Number(delaiPeremptionAlerte),
-          tvaVente: Number(tvaVente),
-          modifiePar: user.uid,
-          modifieParEmail: user.email || "",
-          modifieLe: Timestamp.now(),
-        });
-        showNotification("Paramètres de gestion sauvegardés avec succès!", "success");
-        setSaved(true);
-        setTimeout(() => setSaved(false), 3000);
-      } catch (err) {
-        console.error("Erreur sauvegarde gestion:", err);
-        showNotification("Erreur lors de la sauvegarde: " + err.message, "error");
-      } finally {
-        setSaving(false);
-      }
-    },
-    [user, societeId, seuilAlerteGlobal, delaiPeremptionAlerte, tvaVente, showNotification]
-  );
+  const handleSaveGestion = useCallback(async (e) => {
+    e.preventDefault();
+    if (!user || !societeId) return;
+    setSaving(true);
+    try {
+      await setDoc(doc(db, "societe", societeId, "parametres", "gestion"), {
+        seuilAlerteGlobal: Number(seuilAlerteGlobal),
+        delaiPeremptionAlerte: Number(delaiPeremptionAlerte),
+        tvaVente: Number(tvaVente),
+        modifiePar: user.uid,
+        modifieParEmail: user.email || "",
+        modifieLe: Timestamp.now(),
+      });
+      showNotification("Paramètres de gestion sauvegardés avec succès!", "success");
+      setSaved(true); setTimeout(() => setSaved(false), 3000);
+    } catch (err) {
+      console.error("Erreur sauvegarde gestion:", err);
+      showNotification("Erreur lors de la sauvegarde: " + err.message, "error");
+    } finally { setSaving(false); }
+  }, [user, societeId, seuilAlerteGlobal, delaiPeremptionAlerte, tvaVente, showNotification]);
 
-  const handleSaveMultiLots = useCallback(
-    async (e) => {
-      e.preventDefault();
-      if (!user || !societeId) return;
-      setSaving(true);
-      try {
-        await setDoc(doc(db, "societe", societeId, "parametres", "multilots"), {
-          gestionMultiLots: !!gestionMultiLots,
-          alerteLotsExpires: !!alerteLotsExpires,
-          delaiAlerteLots: Number(delaiAlerteLots),
-          generationAutomatiqueLots: !!generationAutomatiqueLots,
-          formatNumerotationLots,
-          modifiePar: user.uid,
-          modifieParEmail: user.email || "",
-          modifieLe: Timestamp.now(),
-        });
-        showNotification("Paramètres multi-lots sauvegardés avec succès!", "success");
-        setSaved(true);
-        setTimeout(() => setSaved(false), 3000);
-      } catch (err) {
-        console.error("Erreur sauvegarde multi-lots:", err);
-        showNotification("Erreur lors de la sauvegarde: " + err.message, "error");
-      } finally {
-        setSaving(false);
-      }
-    },
-    [user, societeId, gestionMultiLots, alerteLotsExpires, delaiAlerteLots, generationAutomatiqueLots, formatNumerotationLots, showNotification]
-  );
+  const handleSaveMultiLots = useCallback(async (e) => {
+    e.preventDefault();
+    if (!user || !societeId) return;
+    setSaving(true);
+    try {
+      await setDoc(doc(db, "societe", societeId, "parametres", "multilots"), {
+        gestionMultiLots: !!gestionMultiLots,
+        alerteLotsExpires: !!alerteLotsExpires,
+        delaiAlerteLots: Number(delaiAlerteLots),
+        generationAutomatiqueLots: !!generationAutomatiqueLots,
+        formatNumerotationLots,
+        modifiePar: user.uid,
+        modifieParEmail: user.email || "",
+        modifieLe: Timestamp.now(),
+      });
+      showNotification("Paramètres multi-lots sauvegardés avec succès!", "success");
+      setSaved(true); setTimeout(() => setSaved(false), 3000);
+    } catch (err) {
+      console.error("Erreur sauvegarde multi-lots:", err);
+      showNotification("Erreur lors de la sauvegarde: " + err.message, "error");
+    } finally { setSaving(false); }
+  }, [user, societeId, gestionMultiLots, alerteLotsExpires, delaiAlerteLots, generationAutomatiqueLots, formatNumerotationLots, showNotification]);
 
-  /* ===== Styles ===== */
+  /* ===================== Styles ===================== */
   const getResponsiveStyles = () => ({
     container: {
       background: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
@@ -807,9 +799,7 @@ export default function Parametres() {
       marginTop: "15px",
       letterSpacing: "1px",
     },
-    content: {
-      padding: isMobile ? "20px 15px" : isTablet ? "35px 25px" : "50px",
-    },
+    content: { padding: isMobile ? "20px 15px" : isTablet ? "35px 25px" : "50px" },
     formCard: {
       background: "linear-gradient(135deg, #f8fafc 0%, #edf2f7 100%)",
       borderRadius: isMobile ? "15px" : "25px",
@@ -822,7 +812,7 @@ export default function Parametres() {
       background: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
       border: "none",
       borderRadius: isMobile ? "10px" : "15px",
-      padding: isMobile ? "12px 20px" : isTablet ? "14px 25px" : "15px 30px",
+      padding: isMobile ? "12px 20px" : "14px 25px",
       color: "white",
       fontWeight: 700,
       fontSize: isMobile ? "0.9em" : "1em",
@@ -916,7 +906,7 @@ export default function Parametres() {
   const styles = getResponsiveStyles();
   const animationStyle = `@keyframes slideIn { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }`;
 
-  /* ===== Guards ===== */
+  /* ===================== Guards ===================== */
   if (waiting) {
     return (
       <div style={{ ...styles.container, display: "flex", alignItems: "center", justifyContent: "center" }}>
@@ -957,7 +947,7 @@ export default function Parametres() {
     );
   }
 
-  /* ===== AFFICHAGE PRINCIPAL ===== */
+  /* ===================== UI PRINCIPALE ===================== */
   return (
     <>
       <style>{animationStyle}</style>
@@ -993,17 +983,13 @@ export default function Parametres() {
                 ["multilots", "Multi-Lots"],
                 ["activites", "Activités"],
               ].map(([key, label]) => (
-                <button
-                  key={key}
-                  style={{ ...styles.tab, ...(activeTab === key ? styles.activeTab : {}) }}
-                  onClick={() => setActiveTab(key)}
-                  type="button"
-                >
+                <button key={key} style={{ ...styles.tab, ...(activeTab === key ? styles.activeTab : {}) }} onClick={() => setActiveTab(key)} type="button">
                   {label}
                 </button>
               ))}
             </div>
 
+            {/* --- Onglet Documents --- */}
             {activeTab === "documents" && (
               <div style={styles.formCard}>
                 <form onSubmit={handleSaveDocuments}>
@@ -1013,26 +999,12 @@ export default function Parametres() {
 
                   <div style={{ marginBottom: "20px" }}>
                     <label style={styles.label}>Entête des documents</label>
-                    <textarea
-                      style={{ ...styles.input, minHeight: "100px", resize: "vertical", fontFamily: "monospace" }}
-                      rows={4}
-                      value={entete}
-                      onChange={(e) => setEntete(e.target.value)}
-                      placeholder="Ex : PHARMACIE CENTRALE"
-                      disabled={saving}
-                    />
+                    <textarea style={{ ...styles.input, minHeight: "100px", resize: "vertical", fontFamily: "monospace" }} rows={4} value={entete} onChange={(e) => setEntete(e.target.value)} placeholder="Ex : PHARMACIE CENTRALE" disabled={saving} />
                   </div>
 
                   <div style={{ marginBottom: "20px" }}>
                     <label style={styles.label}>Pied de page</label>
-                    <textarea
-                      style={{ ...styles.input, minHeight: "80px", resize: "vertical", fontFamily: "monospace" }}
-                      rows={3}
-                      value={pied}
-                      onChange={(e) => setPied(e.target.value)}
-                      placeholder="Ex : Merci pour votre confiance !"
-                      disabled={saving}
-                    />
+                    <textarea style={{ ...styles.input, minHeight: "80px", resize: "vertical", fontFamily: "monospace" }} rows={3} value={pied} onChange={(e) => setPied(e.target.value)} placeholder="Ex : Merci pour votre confiance !" disabled={saving} />
                   </div>
 
                   <div style={{ marginBottom: "20px" }}>
@@ -1046,35 +1018,16 @@ export default function Parametres() {
                   {typeCachet === "texte" && (
                     <div style={{ marginBottom: "20px" }}>
                       <label style={styles.label}>Texte du cachet</label>
-                      <input
-                        type="text"
-                        style={styles.input}
-                        value={cachetTexte}
-                        onChange={(e) => setCachetTexte(e.target.value)}
-                        placeholder="Cachet Société"
-                        disabled={saving}
-                      />
+                      <input type="text" style={styles.input} value={cachetTexte} onChange={(e) => setCachetTexte(e.target.value)} placeholder="Cachet Société" disabled={saving} />
                     </div>
                   )}
 
                   {typeCachet === "image" && (
                     <div style={{ marginBottom: "20px" }}>
                       <label style={styles.label}>Image du cachet</label>
-                      <input
-                        type="file"
-                        id="cachet-upload"
-                        accept="image/*"
-                        onChange={handleImageUpload}
-                        disabled={saving || uploadingImage}
-                        style={{ ...styles.input, padding: "10px" }}
-                      />
+                      <input type="file" id="cachet-upload" accept="image/*" onChange={handleImageUpload} disabled={saving || uploadingImage} style={{ ...styles.input, padding: "10px" }} />
                       {cachetImage && (
-                        <button
-                          type="button"
-                          onClick={handleRemoveImage}
-                          style={{ ...styles.button, marginTop: "10px", background: "linear-gradient(135deg, #f56565 0%, #e53e3e 100%)" }}
-                          disabled={saving}
-                        >
+                        <button type="button" onClick={handleRemoveImage} style={{ ...styles.button, marginTop: "10px", background: "linear-gradient(135deg, #f56565 0%, #e53e3e 100%)" }} disabled={saving}>
                           Supprimer l'image
                         </button>
                       )}
@@ -1083,36 +1036,18 @@ export default function Parametres() {
 
                   <div style={{ marginBottom: "20px" }}>
                     <label style={styles.label}>Taille du cachet (pixels)</label>
-                    <input
-                      type="number"
-                      style={styles.input}
-                      value={tailleCachet}
-                      onChange={(e) => setTailleCachet(Number(e.target.value))}
-                      min="50"
-                      max="500"
-                      disabled={saving}
-                    />
+                    <input type="number" style={styles.input} value={tailleCachet} onChange={(e) => setTailleCachet(Number(e.target.value))} min="50" max="500" disabled={saving} />
                   </div>
 
                   <div style={{ marginBottom: "20px" }}>
                     <label style={{ display: "flex", alignItems: "center", fontWeight: 700, color: "#4a5568" }}>
-                      <input
-                        type="checkbox"
-                        checked={afficherCachet}
-                        onChange={(e) => setAfficherCachet(e.target.checked)}
-                        disabled={saving}
-                        style={{ marginRight: "10px", width: "18px", height: "18px", cursor: "pointer" }}
-                      />
+                      <input type="checkbox" checked={afficherCachet} onChange={(e) => setAfficherCachet(e.target.checked)} disabled={saving} style={{ marginRight: "10px", width: "18px", height: "18px", cursor: "pointer" }} />
                       Afficher le cachet sur les documents
                     </label>
                   </div>
 
                   <div style={{ textAlign: "center", marginTop: "30px" }}>
-                    <button
-                      type="submit"
-                      style={{ ...styles.button, width: isMobile ? "100%" : "auto", minWidth: "250px" }}
-                      disabled={saving}
-                    >
+                    <button type="submit" style={{ ...styles.button, width: isMobile ? "100%" : "auto", minWidth: "250px" }} disabled={saving}>
                       {saving ? "Enregistrement..." : "Enregistrer"}
                     </button>
                   </div>
@@ -1120,6 +1055,7 @@ export default function Parametres() {
               </div>
             )}
 
+            {/* --- Onglet Informations --- */}
             {activeTab === "informations" && (
               <div style={styles.formCard}>
                 <form onSubmit={handleSaveInformations}>
@@ -1163,11 +1099,7 @@ export default function Parametres() {
                   </div>
 
                   <div style={{ textAlign: "center", marginTop: "30px" }}>
-                    <button
-                      type="submit"
-                      style={{ ...styles.button, width: isMobile ? "100%" : "auto", minWidth: "250px" }}
-                      disabled={saving}
-                    >
+                    <button type="submit" style={{ ...styles.button, width: isMobile ? "100%" : "auto", minWidth: "250px" }} disabled={saving}>
                       {saving ? "Enregistrement..." : "Enregistrer"}
                     </button>
                   </div>
@@ -1175,6 +1107,7 @@ export default function Parametres() {
               </div>
             )}
 
+            {/* --- Onglet Gestion --- */}
             {activeTab === "gestion" && (
               <div style={styles.formCard}>
                 <form onSubmit={handleSaveGestion}>
@@ -1185,47 +1118,20 @@ export default function Parametres() {
                   <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr 1fr", gap: "20px" }}>
                     <div>
                       <label style={styles.label}>Seuil d'alerte global (stock)</label>
-                      <input
-                        type="number"
-                        style={styles.input}
-                        value={seuilAlerteGlobal}
-                        onChange={(e) => setSeuilAlerteGlobal(Number(e.target.value))}
-                        min="0"
-                        disabled={saving}
-                      />
+                      <input type="number" style={styles.input} value={seuilAlerteGlobal} onChange={(e) => setSeuilAlerteGlobal(Number(e.target.value))} min="0" disabled={saving} />
                     </div>
                     <div>
                       <label style={styles.label}>Délai péremption alerte (jours)</label>
-                      <input
-                        type="number"
-                        style={styles.input}
-                        value={delaiPeremptionAlerte}
-                        onChange={(e) => setDelaiPeremptionAlerte(Number(e.target.value))}
-                        min="1"
-                        disabled={saving}
-                      />
+                      <input type="number" style={styles.input} value={delaiPeremptionAlerte} onChange={(e) => setDelaiPeremptionAlerte(Number(e.target.value))} min="1" disabled={saving} />
                     </div>
                     <div>
                       <label style={styles.label}>TVA Vente (%)</label>
-                      <input
-                        type="number"
-                        style={styles.input}
-                        value={tvaVente}
-                        onChange={(e) => setTvaVente(Number(e.target.value))}
-                        min="0"
-                        max="100"
-                        step="0.1"
-                        disabled={saving}
-                      />
+                      <input type="number" style={styles.input} value={tvaVente} onChange={(e) => setTvaVente(Number(e.target.value))} min="0" max="100" step="0.1" disabled={saving} />
                     </div>
                   </div>
 
                   <div style={{ textAlign: "center", marginTop: "30px" }}>
-                    <button
-                      type="submit"
-                      style={{ ...styles.button, width: isMobile ? "100%" : "auto", minWidth: "250px" }}
-                      disabled={saving}
-                    >
+                    <button type="submit" style={{ ...styles.button, width: isMobile ? "100%" : "auto", minWidth: "250px" }} disabled={saving}>
                       {saving ? "Enregistrement..." : "Enregistrer"}
                     </button>
                   </div>
@@ -1233,6 +1139,7 @@ export default function Parametres() {
               </div>
             )}
 
+            {/* --- Onglet Multi-Lots --- */}
             {activeTab === "multilots" && (
               <div style={styles.formCard}>
                 <form onSubmit={handleSaveMultiLots}>
@@ -1242,13 +1149,7 @@ export default function Parametres() {
 
                   <div style={{ marginBottom: "20px" }}>
                     <label style={{ display: "flex", alignItems: "center", fontWeight: 700, color: "#4a5568" }}>
-                      <input
-                        type="checkbox"
-                        checked={gestionMultiLots}
-                        onChange={(e) => setGestionMultiLots(e.target.checked)}
-                        disabled={saving}
-                        style={{ marginRight: "10px", width: "18px", height: "18px", cursor: "pointer" }}
-                      />
+                      <input type="checkbox" checked={gestionMultiLots} onChange={(e) => setGestionMultiLots(e.target.checked)} disabled={saving} style={{ marginRight: "10px", width: "18px", height: "18px", cursor: "pointer" }} />
                       Activer la gestion multi-lots
                     </label>
                   </div>
@@ -1257,52 +1158,26 @@ export default function Parametres() {
                     <>
                       <div style={{ marginBottom: "20px" }}>
                         <label style={{ display: "flex", alignItems: "center", fontWeight: 700, color: "#4a5568" }}>
-                          <input
-                            type="checkbox"
-                            checked={alerteLotsExpires}
-                            onChange={(e) => setAlerteLotsExpires(e.target.checked)}
-                            disabled={saving}
-                            style={{ marginRight: "10px", width: "18px", height: "18px", cursor: "pointer" }}
-                          />
+                          <input type="checkbox" checked={alerteLotsExpires} onChange={(e) => setAlerteLotsExpires(e.target.checked)} disabled={saving} style={{ marginRight: "10px", width: "18px", height: "18px", cursor: "pointer" }} />
                           Alerte lots expirés
                         </label>
                       </div>
 
                       <div style={{ marginBottom: "20px" }}>
                         <label style={styles.label}>Délai alerte lots (jours)</label>
-                        <input
-                          type="number"
-                          style={styles.input}
-                          value={delaiAlerteLots}
-                          onChange={(e) => setDelaiAlerteLots(Number(e.target.value))}
-                          min="1"
-                          disabled={saving}
-                        />
+                        <input type="number" style={styles.input} value={delaiAlerteLots} onChange={(e) => setDelaiAlerteLots(Number(e.target.value))} min="1" disabled={saving} />
                       </div>
 
                       <div style={{ marginBottom: "20px" }}>
                         <label style={{ display: "flex", alignItems: "center", fontWeight: 700, color: "#4a5568" }}>
-                          <input
-                            type="checkbox"
-                            checked={generationAutomatiqueLots}
-                            onChange={(e) => setGenerationAutomatiqueLots(e.target.checked)}
-                            disabled={saving}
-                            style={{ marginRight: "10px", width: "18px", height: "18px", cursor: "pointer" }}
-                          />
+                          <input type="checkbox" checked={generationAutomatiqueLots} onChange={(e) => setGenerationAutomatiqueLots(e.target.checked)} disabled={saving} style={{ marginRight: "10px", width: "18px", height: "18px", cursor: "pointer" }} />
                           Génération automatique lots
                         </label>
                       </div>
 
                       <div style={{ marginBottom: "20px" }}>
                         <label style={styles.label}>Format numérotation lots</label>
-                        <input
-                          type="text"
-                          style={styles.input}
-                          value={formatNumerotationLots}
-                          onChange={(e) => setFormatNumerotationLots(e.target.value)}
-                          placeholder="LOT{YYYY}{MM}{DD}{HH}{mm}"
-                          disabled={saving}
-                        />
+                        <input type="text" style={styles.input} value={formatNumerotationLots} onChange={(e) => setFormatNumerotationLots(e.target.value)} placeholder="LOT{YYYY}{MM}{DD}{HH}{mm}" disabled={saving} />
                         <small style={{ color: "#6b7280", marginTop: "5px", display: "block" }}>
                           Variables: {"{YYYY}"} (année), {"{MM}"} (mois), {"{DD}"} (jour), {"{HH}"} (heure), {"{mm}"} (minute)
                         </small>
@@ -1311,11 +1186,7 @@ export default function Parametres() {
                   )}
 
                   <div style={{ textAlign: "center", marginTop: "30px" }}>
-                    <button
-                      type="submit"
-                      style={{ ...styles.button, width: isMobile ? "100%" : "auto", minWidth: "250px" }}
-                      disabled={saving}
-                    >
+                    <button type="submit" style={{ ...styles.button, width: isMobile ? "100%" : "auto", minWidth: "250px" }} disabled={saving}>
                       {saving ? "Enregistrement..." : "Enregistrer"}
                     </button>
                   </div>
@@ -1323,11 +1194,17 @@ export default function Parametres() {
               </div>
             )}
 
+            {/* --- Onglet Activités --- */}
             {activeTab === "activites" && (
               <>
                 <div style={{ marginBottom: "20px" }}>
                   <button
-                    style={{ ...styles.button, background: showActivitesFilters ? "linear-gradient(135deg, #f56565 0%, #e53e3e 100%)" : "linear-gradient(135deg, #4299e1 0%, #3182ce 100%)" }}
+                    style={{
+                      ...styles.button,
+                      background: showActivitesFilters
+                        ? "linear-gradient(135deg, #f56565 0%, #e53e3e 100%)"
+                        : "linear-gradient(135deg, #4299e1 0%, #3182ce 100%)",
+                    }}
                     onClick={() => setShowActivitesFilters((v) => !v)}
                     type="button"
                   >
@@ -1409,9 +1286,7 @@ export default function Parametres() {
                     <tbody>
                       {activitesFiltrees.map((a, i) => (
                         <tr key={i} style={{ background: i % 2 === 0 ? "#f8fafc" : "white" }}>
-                          <td style={styles.tableCell}>
-                            <strong>{formatDate(a.date)}</strong>
-                          </td>
+                          <td style={styles.tableCell}><strong>{formatDate(a.date)}</strong></td>
                           <td style={styles.tableCell}>
                             <div style={{ fontWeight: 700, color: "#2d3748", fontSize: "0.95em" }}>
                               {getUserName(a.utilisateurId, a.utilisateurEmail)}
@@ -1433,16 +1308,19 @@ export default function Parametres() {
                           {!isMobile && (
                             <td style={styles.tableCell}>
                               {a.montant > 0 ? (
-                                <span style={{ color: "#48bb78", fontWeight: 800 }}>
-                                  {a.montant.toFixed(2)} DH
-                                </span>
+                                <span style={{ color: "#48bb78", fontWeight: 800 }}>{Number(a.montant).toFixed(2)} DH</span>
                               ) : (
                                 <span style={{ color: "#9ca3af" }}>-</span>
                               )}
                             </td>
                           )}
                           <td style={styles.tableCell}>
-                            <span style={{ display: "inline-block", padding: "5px 10px", borderRadius: "20px", fontSize: "0.75em", fontWeight: 700, background: a.statut.includes("payé") || a.statut.includes("Effectué") ? "linear-gradient(135deg, #48bb78 0%, #38a169 100%)" : a.statut.includes("Impayé") ? "linear-gradient(135deg, #f56565 0%, #e53e3e 100%)" : "linear-gradient(135deg, #4299e1 0%, #3182ce 100%)", color: "white" }}>
+                            <span style={{ display: "inline-block", padding: "5px 10px", borderRadius: "20px", fontSize: "0.75em", fontWeight: 700, background:
+                              a.statut.toLowerCase().includes("payé") || a.statut.toLowerCase().includes("effectué")
+                                ? "linear-gradient(135deg, #48bb78 0%, #38a169 100%)"
+                                : a.statut.toLowerCase().includes("impay")
+                                ? "linear-gradient(135deg, #f56565 0%, #e53e3e 100%)"
+                                : "linear-gradient(135deg, #4299e1 0%, #3182ce 100%)", color: "white" }}>
                               {a.statut}
                             </span>
                           </td>
@@ -1459,12 +1337,7 @@ export default function Parametres() {
                 )}
 
                 <div style={{ textAlign: "center", marginTop: "30px" }}>
-                  <button
-                    style={{ ...styles.button, background: "linear-gradient(135deg, #4299e1 0%, #3182ce 100%)", width: isMobile ? "100%" : "auto" }}
-                    onClick={fetchActivites}
-                    disabled={loadingActivites}
-                    type="button"
-                  >
+                  <button style={{ ...styles.button, background: "linear-gradient(135deg, #4299e1 0%, #3182ce 100%)", width: isMobile ? "100%" : "auto" }} onClick={fetchActivites} disabled={loadingActivites} type="button">
                     {loadingActivites ? "Actualisation..." : "Actualiser"}
                   </button>
                 </div>

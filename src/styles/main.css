@@ -280,10 +280,10 @@ input, select, textarea,
   border-radius: var(--border-radius-small) !important;
   font-family: 'Inter', Arial, sans-serif;
   font-size: var(--font-base) !important;
-  background: #58a5e1 !important;
+  background: #3b3e41 !important;
   padding: var(--spacing-sm) var(--spacing-md) !important;
   border: 1.2px solid #34518b !important;
-  color: #120b79 !important;
+  color: #cecde2 !important;
   margin-bottom: var(--spacing-xs) !important;
   box-shadow: 0 2px 8px #23376b1b;
   outline: none !important;
