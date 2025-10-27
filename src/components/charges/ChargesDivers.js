@@ -1,4 +1,4 @@
-// src/components/charges/ChargesDivers.js - Version 4.0 - Gestion complète de la caisse (création, modification, suppression) avec intégration caisse
+// src/components/charges/ChargesDivers.js - Version Responsive - PC, Tablette, Mobile
 import React, { useState, useEffect } from 'react';
 import {
   Box,
@@ -29,7 +29,16 @@ import {
   Divider,
   Accordion,
   AccordionSummary,
-  AccordionDetails
+  AccordionDetails,
+  Card,
+  CardContent,
+  CardActions,
+  Stack,
+  useMediaQuery,
+  useTheme,
+  Drawer,
+  Badge,
+  Snackbar
 } from '@mui/material';
 import {
   Add as AddIcon,
@@ -42,7 +51,8 @@ import {
   Search as SearchIcon,
   FilterList as FilterListIcon,
   Clear as ClearIcon,
-  ExpandMore as ExpandMoreIcon
+  ExpandMore as ExpandMoreIcon,
+  Close as CloseIcon
 } from '@mui/icons-material';
 import { db } from '../../firebase/config';
 import {
@@ -62,6 +72,11 @@ import { useUserRole } from '../../contexts/UserRoleContext';
 
 export default function ChargesDivers() {
   const { user, societeId } = useUserRole();
+  const theme = useTheme();
+  const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
+  const isTablet = useMediaQuery(theme.breakpoints.between('sm', 'md'));
+  const isDesktop = useMediaQuery(theme.breakpoints.up('md'));
+
   const [charges, setCharges] = useState([]);
   const [filteredCharges, setFilteredCharges] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -70,7 +85,15 @@ export default function ChargesDivers() {
   const [editingCharge, setEditingCharge] = useState(null);
   const [selectedCharge, setSelectedCharge] = useState(null);
   const [currentTab, setCurrentTab] = useState(0);
+  const [filterDrawerOpen, setFilterDrawerOpen] = useState(false);
   
+  // État pour les notifications
+  const [notification, setNotification] = useState({
+    open: false,
+    message: '',
+    severity: 'success' // 'success', 'error', 'info', 'warning'
+  });
+
   // Filtres
   const [filters, setFilters] = useState({
     searchText: '',
@@ -148,6 +171,23 @@ export default function ChargesDivers() {
     'Annulé'
   ];
 
+  // Fonction pour afficher une notification
+  const showNotification = (message, severity = 'success') => {
+    setNotification({
+      open: true,
+      message,
+      severity
+    });
+  };
+
+  // Fermer la notification
+  const handleCloseNotification = (event, reason) => {
+    if (reason === 'clickaway') {
+      return;
+    }
+    setNotification({ ...notification, open: false });
+  };
+
   // Charger les charges
   useEffect(() => {
     if (!user || !societeId) return;
@@ -167,6 +207,7 @@ export default function ChargesDivers() {
         setFilteredCharges(data);
       } catch (error) {
         console.error('Erreur chargement charges:', error);
+        showNotification('Erreur lors du chargement des charges', 'error');
       } finally {
         setLoading(false);
       }
@@ -179,7 +220,6 @@ export default function ChargesDivers() {
   useEffect(() => {
     let result = [...charges];
 
-    // Filtre texte
     if (filters.searchText) {
       const searchLower = filters.searchText.toLowerCase();
       result = result.filter(charge =>
@@ -191,33 +231,61 @@ export default function ChargesDivers() {
       );
     }
 
-    // Filtre date début
     if (filters.dateDebut) {
       result = result.filter(charge => charge.date >= filters.dateDebut);
     }
 
-    // Filtre date fin
     if (filters.dateFin) {
       result = result.filter(charge => charge.date <= filters.dateFin);
     }
 
-    // Filtre catégorie
     if (filters.categorie) {
       result = result.filter(charge => charge.categorie === filters.categorie);
     }
 
-    // Filtre statut
     if (filters.statut) {
       result = result.filter(charge => charge.statut === filters.statut);
     }
 
-    // Filtre type document
     if (filters.typeDocument) {
       result = result.filter(charge => charge.typeDocument === filters.typeDocument);
     }
 
     setFilteredCharges(result);
   }, [filters, charges]);
+
+  // Compter les filtres actifs
+  const activeFiltersCount = Object.values(filters).filter(v => v !== '').length;
+
+  // Fonctions utilitaires
+  const getCategorieColor = (cat) => {
+    const colors = {
+      'Loyer': '#8b5cf6',
+      'Électricité': '#eab308',
+      'Eau': '#3b82f6',
+      'Téléphone': '#06b6d4',
+      'Internet': '#6366f1',
+      'Assurance': '#14b8a6',
+      'Taxes': '#f59e0b',
+      'Fournitures': '#84cc16',
+      'Maintenance': '#f97316',
+      'Transport': '#ec4899',
+      'Marketing': '#a855f7',
+      'Formation': '#10b981',
+      'Autre': '#64748b'
+    };
+    return colors[cat] || '#64748b';
+  };
+
+  const getStatutColor = (statut) => {
+    const colors = {
+      'Payé': '#10b981',
+      'En attente': '#f59e0b',
+      'Impayé': '#ef4444',
+      'Annulé': '#64748b'
+    };
+    return colors[statut] || '#64748b';
+  };
 
   // Réinitialiser les filtres
   const handleResetFilters = () => {
@@ -253,651 +321,676 @@ export default function ChargesDivers() {
       referenceVirement: '',
       statut: 'Payé'
     });
+    setEditingCharge(null);
+    setCurrentTab(0);
   };
 
+  // Ouvrir le dialogue
   const handleOpenDialog = (charge = null) => {
     if (charge) {
       setEditingCharge(charge);
-      setFormData({
-        categorie: charge.categorie || '',
-        libelle: charge.libelle || '',
-        montant: charge.montant || '',
-        date: charge.date || new Date().toISOString().split('T')[0],
-        fournisseur: charge.fournisseur || '',
-        contactFournisseur: charge.contactFournisseur || '',
-        adresseFournisseur: charge.adresseFournisseur || '',
-        typeDocument: charge.typeDocument || '',
-        numeroDocument: charge.numeroDocument || '',
-        numeroFacture: charge.numeroFacture || '',
-        dateDocument: charge.dateDocument || new Date().toISOString().split('T')[0],
-        dateEcheance: charge.dateEcheance || '',
-        pieceJointe: charge.pieceJointe || '',
-        description: charge.description || '',
-        notes: charge.notes || '',
-        modePaiement: charge.modePaiement || '',
-        referenceVirement: charge.referenceVirement || '',
-        statut: charge.statut || 'Payé'
-      });
+      setFormData({ ...charge });
     } else {
-      setEditingCharge(null);
       resetForm();
     }
-    setCurrentTab(0);
     setDialogOpen(true);
   };
 
+  // Fermer le dialogue
   const handleCloseDialog = () => {
     setDialogOpen(false);
-    setEditingCharge(null);
     resetForm();
   };
 
-  const handleOpenDetails = (charge) => {
+  // Voir les détails
+  const handleViewDetails = (charge) => {
     setSelectedCharge(charge);
     setDetailsDialogOpen(true);
   };
+
+
+  // Enregistrer - VERSION MODIFIÉE AVEC INTÉGRATION CAISSE ET NOTIFICATIONS
   const handleSave = async () => {
     try {
-      const montant = parseFloat(formData.montant) || 0;
-      
-      const data = {
+      const chargeData = {
         ...formData,
-        montant,
-        modifieLe: Timestamp.now(),
-        modifiePar: user.email
+        montant: parseFloat(formData.montant),
+        updatedAt: Timestamp.now(),
+        updatedBy: user.uid
       };
 
+      let chargeId;  // Stocker l'ID de la charge pour créer le paiement lié
+      let isNewCharge = !editingCharge;
+      
       if (editingCharge) {
-        // ============================================================
-        // MODIFICATION D'UNE CHARGE EXISTANTE
-        // ============================================================
-        
-        const isEspecesNow = formData.modePaiement === 'Espèces';
-        const isPayeNow = formData.statut === 'Payé';
-        const shouldHavePaiementNow = isEspecesNow && isPayeNow;
-        
-        const wasEspecesBefore = editingCharge.modePaiement === 'Espèces';
-        const wasPayeBefore = editingCharge.statut === 'Payé';
-        const hadPaiementBefore = wasEspecesBefore && wasPayeBefore;
-        
-        // Chercher si un paiement existe déjà pour cette charge
-        const paiementsQuery = query(
-          collection(db, 'societe', societeId, 'paiements'),
-          where('referenceCharge', '==', editingCharge.id)
-        );
-        const paiementsSnapshot = await getDocs(paiementsQuery);
-        const existingPaiement = paiementsSnapshot.docs[0];
-        
-        const batch = writeBatch(db);
-        
-        // 1. Mettre à jour la charge
-        batch.update(
-          doc(db, 'societe', societeId, 'chargesDivers', editingCharge.id),
-          data
-        );
-        
-        // 2. Gérer le paiement selon les cas
-        if (hadPaiementBefore && !shouldHavePaiementNow) {
-          // CAS 1: Avait un paiement → Ne devrait plus en avoir : SUPPRIMER
-          // (changement de mode de paiement ou de statut)
-          if (existingPaiement) {
-            batch.delete(existingPaiement.ref);
-          }
-        } else if (!hadPaiementBefore && shouldHavePaiementNow && montant > 0) {
-          // CAS 2: N'avait pas de paiement → Devrait en avoir : CRÉER
-          const paiementData = {
-            type: 'chargeDiverse',
-            relatedTo: 'chargeDiverse',
-            category: 'chargeDiverse',
-            montant: montant,
-            mode: 'Espèces',
-            paymentMode: 'Espèces',
-            moyen: 'Espèces',
-            date: Timestamp.fromDate(new Date(formData.date + 'T12:00:00')),
-            timestamp: Timestamp.now(),
-            description: `Charge Diverse: ${formData.categorie} - ${formData.libelle}`,
-            categorie: formData.categorie,
-            fournisseur: formData.fournisseur || null,
-            referenceCharge: editingCharge.id,
-            creeLe: Timestamp.now(),
-            creePar: user.email
-          };
-          
-          if (formData.referenceVirement) {
-            paiementData.reference = formData.referenceVirement;
-          }
-          
-          const paiementRef = doc(collection(db, 'societe', societeId, 'paiements'));
-          batch.set(paiementRef, paiementData);
-        } else if (hadPaiementBefore && shouldHavePaiementNow && montant > 0) {
-          // CAS 3: Avait un paiement → Devrait toujours en avoir : METTRE À JOUR
-          if (existingPaiement) {
-            const paiementData = {
-              montant: montant,
-              date: Timestamp.fromDate(new Date(formData.date + 'T12:00:00')),
-              description: `Charge Diverse: ${formData.categorie} - ${formData.libelle}`,
-              categorie: formData.categorie,
-              fournisseur: formData.fournisseur || null,
-              modifieLe: Timestamp.now(),
-              modifiePar: user.email
-            };
-            
-            if (formData.referenceVirement) {
-              paiementData.reference = formData.referenceVirement;
-            }
-            
-            batch.update(existingPaiement.ref, paiementData);
-          } else {
-            // Le paiement n'existe pas mais devrait exister, le créer
-            const paiementData = {
-              type: 'chargeDiverse',
-              relatedTo: 'chargeDiverse',
-              category: 'chargeDiverse',
-              montant: montant,
-              mode: 'Espèces',
-              paymentMode: 'Espèces',
-              moyen: 'Espèces',
-              date: Timestamp.fromDate(new Date(formData.date + 'T12:00:00')),
-              timestamp: Timestamp.now(),
-              description: `Charge Diverse: ${formData.categorie} - ${formData.libelle}`,
-              categorie: formData.categorie,
-              fournisseur: formData.fournisseur || null,
-              referenceCharge: editingCharge.id,
-              creeLe: Timestamp.now(),
-              creePar: user.email
-            };
-            
-            if (formData.referenceVirement) {
-              paiementData.reference = formData.referenceVirement;
-            }
-            
-            const paiementRef = doc(collection(db, 'societe', societeId, 'paiements'));
-            batch.set(paiementRef, paiementData);
-          }
-        } else if (hadPaiementBefore && shouldHavePaiementNow && montant === 0) {
-          // CAS 4: Montant devient 0 : SUPPRIMER le paiement
-          if (existingPaiement) {
-            batch.delete(existingPaiement.ref);
-          }
-        }
-        // CAS 5: N'avait pas de paiement → Ne devrait toujours pas en avoir : rien à faire
-        
-        await batch.commit();
-        setCharges(charges.map(c => c.id === editingCharge.id ? { ...c, ...data } : c));
-        
+        // Mise à jour d'une charge existante
+        await updateDoc(doc(db, 'societe', societeId, 'chargesDivers', editingCharge.id), chargeData);
+        chargeId = editingCharge.id;
+        showNotification('✅ Charge modifiée avec succès', 'success');
       } else {
-        // ============================================================
-        // NOUVELLE CHARGE
-        // ============================================================
-        data.creeLe = Timestamp.now();
-        data.creePar = user.email;
-        
-        const isEspeces = formData.modePaiement === 'Espèces';
-        const isPaye = formData.statut === 'Payé';
-        
-        if (isEspeces && isPaye && montant > 0) {
-          // Utiliser un batch pour créer les deux documents en même temps
-          const batch = writeBatch(db);
-          
-          // 1. Créer la charge diverse
-          const chargeRef = doc(collection(db, 'societe', societeId, 'chargesDivers'));
-          batch.set(chargeRef, data);
-          
-          // 2. Créer le paiement dans la caisse
-          const paiementData = {
-            type: 'chargeDiverse',
-            relatedTo: 'chargeDiverse',
-            category: 'chargeDiverse',
-            montant: montant,
-            mode: 'Espèces',
-            paymentMode: 'Espèces',
-            moyen: 'Espèces',
-            date: Timestamp.fromDate(new Date(formData.date + 'T12:00:00')),
-            timestamp: Timestamp.now(),
-            description: `Charge Diverse: ${formData.categorie} - ${formData.libelle}`,
-            categorie: formData.categorie,
-            fournisseur: formData.fournisseur || null,
-            referenceCharge: chargeRef.id,
-            creeLe: Timestamp.now(),
-            creePar: user.email
-          };
-          
-          if (formData.referenceVirement) {
-            paiementData.reference = formData.referenceVirement;
-          }
-          
-          const paiementRef = doc(collection(db, 'societe', societeId, 'paiements'));
-          batch.set(paiementRef, paiementData);
-          
-          // Commit le batch
-          await batch.commit();
-          
-          setCharges([{ id: chargeRef.id, ...data }, ...charges]);
-        } else {
-          // Pas de paiement en espèces OU pas payé, juste créer la charge
-          const docRef = await addDoc(
-            collection(db, 'societe', societeId, 'chargesDivers'),
-            data
-          );
-          setCharges([{ id: docRef.id, ...data }, ...charges]);
-        }
+        // Création d'une nouvelle charge
+        chargeData.createdAt = Timestamp.now();
+        chargeData.createdBy = user.uid;
+        const docRef = await addDoc(collection(db, 'societe', societeId, 'chargesDivers'), chargeData);
+        chargeId = docRef.id;  // Récupérer l'ID du nouveau document
       }
+
+      // ========== INTÉGRATION CAISSE : CRÉATION AUTOMATIQUE DU PAIEMENT ==========
+      // Si un mode de paiement est spécifié et le statut est "Payé",
+      // créer automatiquement un enregistrement dans la collection "paiements"
+      if (formData.modePaiement && 
+          formData.modePaiement !== '' && 
+          formData.statut === 'Payé' && 
+          parseFloat(formData.montant) > 0) {
+        
+        const paiementData = {
+          // Identifiants pour le Dashboard (permet de reconnaître ce type de paiement)
+          type: 'chargeDiverse',
+          category: 'chargeDiverse',
+          relatedTo: 'chargeDiverse',
+          
+          // Montant et mode de paiement (Dashboard les utilise pour calculer la caisse)
+          montant: parseFloat(formData.montant),
+          mode: formData.modePaiement,
+          moyen: formData.modePaiement,
+          paymentMode: formData.modePaiement,
+          typePaiement: formData.modePaiement,
+          
+          // Dates
+          date: formData.date,
+          timestamp: Timestamp.now(),
+          
+          // Description et référence
+          description: `Charge diverse: ${formData.categorie || 'N/A'} - ${formData.libelle || 'N/A'}`,
+          reference: formData.referenceVirement || '',
+          
+          // Lien vers la charge originale (pour suppression en cascade)
+          chargeDiverseId: chargeId,
+          
+          // Informations supplémentaires
+          categorie: formData.categorie || '',
+          libelle: formData.libelle || '',
+          fournisseur: formData.fournisseur || '',
+          
+          // Métadonnées
+          createdAt: Timestamp.now(),
+          createdBy: user.uid
+        };
+
+        // Créer le document de paiement dans la collection "paiements"
+        await addDoc(collection(db, 'societe', societeId, 'paiements'), paiementData);
+        
+        console.log('✅ Paiement créé automatiquement pour la charge diverse');
+        
+        // Notification spécifique pour nouvelle charge avec paiement
+        if (isNewCharge) {
+          if (formData.modePaiement === 'Espèces') {
+            showNotification(`✅ Charge créée avec succès ! Le montant de ${parseFloat(formData.montant).toFixed(2)} MAD a été déduit de la caisse`, 'success');
+          } else {
+            showNotification(`✅ Charge créée avec succès ! Paiement ${formData.modePaiement} enregistré`, 'success');
+          }
+        }
+      } else if (isNewCharge) {
+        // Notification pour nouvelle charge sans paiement
+        showNotification('✅ Charge créée avec succès', 'success');
+      }
+      // ===========================================================================
+
+      // Recharger les charges
+      const q = query(
+        collection(db, 'societe', societeId, 'chargesDivers'),
+        orderBy('date', 'desc')
+      );
+      const snapshot = await getDocs(q);
+      const data = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      }));
+      setCharges(data);
+      setFilteredCharges(data);
 
       handleCloseDialog();
     } catch (error) {
-      console.error('Erreur sauvegarde:', error);
-      alert('Erreur lors de la sauvegarde: ' + error.message);
+      console.error('Erreur enregistrement:', error);
+      showNotification('❌ Erreur lors de l\'enregistrement de la charge', 'error');
     }
   };
 
-  const handleDelete = async (id) => {
+  // Supprimer - VERSION MODIFIÉE AVEC SUPPRESSION DES PAIEMENTS LIÉS
+  const handleDelete = async (charge) => {
     if (!window.confirm('Êtes-vous sûr de vouloir supprimer cette charge ?')) return;
 
     try {
-      // Chercher si un paiement existe pour cette charge
-      const paiementsQuery = query(
+      // ========== SUPPRESSION DES PAIEMENTS LIÉS ==========
+      // Supprimer aussi les paiements liés à cette charge
+      const qPaiements = query(
         collection(db, 'societe', societeId, 'paiements'),
-        where('referenceCharge', '==', id)
+        where('chargeDiverseId', '==', charge.id)
       );
-      const paiementsSnapshot = await getDocs(paiementsQuery);
+      const paiementsSnapshot = await getDocs(qPaiements);
       
+      // Utiliser un batch pour supprimer tout atomiquement
       const batch = writeBatch(db);
       
-      // Supprimer la charge
-      batch.delete(doc(db, 'societe', societeId, 'chargesDivers', id));
-      
-      // Supprimer le paiement associé s'il existe
+      // Supprimer tous les paiements liés
       paiementsSnapshot.docs.forEach(paiementDoc => {
         batch.delete(paiementDoc.ref);
       });
       
+      // Supprimer la charge
+      batch.delete(doc(db, 'societe', societeId, 'chargesDivers', charge.id));
+      
+      // Exécuter toutes les suppressions
       await batch.commit();
-      setCharges(charges.filter(c => c.id !== id));
+      
+      console.log('✅ Charge et paiements liés supprimés');
+      showNotification('✅ Charge supprimée avec succès', 'success');
+      // ====================================================
+
+      // Recharger les charges
+      const q = query(
+        collection(db, 'societe', societeId, 'chargesDivers'),
+        orderBy('date', 'desc')
+      );
+      const snapshot = await getDocs(q);
+      const data = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      }));
+      setCharges(data);
+      setFilteredCharges(data);
     } catch (error) {
       console.error('Erreur suppression:', error);
-      alert('Erreur lors de la suppression: ' + error.message);
+      showNotification('❌ Erreur lors de la suppression', 'error');
     }
   };
 
-  const totalCharges = filteredCharges.reduce((sum, c) => sum + (c.montant || 0), 0);
-  const chargesParCategorie = filteredCharges.reduce((acc, charge) => {
-    const cat = charge.categorie || 'Autre';
-    acc[cat] = (acc[cat] || 0) + (charge.montant || 0);
-    return acc;
-  }, {});
-  const chargesParStatut = filteredCharges.reduce((acc, charge) => {
-    const stat = charge.statut || 'Payé';
-    acc[stat] = (acc[stat] || 0) + (charge.montant || 0);
-    return acc;
-  }, {});
-
-  const getCategorieColor = (categorie) => {
-    const colors = {
-      'Loyer': '#ef4444',
-      'Électricité': '#f59e0b',
-      'Eau': '#3b82f6',
-      'Téléphone': '#8b5cf6',
-      'Internet': '#06b6d4',
-      'Assurance': '#10b981',
-      'Taxes': '#f43f5e',
-      'Fournitures': '#6366f1',
-      'Maintenance': '#f97316',
-      'Transport': '#14b8a6',
-      'Marketing': '#ec4899',
-      'Formation': '#a855f7',
-      'Autre': '#64748b'
-    };
-    return colors[categorie] || colors['Autre'];
+  // Statistiques
+  const stats = {
+    total: filteredCharges.reduce((sum, c) => sum + (c.montant || 0), 0),
+    count: filteredCharges.length,
+    paye: filteredCharges.filter(c => c.statut === 'Payé').length,
+    enAttente: filteredCharges.filter(c => c.statut === 'En attente').length
   };
 
-  const getStatutColor = (statut) => {
-    const colors = {
-      'Payé': '#10b981',
-      'En attente': '#f59e0b',
-      'Impayé': '#ef4444',
-      'Annulé': '#64748b'
-    };
-    return colors[statut] || colors['Payé'];
-  };
+  // Composant de filtres (pour drawer sur mobile)
+  const FiltersContent = () => (
+    <Box sx={{ p: isMobile ? 2 : 0 }}>
+      {isMobile && (
+        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
+          <Typography variant="h6" sx={{ fontWeight: 700 }}>Filtres</Typography>
+          <IconButton onClick={() => setFilterDrawerOpen(false)}>
+            <CloseIcon />
+          </IconButton>
+        </Box>
+      )}
+
+      <Stack spacing={2}>
+        <TextField
+          label="Recherche"
+          placeholder="Libellé, fournisseur, N° facture..."
+          value={filters.searchText}
+          onChange={(e) => setFilters({ ...filters, searchText: e.target.value })}
+          fullWidth
+          size="small"
+          InputProps={{
+            startAdornment: <SearchIcon sx={{ mr: 1, color: 'text.secondary' }} />
+          }}
+        />
+
+        <Grid container spacing={2}>
+          <Grid item xs={12} sm={6}>
+            <TextField
+              label="Date début"
+              type="date"
+              value={filters.dateDebut}
+              onChange={(e) => setFilters({ ...filters, dateDebut: e.target.value })}
+              fullWidth
+              size="small"
+              InputLabelProps={{ shrink: true }}
+            />
+          </Grid>
+          <Grid item xs={12} sm={6}>
+            <TextField
+              label="Date fin"
+              type="date"
+              value={filters.dateFin}
+              onChange={(e) => setFilters({ ...filters, dateFin: e.target.value })}
+              fullWidth
+              size="small"
+              InputLabelProps={{ shrink: true }}
+            />
+          </Grid>
+        </Grid>
+
+        <FormControl fullWidth size="small">
+          <InputLabel>Catégorie</InputLabel>
+          <Select
+            value={filters.categorie}
+            onChange={(e) => setFilters({ ...filters, categorie: e.target.value })}
+            label="Catégorie"
+          >
+            <MenuItem value="">Toutes</MenuItem>
+            {categories.map(cat => (
+              <MenuItem key={cat} value={cat}>{cat}</MenuItem>
+            ))}
+          </Select>
+        </FormControl>
+
+        <FormControl fullWidth size="small">
+          <InputLabel>Statut</InputLabel>
+          <Select
+            value={filters.statut}
+            onChange={(e) => setFilters({ ...filters, statut: e.target.value })}
+            label="Statut"
+          >
+            <MenuItem value="">Tous</MenuItem>
+            {statuts.map(stat => (
+              <MenuItem key={stat} value={stat}>{stat}</MenuItem>
+            ))}
+          </Select>
+        </FormControl>
+
+        <FormControl fullWidth size="small">
+          <InputLabel>Type document</InputLabel>
+          <Select
+            value={filters.typeDocument}
+            onChange={(e) => setFilters({ ...filters, typeDocument: e.target.value })}
+            label="Type document"
+          >
+            <MenuItem value="">Tous</MenuItem>
+            {typesDocuments.map(type => (
+              <MenuItem key={type} value={type}>{type}</MenuItem>
+            ))}
+          </Select>
+        </FormControl>
+
+        <Button
+          variant="outlined"
+          startIcon={<ClearIcon />}
+          onClick={handleResetFilters}
+          fullWidth
+          sx={{ mt: 1 }}
+        >
+          Réinitialiser
+        </Button>
+      </Stack>
+    </Box>
+  );
+
+  // Affichage en carte pour mobile/tablette
+  const ChargeCard = ({ charge }) => (
+    <Card sx={{ mb: 2, boxShadow: '0 2px 8px rgba(0,0,0,0.08)' }}>
+      <CardContent>
+        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', mb: 2 }}>
+          <Box sx={{ flex: 1 }}>
+            <Stack direction="row" spacing={1} sx={{ mb: 1, flexWrap: 'wrap' }}>
+              <Chip
+                label={charge.categorie}
+                size="small"
+                sx={{
+                  bgcolor: getCategorieColor(charge.categorie) + '20',
+                  color: getCategorieColor(charge.categorie),
+                  fontWeight: 600,
+                  mb: 0.5
+                }}
+              />
+              <Chip
+                label={charge.statut || 'Payé'}
+                size="small"
+                sx={{
+                  bgcolor: getStatutColor(charge.statut) + '20',
+                  color: getStatutColor(charge.statut),
+                  fontWeight: 600,
+                  mb: 0.5
+                }}
+              />
+            </Stack>
+            
+            <Typography variant="body1" sx={{ fontWeight: 700, mb: 0.5 }}>
+              {charge.libelle}
+            </Typography>
+            
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+              {charge.date}
+              {charge.fournisseur && ` • ${charge.fournisseur}`}
+            </Typography>
+            
+            <Typography variant="h6" sx={{ color: '#667eea', fontWeight: 700 }}>
+              {charge.montant?.toFixed(2)} MAD
+            </Typography>
+          </Box>
+        </Box>
+      </CardContent>
+      
+      <CardActions sx={{ justifyContent: 'flex-end', px: 2, pb: 2 }}>
+        <IconButton 
+          size="small" 
+          onClick={() => handleViewDetails(charge)}
+          sx={{ color: '#667eea' }}
+        >
+          <VisibilityIcon />
+        </IconButton>
+        <IconButton 
+          size="small" 
+          onClick={() => handleOpenDialog(charge)}
+          sx={{ color: '#f59e0b' }}
+        >
+          <EditIcon />
+        </IconButton>
+        <IconButton 
+          size="small" 
+          onClick={() => handleDelete(charge)}
+          sx={{ color: '#ef4444' }}
+        >
+          <DeleteIcon />
+        </IconButton>
+      </CardActions>
+    </Card>
+  );
 
   if (loading) {
     return (
-      <Box sx={{ p: 4, textAlign: 'center' }}>
+      <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '60vh' }}>
         <Typography>Chargement...</Typography>
       </Box>
     );
   }
 
   return (
-    <Box sx={{ p: 4, background: '#f8fafc', minHeight: '100vh' }}>
-      {/* En-tête */}
-      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 4 }}>
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-          <ReceiptIcon sx={{ fontSize: 40, color: '#764ba2' }} />
-          <Typography variant="h4" sx={{ fontWeight: 700, color: '#1e293b' }}>
+    <Box sx={{ 
+      p: { xs: 1, sm: 2, md: 3 },
+      maxWidth: '1400px',
+      mx: 'auto'
+    }}>
+      {/* En-tête responsive */}
+      <Box sx={{ 
+        display: 'flex', 
+        flexDirection: { xs: 'column', sm: 'row' },
+        justifyContent: 'space-between', 
+        alignItems: { xs: 'stretch', sm: 'center' },
+        gap: 2,
+        mb: 3 
+      }}>
+        <Box>
+          <Typography 
+            variant={isMobile ? "h5" : "h4"} 
+            sx={{ 
+              fontWeight: 800,
+              background: 'linear-gradient(135deg, #667eea, #764ba2)',
+              WebkitBackgroundClip: 'text',
+              WebkitTextFillColor: 'transparent',
+              mb: 0.5
+            }}
+          >
             Charges Diverses
           </Typography>
+          <Typography variant="body2" color="text.secondary">
+            Gérez toutes vos charges et dépenses
+          </Typography>
         </Box>
+        
         <Button
           variant="contained"
           startIcon={<AddIcon />}
           onClick={() => handleOpenDialog()}
-          sx={{
+          fullWidth={isMobile}
+          sx={{ 
             background: 'linear-gradient(135deg, #667eea, #764ba2)',
+            color: 'white',
             fontWeight: 600,
             px: 3,
-            py: 1.5
+            py: 1.5,
+            '&:hover': {
+              background: 'linear-gradient(135deg, #5568d3, #6941a0)'
+            }
           }}
         >
           Nouvelle charge
         </Button>
       </Box>
 
-      {/* Filtres */}
-      <Accordion sx={{ mb: 3, boxShadow: 3 }}>
-        <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-            <FilterListIcon sx={{ color: '#667eea' }} />
-            <Typography sx={{ fontWeight: 600 }}>Filtres de recherche</Typography>
-            {(filters.searchText || filters.dateDebut || filters.dateFin || filters.categorie || filters.statut || filters.typeDocument) && (
-              <Chip label="Actifs" size="small" color="primary" />
-            )}
-          </Box>
-        </AccordionSummary>
-        <AccordionDetails>
-          <Grid container spacing={2}>
-            {/* Recherche texte */}
-            <Grid item xs={12} md={6}>
-              <TextField
-                fullWidth
-                placeholder="Rechercher par libellé, fournisseur, n° facture..."
-                value={filters.searchText}
-                onChange={(e) => setFilters({ ...filters, searchText: e.target.value })}
-                InputProps={{
-                  startAdornment: <SearchIcon sx={{ mr: 1, color: '#64748b' }} />
-                }}
-              />
-            </Grid>
-
-            {/* Filtre catégorie */}
-            <Grid item xs={12} md={6}>
-              <FormControl fullWidth>
-                <InputLabel>Catégorie</InputLabel>
-                <Select
-                  value={filters.categorie}
-                  onChange={(e) => setFilters({ ...filters, categorie: e.target.value })}
-                  label="Catégorie"
-                >
-                  <MenuItem value="">Toutes les catégories</MenuItem>
-                  {categories.map(cat => (
-                    <MenuItem key={cat} value={cat}>{cat}</MenuItem>
-                  ))}
-                </Select>
-              </FormControl>
-            </Grid>
-
-            {/* Date début */}
-            <Grid item xs={12} md={3}>
-              <TextField
-                fullWidth
-                type="date"
-                label="Date de début"
-                value={filters.dateDebut}
-                onChange={(e) => setFilters({ ...filters, dateDebut: e.target.value })}
-                InputLabelProps={{ shrink: true }}
-              />
-            </Grid>
-
-            {/* Date fin */}
-            <Grid item xs={12} md={3}>
-              <TextField
-                fullWidth
-                type="date"
-                label="Date de fin"
-                value={filters.dateFin}
-                onChange={(e) => setFilters({ ...filters, dateFin: e.target.value })}
-                InputLabelProps={{ shrink: true }}
-              />
-            </Grid>
-
-            {/* Filtre statut */}
-            <Grid item xs={12} md={3}>
-              <FormControl fullWidth>
-                <InputLabel>Statut</InputLabel>
-                <Select
-                  value={filters.statut}
-                  onChange={(e) => setFilters({ ...filters, statut: e.target.value })}
-                  label="Statut"
-                >
-                  <MenuItem value="">Tous les statuts</MenuItem>
-                  {statuts.map(stat => (
-                    <MenuItem key={stat} value={stat}>{stat}</MenuItem>
-                  ))}
-                </Select>
-              </FormControl>
-            </Grid>
-
-            {/* Filtre type document */}
-            <Grid item xs={12} md={3}>
-              <FormControl fullWidth>
-                <InputLabel>Type de document</InputLabel>
-                <Select
-                  value={filters.typeDocument}
-                  onChange={(e) => setFilters({ ...filters, typeDocument: e.target.value })}
-                  label="Type de document"
-                >
-                  <MenuItem value="">Tous les documents</MenuItem>
-                  {typesDocuments.map(type => (
-                    <MenuItem key={type} value={type}>{type}</MenuItem>
-                  ))}
-                </Select>
-              </FormControl>
-            </Grid>
-
-            {/* Bouton réinitialiser */}
-            <Grid item xs={12}>
-              <Button
-                variant="outlined"
-                startIcon={<ClearIcon />}
-                onClick={handleResetFilters}
-              >
-                Réinitialiser les filtres
-              </Button>
-            </Grid>
-          </Grid>
-
-          {/* Résultats filtrés */}
-          <Box sx={{ mt: 2, p: 2, bgcolor: '#f1f5f9', borderRadius: 1 }}>
-            <Typography variant="body2" sx={{ fontWeight: 600 }}>
-              📊 {filteredCharges.length} résultat(s) sur {charges.length} charge(s)
-              {filters.dateDebut && filters.dateFin && (
-                <> • Période : {filters.dateDebut} → {filters.dateFin}</>
-              )}
-            </Typography>
-          </Box>
-        </AccordionDetails>
-      </Accordion>
-
       {/* Statistiques */}
-      <Grid container spacing={3} sx={{ mb: 4 }}>
-        <Grid item xs={12} md={3}>
-          <Paper sx={{ p: 3, background: 'linear-gradient(135deg, #667eea15, #764ba215)' }}>
-            <Typography variant="body2" sx={{ fontWeight: 600, color: '#475569', mb: 1 }}>
-              Total des charges (filtrées)
+      <Grid container spacing={2} sx={{ mb: 3 }}>
+        <Grid item xs={6} sm={6} md={3}>
+          <Paper sx={{ 
+            p: 2, 
+            background: 'linear-gradient(135deg, #667eea20, #764ba220)',
+            border: '1px solid #667eea40'
+          }}>
+            <Typography variant="caption" color="text.secondary">Total</Typography>
+            <Typography variant={isMobile ? "h6" : "h5"} sx={{ fontWeight: 700, color: '#667eea' }}>
+              {stats.total.toFixed(2)}
             </Typography>
-            <Typography variant="h4" sx={{ fontWeight: 700, color: '#667eea' }}>
-              {totalCharges.toFixed(2)} MAD
+            <Typography variant="caption">MAD</Typography>
+          </Paper>
+        </Grid>
+        <Grid item xs={6} sm={6} md={3}>
+          <Paper sx={{ p: 2, bgcolor: '#f8fafc' }}>
+            <Typography variant="caption" color="text.secondary">Nombre</Typography>
+            <Typography variant={isMobile ? "h6" : "h5"} sx={{ fontWeight: 700 }}>
+              {stats.count}
+            </Typography>
+            <Typography variant="caption">charges</Typography>
+          </Paper>
+        </Grid>
+        <Grid item xs={6} sm={6} md={3}>
+          <Paper sx={{ p: 2, bgcolor: '#f0fdf4' }}>
+            <Typography variant="caption" color="text.secondary">Payées</Typography>
+            <Typography variant={isMobile ? "h6" : "h5"} sx={{ fontWeight: 700, color: '#10b981' }}>
+              {stats.paye}
             </Typography>
           </Paper>
         </Grid>
-
-        <Grid item xs={12} md={3}>
-          <Paper sx={{ p: 3, background: 'linear-gradient(135deg, #10b98115, #06b6d415)' }}>
-            <Typography variant="body2" sx={{ fontWeight: 600, color: '#475569', mb: 1 }}>
-              Nombre de charges (filtrées)
-            </Typography>
-            <Typography variant="h4" sx={{ fontWeight: 700, color: '#10b981' }}>
-              {filteredCharges.length}
-            </Typography>
-          </Paper>
-        </Grid>
-
-        <Grid item xs={12} md={3}>
-          <Paper sx={{ p: 3, background: 'linear-gradient(135deg, #f59e0b15, #f9731615)' }}>
-            <Typography variant="body2" sx={{ fontWeight: 600, color: '#475569', mb: 1 }}>
-              Catégories actives (filtrées)
-            </Typography>
-            <Typography variant="h4" sx={{ fontWeight: 700, color: '#f59e0b' }}>
-              {Object.keys(chargesParCategorie).length}
-            </Typography>
-          </Paper>
-        </Grid>
-
-        <Grid item xs={12} md={3}>
-          <Paper sx={{ p: 3, background: 'linear-gradient(135deg, #ef444415, #f4333515)' }}>
-            <Typography variant="body2" sx={{ fontWeight: 600, color: '#475569', mb: 1 }}>
-              Impayés (filtrés)
-            </Typography>
-            <Typography variant="h4" sx={{ fontWeight: 700, color: '#ef4444' }}>
-              {(chargesParStatut['Impayé'] || 0).toFixed(2)} MAD
+        <Grid item xs={6} sm={6} md={3}>
+          <Paper sx={{ p: 2, bgcolor: '#fffbeb' }}>
+            <Typography variant="caption" color="text.secondary">En attente</Typography>
+            <Typography variant={isMobile ? "h6" : "h5"} sx={{ fontWeight: 700, color: '#f59e0b' }}>
+              {stats.enAttente}
             </Typography>
           </Paper>
         </Grid>
       </Grid>
 
-      {/* Tableau */}
-      <TableContainer component={Paper} sx={{ boxShadow: 3 }}>
-        <Table>
-          <TableHead sx={{ bgcolor: '#f8fafc' }}>
-            <TableRow>
-              <TableCell sx={{ fontWeight: 700 }}>Catégorie</TableCell>
-              <TableCell sx={{ fontWeight: 700 }}>Libellé</TableCell>
-              <TableCell sx={{ fontWeight: 700 }}>Fournisseur</TableCell>
-              <TableCell sx={{ fontWeight: 700 }}>Date</TableCell>
-              <TableCell sx={{ fontWeight: 700 }} align="right">Montant</TableCell>
-              <TableCell sx={{ fontWeight: 700 }}>Document</TableCell>
-              <TableCell sx={{ fontWeight: 700 }}>Statut</TableCell>
-              <TableCell sx={{ fontWeight: 700 }} align="center">Actions</TableCell>
-            </TableRow>
-          </TableHead>
-          <TableBody>
-            {filteredCharges.length === 0 ? (
+      {/* Filtres - Desktop */}
+      {isDesktop && (
+        <Paper sx={{ p: 2, mb: 3 }}>
+          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
+            <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>Filtres</Typography>
+            {activeFiltersCount > 0 && (
+              <Button
+                size="small"
+                startIcon={<ClearIcon />}
+                onClick={handleResetFilters}
+              >
+                Réinitialiser ({activeFiltersCount})
+              </Button>
+            )}
+          </Box>
+          <FiltersContent />
+        </Paper>
+      )}
+
+      {/* Filtres - Mobile/Tablette (Button) */}
+      {!isDesktop && (
+        <Box sx={{ mb: 2 }}>
+          <Button
+            variant="outlined"
+            startIcon={<FilterListIcon />}
+            onClick={() => setFilterDrawerOpen(true)}
+            fullWidth
+            sx={{ justifyContent: 'flex-start' }}
+          >
+            <Badge badgeContent={activeFiltersCount} color="primary" sx={{ ml: 1, mr: 'auto' }}>
+              Filtres
+            </Badge>
+          </Button>
+        </Box>
+      )}
+
+      {/* Drawer pour filtres mobile */}
+      <Drawer
+        anchor="right"
+        open={filterDrawerOpen}
+        onClose={() => setFilterDrawerOpen(false)}
+        PaperProps={{
+          sx: { width: isMobile ? '85%' : '400px' }
+        }}
+      >
+        <FiltersContent />
+      </Drawer>
+
+      {/* Liste des charges - Responsive */}
+      {!isDesktop ? (
+        // Vue Mobile/Tablette - Cartes
+        <Box>
+          {filteredCharges.length === 0 ? (
+            <Paper sx={{ p: 4, textAlign: 'center' }}>
+              <Typography color="text.secondary">
+                Aucune charge trouvée
+              </Typography>
+            </Paper>
+          ) : (
+            filteredCharges.map(charge => (
+              <ChargeCard key={charge.id} charge={charge} />
+            ))
+          )}
+        </Box>
+      ) : (
+        // Vue Desktop - Tableau
+        <TableContainer component={Paper} sx={{ boxShadow: '0 2px 8px rgba(0,0,0,0.08)' }}>
+          <Table>
+            <TableHead sx={{ bgcolor: '#f8fafc' }}>
               <TableRow>
-                <TableCell colSpan={8} align="center" sx={{ py: 4 }}>
-                  <Typography color="text.secondary">
-                    {charges.length === 0 ? 'Aucune charge enregistrée' : 'Aucun résultat pour ces filtres'}
-                  </Typography>
-                </TableCell>
+                <TableCell sx={{ fontWeight: 700 }}>Date</TableCell>
+                <TableCell sx={{ fontWeight: 700 }}>Catégorie</TableCell>
+                <TableCell sx={{ fontWeight: 700 }}>Libellé</TableCell>
+                <TableCell sx={{ fontWeight: 700 }}>Fournisseur</TableCell>
+                <TableCell sx={{ fontWeight: 700 }} align="right">Montant</TableCell>
+                <TableCell sx={{ fontWeight: 700 }}>Statut</TableCell>
+                <TableCell sx={{ fontWeight: 700 }} align="center">Actions</TableCell>
               </TableRow>
-            ) : (
-              filteredCharges.map(charge => (
-                <TableRow key={charge.id} hover>
-                  <TableCell>
-                    <Chip
-                      label={charge.categorie}
-                      size="small"
-                      sx={{
-                        fontWeight: 600,
-                        bgcolor: getCategorieColor(charge.categorie) + '20',
-                        color: getCategorieColor(charge.categorie),
-                        borderLeft: `4px solid ${getCategorieColor(charge.categorie)}`
-                      }}
-                    />
-                  </TableCell>
-                  <TableCell sx={{ fontWeight: 600 }}>{charge.libelle}</TableCell>
-                  <TableCell>
-                    {charge.fournisseur ? (
-                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                        <BusinessIcon fontSize="small" />
-                        <Typography variant="body2">{charge.fournisseur}</Typography>
-                      </Box>
-                    ) : (
-                      <Typography variant="caption" color="text.secondary">-</Typography>
-                    )}
-                  </TableCell>
-                  <TableCell>{charge.date}</TableCell>
-                  <TableCell align="right">
-                    <Typography sx={{ fontWeight: 700, color: '#667eea' }}>
-                      {charge.montant?.toFixed(2)} MAD
+            </TableHead>
+            <TableBody>
+              {filteredCharges.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={7} align="center" sx={{ py: 4 }}>
+                    <Typography color="text.secondary">
+                      Aucune charge trouvée
                     </Typography>
                   </TableCell>
-                  <TableCell>
-                    {charge.typeDocument ? (
-                      <Chip
-                        icon={<DescriptionIcon />}
-                        label={charge.typeDocument}
-                        size="small"
-                        sx={{ bgcolor: '#fef3c7', color: '#92400e' }}
-                      />
-                    ) : (
-                      <Typography variant="caption" color="text.secondary">-</Typography>
-                    )}
-                  </TableCell>
-                  <TableCell>
-                    <Chip
-                      label={charge.statut || 'Payé'}
-                      size="small"
-                      sx={{
-                        bgcolor: getStatutColor(charge.statut) + '20',
-                        color: getStatutColor(charge.statut),
-                        fontWeight: 600
-                      }}
-                    />
-                  </TableCell>
-                  <TableCell align="center">
-                    <IconButton
-                      size="small"
-                      onClick={() => handleOpenDetails(charge)}
-                      sx={{ color: '#06b6d4' }}
-                      title="Voir détails"
-                    >
-                      <VisibilityIcon />
-                    </IconButton>
-                    <IconButton
-                      size="small"
-                      onClick={() => handleOpenDialog(charge)}
-                      sx={{ color: '#667eea' }}
-                      title="Modifier"
-                    >
-                      <EditIcon />
-                    </IconButton>
-                    <IconButton
-                      size="small"
-                      onClick={() => handleDelete(charge.id)}
-                      sx={{ color: '#ef4444' }}
-                      title="Supprimer"
-                    >
-                      <DeleteIcon />
-                    </IconButton>
-                  </TableCell>
                 </TableRow>
-              ))
-            )}
-          </TableBody>
-        </Table>
-      </TableContainer>
+              ) : (
+                filteredCharges.map((charge) => (
+                  <TableRow key={charge.id} hover>
+                    <TableCell>{charge.date}</TableCell>
+                    <TableCell>
+                      <Chip
+                        label={charge.categorie}
+                        size="small"
+                        sx={{
+                          bgcolor: getCategorieColor(charge.categorie) + '20',
+                          color: getCategorieColor(charge.categorie),
+                          fontWeight: 600
+                        }}
+                      />
+                    </TableCell>
+                    <TableCell sx={{ fontWeight: 600 }}>{charge.libelle}</TableCell>
+                    <TableCell>{charge.fournisseur || '-'}</TableCell>
+                    <TableCell align="right" sx={{ fontWeight: 700, color: '#667eea' }}>
+                      {charge.montant?.toFixed(2)} MAD
+                    </TableCell>
+                    <TableCell>
+                      <Chip
+                        label={charge.statut || 'Payé'}
+                        size="small"
+                        sx={{
+                          bgcolor: getStatutColor(charge.statut) + '20',
+                          color: getStatutColor(charge.statut),
+                          fontWeight: 600
+                        }}
+                      />
+                    </TableCell>
+                    <TableCell align="center">
+                      <IconButton 
+                        size="small" 
+                        onClick={() => handleViewDetails(charge)}
+                        sx={{ color: '#667eea' }}
+                      >
+                        <VisibilityIcon />
+                      </IconButton>
+                      <IconButton 
+                        size="small" 
+                        onClick={() => handleOpenDialog(charge)}
+                        sx={{ color: '#f59e0b' }}
+                      >
+                        <EditIcon />
+                      </IconButton>
+                      <IconButton 
+                        size="small" 
+                        onClick={() => handleDelete(charge)}
+                        sx={{ color: '#ef4444' }}
+                      >
+                        <DeleteIcon />
+                      </IconButton>
+                    </TableCell>
+                  </TableRow>
+                ))
+              )}
+            </TableBody>
+          </Table>
+        </TableContainer>
+      )}
 
-      {/* Dialogue d'ajout/modification */}
-      <Dialog open={dialogOpen} onClose={handleCloseDialog} maxWidth="md" fullWidth>
-        <DialogTitle sx={{ fontWeight: 700, color: '#1e293b', pb: 1 }}>
-          {editingCharge ? 'Modifier la charge' : 'Nouvelle charge diverse'}
+      {/* Dialogue de création/modification responsive */}
+      <Dialog 
+        open={dialogOpen} 
+        onClose={handleCloseDialog}
+        fullScreen={isMobile}
+        maxWidth="md" 
+        fullWidth
+        PaperProps={{
+          sx: {
+            borderRadius: isMobile ? 0 : 2
+          }
+        }}
+      >
+        <DialogTitle sx={{ 
+          fontWeight: 700, 
+          color: '#1e293b',
+          background: 'linear-gradient(135deg, #667eea20, #764ba220)',
+          p: { xs: 2, sm: 3 },
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center'
+        }}>
+          <Typography variant={isMobile ? "h6" : "h5"} sx={{ fontWeight: 700 }}>
+            {editingCharge ? 'Modifier la charge' : 'Nouvelle charge'}
+          </Typography>
+          {isMobile && (
+            <IconButton onClick={handleCloseDialog}>
+              <CloseIcon />
+            </IconButton>
+          )}
         </DialogTitle>
         
-        <Tabs value={currentTab} onChange={(e, v) => setCurrentTab(v)} sx={{ px: 3, borderBottom: 1, borderColor: 'divider' }}>
-          <Tab label="Informations" />
-          <Tab label="Fournisseur" />
-          <Tab label="Documents" />
-          <Tab label="Paiement" />
-        </Tabs>
+        <DialogContent sx={{ p: { xs: 2, sm: 3 } }}>
+          {/* Tabs pour organiser le formulaire */}
+          <Tabs 
+            value={currentTab} 
+            onChange={(e, v) => setCurrentTab(v)}
+            sx={{ mb: 3, borderBottom: 1, borderColor: 'divider' }}
+            variant={isMobile ? "fullWidth" : "standard"}
+          >
+            <Tab label="Informations" />
+            <Tab label="Fournisseur" />
+            <Tab label="Document" />
+            <Tab label="Paiement" />
+          </Tabs>
 
-        <DialogContent>
-          {/* Onglet 1 : Informations */}
+          {/* Onglet 1: Informations principales */}
           {currentTab === 0 && (
-            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, mt: 2 }}>
-              <Alert severity="info">
-                Informations générales sur la charge
-              </Alert>
-              
+            <Stack spacing={2}>
               <FormControl fullWidth required>
                 <InputLabel>Catégorie</InputLabel>
                 <Select
@@ -907,104 +1000,106 @@ export default function ChargesDivers() {
                 >
                   {categories.map(cat => (
                     <MenuItem key={cat} value={cat}>
-                      <Chip
-                        label={cat}
-                        size="small"
-                        sx={{
-                          bgcolor: getCategorieColor(cat) + '20',
-                          color: getCategorieColor(cat)
-                        }}
-                      />
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                        <Box
+                          sx={{
+                            width: 12,
+                            height: 12,
+                            borderRadius: '50%',
+                            bgcolor: getCategorieColor(cat)
+                          }}
+                        />
+                        {cat}
+                      </Box>
                     </MenuItem>
                   ))}
                 </Select>
               </FormControl>
 
               <TextField
-                label="Libellé *"
+                label="Libellé"
                 value={formData.libelle}
                 onChange={(e) => setFormData({ ...formData, libelle: e.target.value })}
-                fullWidth
                 required
-                placeholder="Ex: Loyer mensuel janvier 2025"
+                fullWidth
+                placeholder="Ex: Facture électricité janvier"
               />
 
-              <Grid container spacing={2}>
-                <Grid item xs={12} md={6}>
-                  <TextField
-                    label="Date *"
-                    type="date"
-                    value={formData.date}
-                    onChange={(e) => setFormData({ ...formData, date: e.target.value })}
-                    fullWidth
-                    required
-                    InputLabelProps={{ shrink: true }}
-                  />
-                </Grid>
-                <Grid item xs={12} md={6}>
-                  <TextField
-                    label="Montant (MAD) *"
-                    type="number"
-                    value={formData.montant}
-                    onChange={(e) => setFormData({ ...formData, montant: e.target.value })}
-                    fullWidth
-                    required
-                  />
-                </Grid>
-              </Grid>
+              <TextField
+                label="Montant (MAD)"
+                type="number"
+                value={formData.montant}
+                onChange={(e) => setFormData({ ...formData, montant: e.target.value })}
+                required
+                fullWidth
+                inputProps={{ step: "0.01", min: "0" }}
+              />
+
+              <TextField
+                label="Date"
+                type="date"
+                value={formData.date}
+                onChange={(e) => setFormData({ ...formData, date: e.target.value })}
+                fullWidth
+                InputLabelProps={{ shrink: true }}
+              />
 
               <TextField
                 label="Description"
                 value={formData.description}
                 onChange={(e) => setFormData({ ...formData, description: e.target.value })}
+                fullWidth
                 multiline
                 rows={3}
-                fullWidth
+                placeholder="Description détaillée de la charge..."
               />
-            </Box>
+
+              <TextField
+                label="Notes"
+                value={formData.notes}
+                onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
+                fullWidth
+                multiline
+                rows={2}
+                placeholder="Notes internes..."
+              />
+            </Stack>
           )}
 
-          {/* Onglet 2 : Fournisseur */}
+          {/* Onglet 2: Fournisseur */}
           {currentTab === 1 && (
-            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, mt: 2 }}>
-              <Alert severity="success" icon={<BusinessIcon />}>
-                Informations sur le fournisseur ou prestataire
-              </Alert>
-              
+            <Stack spacing={2}>
               <TextField
-                label="Nom du fournisseur/prestataire"
+                label="Nom du fournisseur"
                 value={formData.fournisseur}
                 onChange={(e) => setFormData({ ...formData, fournisseur: e.target.value })}
                 fullWidth
-                placeholder="Ex: LYDEC, Maroc Telecom, etc."
+                placeholder="Ex: Lydec, Maroc Telecom..."
               />
 
               <TextField
-                label="Contact (Téléphone/Email)"
+                label="Contact fournisseur"
                 value={formData.contactFournisseur}
                 onChange={(e) => setFormData({ ...formData, contactFournisseur: e.target.value })}
                 fullWidth
-                placeholder="Ex: 0522-123456 ou contact@fournisseur.ma"
+                placeholder="Téléphone ou email"
               />
 
               <TextField
-                label="Adresse du fournisseur"
+                label="Adresse fournisseur"
                 value={formData.adresseFournisseur}
                 onChange={(e) => setFormData({ ...formData, adresseFournisseur: e.target.value })}
                 fullWidth
                 multiline
                 rows={2}
+                placeholder="Adresse complète"
               />
-            </Box>
+            </Stack>
           )}
 
-          {/* Onglet 3 : Documents */}
+          {/* Onglet 3: Document */}
           {currentTab === 2 && (
-            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, mt: 2 }}>
-              <Alert severity="warning" icon={<DescriptionIcon />}>
-                Références des documents justificatifs
-              </Alert>
-              
+            <Stack spacing={2}>
               <FormControl fullWidth>
                 <InputLabel>Type de document</InputLabel>
                 <Select
@@ -1018,74 +1113,53 @@ export default function ChargesDivers() {
                 </Select>
               </FormControl>
 
-              <Grid container spacing={2}>
-                <Grid item xs={12} md={6}>
-                  <TextField
-                    label="Numéro du document"
-                    value={formData.numeroDocument}
-                    onChange={(e) => setFormData({ ...formData, numeroDocument: e.target.value })}
-                    fullWidth
-                    placeholder="Ex: DOC-2025-001"
-                  />
-                </Grid>
-                <Grid item xs={12} md={6}>
-                  <TextField
-                    label="Numéro de facture"
-                    value={formData.numeroFacture}
-                    onChange={(e) => setFormData({ ...formData, numeroFacture: e.target.value })}
-                    fullWidth
-                    placeholder="Ex: FA-2025-001"
-                  />
-                </Grid>
-                <Grid item xs={12} md={6}>
-                  <TextField
-                    label="Date du document"
-                    type="date"
-                    value={formData.dateDocument}
-                    onChange={(e) => setFormData({ ...formData, dateDocument: e.target.value })}
-                    fullWidth
-                    InputLabelProps={{ shrink: true }}
-                  />
-                </Grid>
-                <Grid item xs={12} md={6}>
-                  <TextField
-                    label="Date d'échéance"
-                    type="date"
-                    value={formData.dateEcheance}
-                    onChange={(e) => setFormData({ ...formData, dateEcheance: e.target.value })}
-                    fullWidth
-                    InputLabelProps={{ shrink: true }}
-                  />
-                </Grid>
-              </Grid>
+              <TextField
+                label="N° Facture"
+                value={formData.numeroFacture}
+                onChange={(e) => setFormData({ ...formData, numeroFacture: e.target.value })}
+                fullWidth
+                placeholder="Ex: FAC-2024-001"
+              />
 
               <TextField
-                label="Référence/Lien pièce jointe"
+                label="N° Document"
+                value={formData.numeroDocument}
+                onChange={(e) => setFormData({ ...formData, numeroDocument: e.target.value })}
+                fullWidth
+                placeholder="Autre numéro de référence"
+              />
+
+              <TextField
+                label="Date du document"
+                type="date"
+                value={formData.dateDocument}
+                onChange={(e) => setFormData({ ...formData, dateDocument: e.target.value })}
+                fullWidth
+                InputLabelProps={{ shrink: true }}
+              />
+
+              <TextField
+                label="Date d'échéance"
+                type="date"
+                value={formData.dateEcheance}
+                onChange={(e) => setFormData({ ...formData, dateEcheance: e.target.value })}
+                fullWidth
+                InputLabelProps={{ shrink: true }}
+              />
+
+              <TextField
+                label="Pièce jointe (URL)"
                 value={formData.pieceJointe}
                 onChange={(e) => setFormData({ ...formData, pieceJointe: e.target.value })}
                 fullWidth
-                placeholder="URL ou référence du fichier"
-                helperText="Vous pouvez indiquer un lien Google Drive, Dropbox, etc."
+                placeholder="https://..."
               />
-
-              <TextField
-                label="Notes supplémentaires"
-                value={formData.notes}
-                onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
-                multiline
-                rows={4}
-                fullWidth
-              />
-            </Box>
+            </Stack>
           )}
 
-          {/* Onglet 4 : Paiement */}
+          {/* Onglet 4: Paiement */}
           {currentTab === 3 && (
-            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, mt: 2 }}>
-              <Alert severity="info">
-                Informations sur le paiement
-              </Alert>
-              
+            <Stack spacing={2}>
               <FormControl fullWidth>
                 <InputLabel>Statut</InputLabel>
                 <Select
@@ -1095,14 +1169,17 @@ export default function ChargesDivers() {
                 >
                   {statuts.map(stat => (
                     <MenuItem key={stat} value={stat}>
-                      <Chip
-                        label={stat}
-                        size="small"
-                        sx={{
-                          bgcolor: getStatutColor(stat) + '20',
-                          color: getStatutColor(stat)
-                        }}
-                      />
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                        <Box
+                          sx={{
+                            width: 8,
+                            height: 8,
+                            borderRadius: '50%',
+                            bgcolor: getStatutColor(stat)
+                          }}
+                        />
+                        {stat}
+                      </Box>
                     </MenuItem>
                   ))}
                 </Select>
@@ -1131,7 +1208,7 @@ export default function ChargesDivers() {
 
               {formData.modePaiement === 'Espèces' && formData.statut === 'Payé' && (
                 <Alert severity="success">
-                  ✅ Ce paiement en espèces sera automatiquement déduit de la caisse dans le Dashboard
+                  ✅ Ce paiement en espèces sera automatiquement déduit de la caisse
                 </Alert>
               )}
 
@@ -1164,37 +1241,79 @@ export default function ChargesDivers() {
                   </Grid>
                 </Grid>
               </Paper>
-            </Box>
+            </Stack>
           )}
         </DialogContent>
-        <DialogActions sx={{ p: 3, pt: 2 }}>
-          <Button onClick={handleCloseDialog}>Annuler</Button>
+
+        <DialogActions sx={{ 
+          p: { xs: 2, sm: 3 }, 
+          pt: 2,
+          flexDirection: { xs: 'column-reverse', sm: 'row' },
+          gap: { xs: 1, sm: 0 }
+        }}>
+          <Button 
+            onClick={handleCloseDialog}
+            fullWidth={isMobile}
+          >
+            Annuler
+          </Button>
           <Button
             variant="contained"
             onClick={handleSave}
             disabled={!formData.categorie || !formData.libelle || !formData.montant}
-            sx={{ background: 'linear-gradient(135deg, #667eea, #764ba2)' }}
+            fullWidth={isMobile}
+            sx={{ 
+              background: 'linear-gradient(135deg, #667eea, #764ba2)',
+              ml: { sm: 1 }
+            }}
           >
             {editingCharge ? 'Modifier' : 'Enregistrer'}
           </Button>
         </DialogActions>
       </Dialog>
 
-      {/* Dialogue de détails */}
-      <Dialog open={detailsDialogOpen} onClose={() => setDetailsDialogOpen(false)} maxWidth="sm" fullWidth>
-        <DialogTitle sx={{ fontWeight: 700, color: '#1e293b' }}>
-          Détails de la charge
+      {/* Dialogue de détails responsive */}
+      <Dialog 
+        open={detailsDialogOpen} 
+        onClose={() => setDetailsDialogOpen(false)}
+        fullScreen={isMobile}
+        maxWidth="sm" 
+        fullWidth
+        PaperProps={{
+          sx: {
+            borderRadius: isMobile ? 0 : 2
+          }
+        }}
+      >
+        <DialogTitle sx={{ 
+          fontWeight: 700, 
+          color: '#1e293b',
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          p: { xs: 2, sm: 3 }
+        }}>
+          <Typography variant={isMobile ? "h6" : "h5"} sx={{ fontWeight: 700 }}>
+            Détails de la charge
+          </Typography>
+          {isMobile && (
+            <IconButton onClick={() => setDetailsDialogOpen(false)}>
+              <CloseIcon />
+            </IconButton>
+          )}
         </DialogTitle>
-        <DialogContent>
+        
+        <DialogContent sx={{ p: { xs: 2, sm: 3 } }}>
           {selectedCharge && (
-            <Box sx={{ mt: 2 }}>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
+            <Box sx={{ mt: 1 }}>
+              <Stack direction="row" spacing={1} sx={{ mb: 2, flexWrap: 'wrap' }}>
                 <Chip
                   label={selectedCharge.categorie}
                   sx={{
                     bgcolor: getCategorieColor(selectedCharge.categorie) + '20',
                     color: getCategorieColor(selectedCharge.categorie),
-                    fontWeight: 700
+                    fontWeight: 700,
+                    mb: 0.5
                   }}
                 />
                 <Chip
@@ -1202,10 +1321,11 @@ export default function ChargesDivers() {
                   sx={{
                     bgcolor: getStatutColor(selectedCharge.statut) + '20',
                     color: getStatutColor(selectedCharge.statut),
-                    fontWeight: 700
+                    fontWeight: 700,
+                    mb: 0.5
                   }}
                 />
-              </Box>
+              </Stack>
               
               <Typography variant="h6" sx={{ fontWeight: 700, mb: 2 }}>
                 {selectedCharge.libelle}
@@ -1232,10 +1352,10 @@ export default function ChargesDivers() {
                   <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 1 }}>Fournisseur</Typography>
                   <Typography variant="body2">{selectedCharge.fournisseur}</Typography>
                   {selectedCharge.contactFournisseur && (
-                    <Typography variant="body2">Contact : {selectedCharge.contactFournisseur}</Typography>
+                    <Typography variant="body2" sx={{ mt: 0.5 }}>Contact : {selectedCharge.contactFournisseur}</Typography>
                   )}
                   {selectedCharge.adresseFournisseur && (
-                    <Typography variant="body2">Adresse : {selectedCharge.adresseFournisseur}</Typography>
+                    <Typography variant="body2" sx={{ mt: 0.5 }}>Adresse : {selectedCharge.adresseFournisseur}</Typography>
                   )}
                 </>
               )}
@@ -1246,17 +1366,17 @@ export default function ChargesDivers() {
                   <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 1 }}>Document</Typography>
                   <Typography variant="body2">Type : {selectedCharge.typeDocument}</Typography>
                   {selectedCharge.numeroFacture && (
-                    <Typography variant="body2">N° Facture : {selectedCharge.numeroFacture}</Typography>
+                    <Typography variant="body2" sx={{ mt: 0.5 }}>N° Facture : {selectedCharge.numeroFacture}</Typography>
                   )}
                   {selectedCharge.numeroDocument && (
-                    <Typography variant="body2">N° Document : {selectedCharge.numeroDocument}</Typography>
+                    <Typography variant="body2" sx={{ mt: 0.5 }}>N° Document : {selectedCharge.numeroDocument}</Typography>
                   )}
-                  <Typography variant="body2">Date : {selectedCharge.dateDocument || '-'}</Typography>
+                  <Typography variant="body2" sx={{ mt: 0.5 }}>Date : {selectedCharge.dateDocument || '-'}</Typography>
                   {selectedCharge.dateEcheance && (
-                    <Typography variant="body2">Échéance : {selectedCharge.dateEcheance}</Typography>
+                    <Typography variant="body2" sx={{ mt: 0.5 }}>Échéance : {selectedCharge.dateEcheance}</Typography>
                   )}
                   {selectedCharge.pieceJointe && (
-                    <Typography variant="body2">
+                    <Typography variant="body2" sx={{ mt: 0.5 }}>
                       Fichier : <a href={selectedCharge.pieceJointe} target="_blank" rel="noopener noreferrer">Voir</a>
                     </Typography>
                   )}
@@ -1269,7 +1389,7 @@ export default function ChargesDivers() {
                   <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 1 }}>Paiement</Typography>
                   <Typography variant="body2">Mode : {selectedCharge.modePaiement}</Typography>
                   {selectedCharge.referenceVirement && (
-                    <Typography variant="body2">Référence : {selectedCharge.referenceVirement}</Typography>
+                    <Typography variant="body2" sx={{ mt: 0.5 }}>Référence : {selectedCharge.referenceVirement}</Typography>
                   )}
                 </>
               )}
@@ -1292,10 +1412,33 @@ export default function ChargesDivers() {
             </Box>
           )}
         </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setDetailsDialogOpen(false)}>Fermer</Button>
+        
+        <DialogActions sx={{ p: { xs: 2, sm: 3 }, pt: 1 }}>
+          <Button 
+            onClick={() => setDetailsDialogOpen(false)}
+            fullWidth={isMobile}
+          >
+            Fermer
+          </Button>
         </DialogActions>
       </Dialog>
+
+      {/* Snackbar pour les notifications */}
+      <Snackbar
+        open={notification.open}
+        autoHideDuration={4000}
+        onClose={handleCloseNotification}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+      >
+        <Alert 
+          onClose={handleCloseNotification} 
+          severity={notification.severity}
+          sx={{ width: '100%' }}
+          variant="filled"
+        >
+          {notification.message}
+        </Alert>
+      </Snackbar>
     </Box>
   );
 }

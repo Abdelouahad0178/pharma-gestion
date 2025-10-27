@@ -1,4 +1,4 @@
-// src/components/charges/ChargesPersonnels.js - Version 5.0 - Gestion complète de la caisse (création, modification, suppression) avec intégration caisse
+// src/components/charges/ChargesPersonnels.js - Version Responsive avec intégration Caisse
 import React, { useState, useEffect } from 'react';
 import {
   Box,
@@ -29,7 +29,15 @@ import {
   Alert,
   Accordion,
   AccordionSummary,
-  AccordionDetails
+  AccordionDetails,
+  Card,
+  CardContent,
+  CardActions,
+  Stack,
+  useMediaQuery,
+  useTheme,
+  Drawer,
+  Badge
 } from '@mui/material';
 import {
   Add as AddIcon,
@@ -42,7 +50,10 @@ import {
   FilterList as FilterListIcon,
   Clear as ClearIcon,
   ExpandMore as ExpandMoreIcon,
-  AttachMoney as MoneyIcon
+  AttachMoney as MoneyIcon,
+  Close as CloseIcon,
+  Work as WorkIcon,
+  Phone as PhoneIcon
 } from '@mui/icons-material';
 import { db } from '../../firebase/config';
 import {
@@ -62,6 +73,11 @@ import { useUserRole } from '../../contexts/UserRoleContext';
 
 export default function ChargesPersonnels() {
   const { user, societeId } = useUserRole();
+  const theme = useTheme();
+  const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
+  const isTablet = useMediaQuery(theme.breakpoints.between('sm', 'md'));
+  const isDesktop = useMediaQuery(theme.breakpoints.up('md'));
+
   const [charges, setCharges] = useState([]);
   const [filteredCharges, setFilteredCharges] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -70,6 +86,7 @@ export default function ChargesPersonnels() {
   const [editingCharge, setEditingCharge] = useState(null);
   const [selectedCharge, setSelectedCharge] = useState(null);
   const [currentTab, setCurrentTab] = useState(0);
+  const [filterDrawerOpen, setFilterDrawerOpen] = useState(false);
   
   // Filtres
   const [filters, setFilters] = useState({
@@ -101,7 +118,6 @@ export default function ChargesPersonnels() {
     pieceJointe: '',
     description: '',
     notes: '',
-    // Mode de paiement
     modePaiement: '',
     referenceVirement: ''
   });
@@ -128,7 +144,6 @@ export default function ChargesPersonnels() {
     'Autre'
   ];
 
-  // Modes de paiement
   const modesPaiement = [
     'Espèces',
     'Chèque',
@@ -199,6 +214,10 @@ export default function ChargesPersonnels() {
     setFilteredCharges(result);
   }, [filters, charges]);
 
+  // Compter les filtres actifs
+  const activeFiltersCount = Object.values(filters).filter(v => v !== '').length;
+
+  // Réinitialiser les filtres
   const handleResetFilters = () => {
     setFilters({
       searchText: '',
@@ -209,6 +228,7 @@ export default function ChargesPersonnels() {
     });
   };
 
+  // Réinitialiser le formulaire
   const resetForm = () => {
     setFormData({
       employe: '',
@@ -233,545 +253,632 @@ export default function ChargesPersonnels() {
       modePaiement: '',
       referenceVirement: ''
     });
+    setEditingCharge(null);
+    setCurrentTab(0);
   };
 
+  // Calculer le montant total
+  const calculerTotal = (data = formData) => {
+    const salaire = parseFloat(data.salaire) || 0;
+    const prime = parseFloat(data.prime) || 0;
+    const heuresSupp = parseFloat(data.heuresSupplementaires) || 0;
+    const tauxHoraire = parseFloat(data.tauxHoraire) || 0;
+    const indemnites = parseFloat(data.indemnites) || 0;
+    const montantHS = heuresSupp * tauxHoraire;
+    return salaire + prime + montantHS + indemnites;
+  };
+
+  // Ouvrir le dialogue
   const handleOpenDialog = (charge = null) => {
     if (charge) {
       setEditingCharge(charge);
-      setFormData({
-        employe: charge.employe || '',
-        cin: charge.cin || '',
-        telephone: charge.telephone || '',
-        adresse: charge.adresse || '',
-        numeroSecuriteSociale: charge.numeroSecuriteSociale || '',
-        poste: charge.poste || '',
-        dateEmbauche: charge.dateEmbauche || '',
-        salaire: charge.salaire || '',
-        prime: charge.prime || '',
-        heuresSupplementaires: charge.heuresSupplementaires || '',
-        tauxHoraire: charge.tauxHoraire || '',
-        indemnites: charge.indemnites || '',
-        date: charge.date || new Date().toISOString().split('T')[0],
-        typeDocument: charge.typeDocument || '',
-        numeroDocument: charge.numeroDocument || '',
-        dateDocument: charge.dateDocument || new Date().toISOString().split('T')[0],
-        pieceJointe: charge.pieceJointe || '',
-        description: charge.description || '',
-        notes: charge.notes || '',
-        modePaiement: charge.modePaiement || '',
-        referenceVirement: charge.referenceVirement || ''
-      });
+      setFormData({ ...charge });
     } else {
-      setEditingCharge(null);
       resetForm();
     }
-    setCurrentTab(0);
     setDialogOpen(true);
   };
 
+  // Fermer le dialogue
   const handleCloseDialog = () => {
     setDialogOpen(false);
-    setEditingCharge(null);
     resetForm();
   };
 
-  const handleOpenDetails = (charge) => {
+  // Voir les détails
+  const handleViewDetails = (charge) => {
     setSelectedCharge(charge);
     setDetailsDialogOpen(true);
   };
+
+  // ========== FONCTION MODIFIÉE POUR INTÉGRATION CAISSE ==========
   const handleSave = async () => {
     try {
-      const salaire = parseFloat(formData.salaire) || 0;
-      const prime = parseFloat(formData.prime) || 0;
-      const heuresSupplementaires = parseFloat(formData.heuresSupplementaires) || 0;
-      const tauxHoraire = parseFloat(formData.tauxHoraire) || 0;
-      const indemnites = parseFloat(formData.indemnites) || 0;
-      
-      const montantHS = heuresSupplementaires * tauxHoraire;
-      const total = salaire + prime + montantHS + indemnites;
+      const total = calculerTotal();
+      const montantHS = (parseFloat(formData.heuresSupplementaires) || 0) * (parseFloat(formData.tauxHoraire) || 0);
 
-      const data = {
+      const chargeData = {
         ...formData,
-        salaire,
-        prime,
-        heuresSupplementaires,
-        tauxHoraire,
-        indemnites,
+        salaire: parseFloat(formData.salaire) || 0,
+        prime: parseFloat(formData.prime) || 0,
+        heuresSupplementaires: parseFloat(formData.heuresSupplementaires) || 0,
+        tauxHoraire: parseFloat(formData.tauxHoraire) || 0,
+        indemnites: parseFloat(formData.indemnites) || 0,
         montantHS,
         total,
-        modifieLe: Timestamp.now(),
-        modifiePar: user.email
+        updatedAt: Timestamp.now(),
+        updatedBy: user.uid
       };
 
+      let chargeId;
+      
       if (editingCharge) {
-        // ============================================================
-        // MODIFICATION D'UNE CHARGE EXISTANTE
-        // ============================================================
-        
-        const isEspecesNow = formData.modePaiement === 'Espèces';
-        const wasEspecesBefore = editingCharge.modePaiement === 'Espèces';
-        
-        // Chercher si un paiement existe déjà pour cette charge
-        const paiementsQuery = query(
-          collection(db, 'societe', societeId, 'paiements'),
-          where('referenceCharge', '==', editingCharge.id)
-        );
-        const paiementsSnapshot = await getDocs(paiementsQuery);
-        const existingPaiement = paiementsSnapshot.docs[0];
-        
-        const batch = writeBatch(db);
-        
-        // 1. Mettre à jour la charge
-        batch.update(
-          doc(db, 'societe', societeId, 'chargesPersonnels', editingCharge.id),
-          data
-        );
-        
-        // 2. Gérer le paiement selon les cas
-        if (wasEspecesBefore && !isEspecesNow) {
-          // CAS 1: Était espèces → N'est plus espèces : SUPPRIMER le paiement
-          if (existingPaiement) {
-            batch.delete(existingPaiement.ref);
-          }
-        } else if (!wasEspecesBefore && isEspecesNow && total > 0) {
-          // CAS 2: N'était pas espèces → Est maintenant espèces : CRÉER un paiement
-          const paiementData = {
-            type: 'chargePersonnel',
-            relatedTo: 'chargePersonnel',
-            category: 'chargePersonnel',
-            montant: total,
-            mode: 'Espèces',
-            paymentMode: 'Espèces',
-            moyen: 'Espèces',
-            date: Timestamp.fromDate(new Date(formData.date + 'T12:00:00')),
-            timestamp: Timestamp.now(),
-            description: `Charge Personnel: ${formData.employe} - ${formData.poste || 'Personnel'}`,
-            employe: formData.employe,
-            referenceCharge: editingCharge.id,
-            creeLe: Timestamp.now(),
-            creePar: user.email
-          };
-          
-          if (formData.referenceVirement) {
-            paiementData.reference = formData.referenceVirement;
-          }
-          
-          const paiementRef = doc(collection(db, 'societe', societeId, 'paiements'));
-          batch.set(paiementRef, paiementData);
-        } else if (wasEspecesBefore && isEspecesNow && total > 0) {
-          // CAS 3: Était espèces → Est toujours espèces : METTRE À JOUR le paiement
-          if (existingPaiement) {
-            const paiementData = {
-              montant: total,
-              date: Timestamp.fromDate(new Date(formData.date + 'T12:00:00')),
-              description: `Charge Personnel: ${formData.employe} - ${formData.poste || 'Personnel'}`,
-              employe: formData.employe,
-              modifieLe: Timestamp.now(),
-              modifiePar: user.email
-            };
-            
-            if (formData.referenceVirement) {
-              paiementData.reference = formData.referenceVirement;
-            }
-            
-            batch.update(existingPaiement.ref, paiementData);
-          } else {
-            // Le paiement n'existe pas mais devrait exister, le créer
-            const paiementData = {
-              type: 'chargePersonnel',
-              relatedTo: 'chargePersonnel',
-              category: 'chargePersonnel',
-              montant: total,
-              mode: 'Espèces',
-              paymentMode: 'Espèces',
-              moyen: 'Espèces',
-              date: Timestamp.fromDate(new Date(formData.date + 'T12:00:00')),
-              timestamp: Timestamp.now(),
-              description: `Charge Personnel: ${formData.employe} - ${formData.poste || 'Personnel'}`,
-              employe: formData.employe,
-              referenceCharge: editingCharge.id,
-              creeLe: Timestamp.now(),
-              creePar: user.email
-            };
-            
-            if (formData.referenceVirement) {
-              paiementData.reference = formData.referenceVirement;
-            }
-            
-            const paiementRef = doc(collection(db, 'societe', societeId, 'paiements'));
-            batch.set(paiementRef, paiementData);
-          }
-        } else if (wasEspecesBefore && isEspecesNow && total === 0) {
-          // CAS 4: Montant devient 0 : SUPPRIMER le paiement
-          if (existingPaiement) {
-            batch.delete(existingPaiement.ref);
-          }
-        }
-        // CAS 5: N'était pas espèces → N'est toujours pas espèces : rien à faire
-        
-        await batch.commit();
-        setCharges(charges.map(c => c.id === editingCharge.id ? { ...c, ...data } : c));
-        
+        // Mise à jour d'une charge existante
+        await updateDoc(doc(db, 'societe', societeId, 'chargesPersonnels', editingCharge.id), chargeData);
+        chargeId = editingCharge.id;
       } else {
-        // ============================================================
-        // NOUVELLE CHARGE
-        // ============================================================
-        data.creeLe = Timestamp.now();
-        data.creePar = user.email;
-        
-        const isEspeces = formData.modePaiement === 'Espèces';
-        
-        if (isEspeces && total > 0) {
-          // Utiliser un batch pour créer les deux documents en même temps
-          const batch = writeBatch(db);
-          
-          // 1. Créer la charge du personnel
-          const chargeRef = doc(collection(db, 'societe', societeId, 'chargesPersonnels'));
-          batch.set(chargeRef, data);
-          
-          // 2. Créer le paiement dans la caisse
-          const paiementData = {
-            type: 'chargePersonnel',
-            relatedTo: 'chargePersonnel',
-            category: 'chargePersonnel',
-            montant: total,
-            mode: 'Espèces',
-            paymentMode: 'Espèces',
-            moyen: 'Espèces',
-            date: Timestamp.fromDate(new Date(formData.date + 'T12:00:00')),
-            timestamp: Timestamp.now(),
-            description: `Charge Personnel: ${formData.employe} - ${formData.poste || 'Personnel'}`,
-            employe: formData.employe,
-            referenceCharge: chargeRef.id,
-            creeLe: Timestamp.now(),
-            creePar: user.email
-          };
-          
-          if (formData.referenceVirement) {
-            paiementData.reference = formData.referenceVirement;
-          }
-          
-          const paiementRef = doc(collection(db, 'societe', societeId, 'paiements'));
-          batch.set(paiementRef, paiementData);
-          
-          // Commit le batch
-          await batch.commit();
-          
-          setCharges([{ id: chargeRef.id, ...data }, ...charges]);
-        } else {
-          // Pas de paiement en espèces, juste créer la charge
-          const docRef = await addDoc(
-            collection(db, 'societe', societeId, 'chargesPersonnels'),
-            data
-          );
-          setCharges([{ id: docRef.id, ...data }, ...charges]);
-        }
+        // Création d'une nouvelle charge
+        chargeData.createdAt = Timestamp.now();
+        chargeData.createdBy = user.uid;
+        const docRef = await addDoc(collection(db, 'societe', societeId, 'chargesPersonnels'), chargeData);
+        chargeId = docRef.id;
       }
+
+      // ========== CRÉATION AUTOMATIQUE DU PAIEMENT POUR LA CAISSE ==========
+      // Si un mode de paiement est spécifié, créer un enregistrement dans la collection "paiements"
+      if (formData.modePaiement && formData.modePaiement !== '' && total > 0) {
+        const paiementData = {
+          type: 'chargePersonnel',  // Identifiant pour le Dashboard
+          category: 'chargePersonnel',
+          relatedTo: 'chargePersonnel',
+          montant: total,
+          mode: formData.modePaiement,
+          moyen: formData.modePaiement,
+          paymentMode: formData.modePaiement,
+          typePaiement: formData.modePaiement,
+          date: formData.date,
+          timestamp: Timestamp.now(),
+          description: `Charge personnel: ${formData.employe} - ${formData.poste || 'N/A'}`,
+          reference: formData.referenceVirement || '',
+          chargePersonnelId: chargeId,
+          employe: formData.employe,
+          poste: formData.poste || '',
+          createdAt: Timestamp.now(),
+          createdBy: user.uid
+        };
+
+        // Créer le document de paiement
+        await addDoc(collection(db, 'societe', societeId, 'paiements'), paiementData);
+      }
+
+      // Recharger les charges
+      const q = query(
+        collection(db, 'societe', societeId, 'chargesPersonnels'),
+        orderBy('date', 'desc')
+      );
+      const snapshot = await getDocs(q);
+      const data = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      }));
+      setCharges(data);
+      setFilteredCharges(data);
 
       handleCloseDialog();
     } catch (error) {
-      console.error('Erreur sauvegarde:', error);
-      alert('Erreur lors de la sauvegarde: ' + error.message);
+      console.error('Erreur enregistrement:', error);
+      alert('Erreur lors de l\'enregistrement');
     }
   };
 
-  const handleDelete = async (id) => {
-    if (!window.confirm('Êtes-vous sûr de vouloir supprimer cette charge ?')) return;
+  // Supprimer
+  const handleDelete = async (charge) => {
+    if (!window.confirm(`Êtes-vous sûr de vouloir supprimer la charge de ${charge.employe} ?`)) return;
 
     try {
-      // Chercher si un paiement existe pour cette charge
-      const paiementsQuery = query(
+      // Supprimer aussi les paiements liés
+      const qPaiements = query(
         collection(db, 'societe', societeId, 'paiements'),
-        where('referenceCharge', '==', id)
+        where('chargePersonnelId', '==', charge.id)
       );
-      const paiementsSnapshot = await getDocs(paiementsQuery);
+      const paiementsSnapshot = await getDocs(qPaiements);
       
       const batch = writeBatch(db);
-      
-      // Supprimer la charge
-      batch.delete(doc(db, 'societe', societeId, 'chargesPersonnels', id));
-      
-      // Supprimer le paiement associé s'il existe
-      paiementsSnapshot.docs.forEach(paiementDoc => {
-        batch.delete(paiementDoc.ref);
+      paiementsSnapshot.docs.forEach(doc => {
+        batch.delete(doc.ref);
       });
       
+      // Supprimer la charge
+      batch.delete(doc(db, 'societe', societeId, 'chargesPersonnels', charge.id));
+      
       await batch.commit();
-      setCharges(charges.filter(c => c.id !== id));
+
+      // Recharger les charges
+      const q = query(
+        collection(db, 'societe', societeId, 'chargesPersonnels'),
+        orderBy('date', 'desc')
+      );
+      const snapshot = await getDocs(q);
+      const data = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      }));
+      setCharges(data);
+      setFilteredCharges(data);
     } catch (error) {
       console.error('Erreur suppression:', error);
-      alert('Erreur lors de la suppression: ' + error.message);
+      alert('Erreur lors de la suppression');
     }
   };
-  const totalCharges = filteredCharges.reduce((sum, c) => sum + (c.total || 0), 0);
-  const nombreEmployes = [...new Set(filteredCharges.map(c => c.employe))].length;
-  const totalEspeces = filteredCharges
-    .filter(c => c.modePaiement === 'Espèces')
-    .reduce((sum, c) => sum + (c.total || 0), 0);
+
+  // Statistiques
+  const stats = {
+    total: filteredCharges.reduce((sum, c) => sum + (c.total || 0), 0),
+    count: filteredCharges.length,
+    salaires: filteredCharges.reduce((sum, c) => sum + (c.salaire || 0), 0),
+    primes: filteredCharges.reduce((sum, c) => sum + (c.prime || 0), 0)
+  };
+
+  // Couleur par poste
+  const getPosteColor = (poste) => {
+    const colors = {
+      'Pharmacien': '#8b5cf6',
+      'Préparateur': '#06b6d4',
+      'Vendeuse': '#ec4899',
+      'Comptable': '#10b981',
+      'Responsable stock': '#f59e0b',
+      'Agent d\'entretien': '#64748b',
+      'Stagiaire': '#3b82f6',
+      'Autre': '#64748b'
+    };
+    return colors[poste] || '#64748b';
+  };
+
+  // Composant de filtres
+  const FiltersContent = () => (
+    <Box sx={{ p: isMobile ? 2 : 0 }}>
+      {isMobile && (
+        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
+          <Typography variant="h6" sx={{ fontWeight: 700 }}>Filtres</Typography>
+          <IconButton onClick={() => setFilterDrawerOpen(false)}>
+            <CloseIcon />
+          </IconButton>
+        </Box>
+      )}
+
+      <Stack spacing={2}>
+        <TextField
+          label="Rechercher"
+          value={filters.searchText}
+          onChange={(e) => setFilters({ ...filters, searchText: e.target.value })}
+          fullWidth
+          InputProps={{
+            endAdornment: <SearchIcon />
+          }}
+          placeholder="Nom, CIN, poste..."
+        />
+        
+        <TextField
+          label="Date début"
+          type="date"
+          value={filters.dateDebut}
+          onChange={(e) => setFilters({ ...filters, dateDebut: e.target.value })}
+          fullWidth
+          InputLabelProps={{ shrink: true }}
+        />
+        
+        <TextField
+          label="Date fin"
+          type="date"
+          value={filters.dateFin}
+          onChange={(e) => setFilters({ ...filters, dateFin: e.target.value })}
+          fullWidth
+          InputLabelProps={{ shrink: true }}
+        />
+        
+        <FormControl fullWidth>
+          <InputLabel>Poste</InputLabel>
+          <Select
+            value={filters.poste}
+            onChange={(e) => setFilters({ ...filters, poste: e.target.value })}
+            label="Poste"
+          >
+            <MenuItem value="">Tous</MenuItem>
+            {typesPostes.map(poste => (
+              <MenuItem key={poste} value={poste}>{poste}</MenuItem>
+            ))}
+          </Select>
+        </FormControl>
+        
+        <FormControl fullWidth>
+          <InputLabel>Type de document</InputLabel>
+          <Select
+            value={filters.typeDocument}
+            onChange={(e) => setFilters({ ...filters, typeDocument: e.target.value })}
+            label="Type de document"
+          >
+            <MenuItem value="">Tous</MenuItem>
+            {typesDocuments.map(type => (
+              <MenuItem key={type} value={type}>{type}</MenuItem>
+            ))}
+          </Select>
+        </FormControl>
+
+        {activeFiltersCount > 0 && (
+          <Button
+            variant="outlined"
+            startIcon={<ClearIcon />}
+            onClick={handleResetFilters}
+            fullWidth
+          >
+            Réinitialiser ({activeFiltersCount})
+          </Button>
+        )}
+      </Stack>
+    </Box>
+  );
 
   if (loading) {
     return (
-      <Box sx={{ p: 4, textAlign: 'center' }}>
+      <Box sx={{ p: 3 }}>
         <Typography>Chargement...</Typography>
       </Box>
     );
   }
 
   return (
-    <Box sx={{ p: 4, background: '#f8fafc', minHeight: '100vh' }}>
-      {/* En-tête */}
-      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 4 }}>
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-          <PersonIcon sx={{ fontSize: 40, color: '#667eea' }} />
-          <Typography variant="h4" sx={{ fontWeight: 700, color: '#1e293b' }}>
-            Charges du Personnel
+    <Box sx={{ 
+      minHeight: '100vh',
+      background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+      p: { xs: 1, sm: 2, md: 3 }
+    }}>
+      <Paper sx={{ 
+        maxWidth: 1400, 
+        margin: '0 auto',
+        borderRadius: { xs: 2, sm: 3 },
+        overflow: 'hidden'
+      }}>
+        {/* En-tête */}
+        <Box sx={{ 
+          background: 'linear-gradient(135deg, #4a5568 0%, #2d3748 100%)',
+          color: 'white',
+          p: { xs: 2, sm: 3 }
+        }}>
+          <Typography variant={isMobile ? "h5" : "h4"} sx={{ fontWeight: 700, mb: 1 }}>
+            💼 Charges du Personnel
+          </Typography>
+          <Typography variant="body2" sx={{ opacity: 0.9 }}>
+            Gestion des salaires et charges sociales
           </Typography>
         </Box>
-        <Button
-          variant="contained"
-          startIcon={<AddIcon />}
-          onClick={() => handleOpenDialog()}
-          sx={{
-            background: 'linear-gradient(135deg, #667eea, #764ba2)',
-            fontWeight: 600,
-            px: 3,
-            py: 1.5
-          }}
-        >
-          Nouvelle charge
-        </Button>
-      </Box>
 
-      {/* Filtres */}
-      <Accordion sx={{ mb: 3, boxShadow: 3 }}>
-        <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-            <FilterListIcon sx={{ color: '#667eea' }} />
-            <Typography sx={{ fontWeight: 600 }}>Filtres de recherche</Typography>
-            {(filters.searchText || filters.dateDebut || filters.dateFin || filters.poste || filters.typeDocument) && (
-              <Chip label="Actifs" size="small" color="primary" />
-            )}
-          </Box>
-        </AccordionSummary>
-        <AccordionDetails>
+        {/* Statistiques */}
+        <Box sx={{ p: { xs: 2, sm: 3 }, borderBottom: '2px solid #e2e8f0' }}>
           <Grid container spacing={2}>
-            <Grid item xs={12} md={6}>
-              <TextField
-                fullWidth
-                placeholder="Rechercher par employé, CIN, poste, description..."
-                value={filters.searchText}
-                onChange={(e) => setFilters({ ...filters, searchText: e.target.value })}
-                InputProps={{
-                  startAdornment: <SearchIcon sx={{ mr: 1, color: '#64748b' }} />
-                }}
-              />
+            <Grid item xs={12} sm={6} md={3}>
+              <Card sx={{ background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', color: 'white' }}>
+                <CardContent sx={{ p: { xs: 2, sm: 2.5 } }}>
+                  <Typography variant="body2" sx={{ opacity: 0.9, mb: 0.5 }}>Total Charges</Typography>
+                  <Typography variant={isMobile ? "h5" : "h4"} sx={{ fontWeight: 800 }}>
+                    {stats.total.toFixed(2)} MAD
+                  </Typography>
+                </CardContent>
+              </Card>
             </Grid>
-
-            <Grid item xs={12} md={6}>
-              <FormControl fullWidth>
-                <InputLabel>Poste</InputLabel>
-                <Select
-                  value={filters.poste}
-                  onChange={(e) => setFilters({ ...filters, poste: e.target.value })}
-                  label="Poste"
-                >
-                  <MenuItem value="">Tous les postes</MenuItem>
-                  {typesPostes.map(poste => (
-                    <MenuItem key={poste} value={poste}>{poste}</MenuItem>
-                  ))}
-                </Select>
-              </FormControl>
+            <Grid item xs={12} sm={6} md={3}>
+              <Card sx={{ bgcolor: '#f8fafc' }}>
+                <CardContent sx={{ p: { xs: 2, sm: 2.5 } }}>
+                  <Typography variant="body2" color="text.secondary" sx={{ mb: 0.5 }}>Nombre d'employés</Typography>
+                  <Typography variant={isMobile ? "h5" : "h4"} sx={{ fontWeight: 700, color: '#06b6d4' }}>
+                    {stats.count}
+                  </Typography>
+                </CardContent>
+              </Card>
             </Grid>
-
-            <Grid item xs={12} md={3}>
-              <TextField
-                fullWidth
-                type="date"
-                label="Date de début"
-                value={filters.dateDebut}
-                onChange={(e) => setFilters({ ...filters, dateDebut: e.target.value })}
-                InputLabelProps={{ shrink: true }}
-              />
+            <Grid item xs={12} sm={6} md={3}>
+              <Card sx={{ bgcolor: '#f8fafc' }}>
+                <CardContent sx={{ p: { xs: 2, sm: 2.5 } }}>
+                  <Typography variant="body2" color="text.secondary" sx={{ mb: 0.5 }}>Total Salaires</Typography>
+                  <Typography variant={isMobile ? "h5" : "h4"} sx={{ fontWeight: 700, color: '#10b981' }}>
+                    {stats.salaires.toFixed(2)} MAD
+                  </Typography>
+                </CardContent>
+              </Card>
             </Grid>
-
-            <Grid item xs={12} md={3}>
-              <TextField
-                fullWidth
-                type="date"
-                label="Date de fin"
-                value={filters.dateFin}
-                onChange={(e) => setFilters({ ...filters, dateFin: e.target.value })}
-                InputLabelProps={{ shrink: true }}
-              />
-            </Grid>
-
-            <Grid item xs={12} md={4}>
-              <FormControl fullWidth>
-                <InputLabel>Type de document</InputLabel>
-                <Select
-                  value={filters.typeDocument}
-                  onChange={(e) => setFilters({ ...filters, typeDocument: e.target.value })}
-                  label="Type de document"
-                >
-                  <MenuItem value="">Tous les documents</MenuItem>
-                  {typesDocuments.map(type => (
-                    <MenuItem key={type} value={type}>{type}</MenuItem>
-                  ))}
-                </Select>
-              </FormControl>
-            </Grid>
-
-            <Grid item xs={12} md={2}>
-              <Button
-                fullWidth
-                variant="outlined"
-                startIcon={<ClearIcon />}
-                onClick={handleResetFilters}
-                sx={{ height: '56px' }}
-              >
-                Réinitialiser
-              </Button>
+            <Grid item xs={12} sm={6} md={3}>
+              <Card sx={{ bgcolor: '#f8fafc' }}>
+                <CardContent sx={{ p: { xs: 2, sm: 2.5 } }}>
+                  <Typography variant="body2" color="text.secondary" sx={{ mb: 0.5 }}>Total Primes</Typography>
+                  <Typography variant={isMobile ? "h5" : "h4"} sx={{ fontWeight: 700, color: '#f59e0b' }}>
+                    {stats.primes.toFixed(2)} MAD
+                  </Typography>
+                </CardContent>
+              </Card>
             </Grid>
           </Grid>
-        </AccordionDetails>
-      </Accordion>
+        </Box>
 
-      {/* Statistiques */}
-      <Grid container spacing={2} sx={{ mb: 3 }}>
-        <Grid item xs={12} md={4}>
-          <Paper sx={{ p: 2.5, background: 'linear-gradient(135deg, #667eea, #764ba2)', color: 'white' }}>
-            <Typography variant="h6" sx={{ fontWeight: 700 }}>Total Charges</Typography>
-            <Typography variant="h4" sx={{ fontWeight: 800, mt: 1 }}>
-              {totalCharges.toFixed(2)} MAD
-            </Typography>
-          </Paper>
-        </Grid>
-        <Grid item xs={12} md={4}>
-          <Paper sx={{ p: 2.5, background: 'linear-gradient(135deg, #06b6d4, #0891b2)', color: 'white' }}>
-            <Typography variant="h6" sx={{ fontWeight: 700 }}>Employés</Typography>
-            <Typography variant="h4" sx={{ fontWeight: 800, mt: 1 }}>
-              {nombreEmployes}
-            </Typography>
-          </Paper>
-        </Grid>
-        <Grid item xs={12} md={4}>
-          <Paper sx={{ p: 2.5, background: 'linear-gradient(135deg, #22c55e, #16a34a)', color: 'white' }}>
-            <Typography variant="h6" sx={{ fontWeight: 700 }}>Total Espèces</Typography>
-            <Typography variant="h4" sx={{ fontWeight: 800, mt: 1 }}>
-              {totalEspeces.toFixed(2)} MAD
-            </Typography>
-            <Typography variant="caption" sx={{ opacity: 0.9, mt: 0.5, display: 'block' }}>
-              💡 Déduit automatiquement de la caisse
-            </Typography>
-          </Paper>
-        </Grid>
-      </Grid>
+        {/* Actions et filtres */}
+        <Box sx={{ 
+          p: { xs: 2, sm: 3 },
+          display: 'flex',
+          flexDirection: { xs: 'column', sm: 'row' },
+          gap: 2,
+          alignItems: { xs: 'stretch', sm: 'center' },
+          justifyContent: 'space-between'
+        }}>
+          <Button
+            variant="contained"
+            startIcon={<AddIcon />}
+            onClick={() => handleOpenDialog()}
+            sx={{ 
+              background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+              fontWeight: 700
+            }}
+            fullWidth={isMobile}
+          >
+            Nouvelle Charge
+          </Button>
 
-      {/* Tableau des charges */}
-      <TableContainer component={Paper} sx={{ boxShadow: 3 }}>
-        <Table>
-          <TableHead sx={{ bgcolor: '#1e293b' }}>
-            <TableRow>
-              <TableCell sx={{ color: 'white', fontWeight: 700 }}>Date</TableCell>
-              <TableCell sx={{ color: 'white', fontWeight: 700 }}>Employé</TableCell>
-              <TableCell sx={{ color: 'white', fontWeight: 700 }}>Poste</TableCell>
-              <TableCell sx={{ color: 'white', fontWeight: 700 }}>Salaire</TableCell>
-              <TableCell sx={{ color: 'white', fontWeight: 700 }}>Total</TableCell>
-              <TableCell sx={{ color: 'white', fontWeight: 700 }}>Mode Paiement</TableCell>
-              <TableCell sx={{ color: 'white', fontWeight: 700 }}>Actions</TableCell>
-            </TableRow>
-          </TableHead>
-          <TableBody>
+          {isMobile ? (
+            <Badge badgeContent={activeFiltersCount} color="error">
+              <Button
+                variant="outlined"
+                startIcon={<FilterListIcon />}
+                onClick={() => setFilterDrawerOpen(true)}
+                fullWidth
+              >
+                Filtres
+              </Button>
+            </Badge>
+          ) : (
+            <Box sx={{ minWidth: 300 }}>
+              {FiltersContent()}
+            </Box>
+          )}
+        </Box>
+
+        {/* Table responsive */}
+        {isDesktop ? (
+          <TableContainer>
+            <Table>
+              <TableHead>
+                <TableRow sx={{ bgcolor: '#f8fafc' }}>
+                  <TableCell sx={{ fontWeight: 700 }}>Employé</TableCell>
+                  <TableCell sx={{ fontWeight: 700 }}>Poste</TableCell>
+                  <TableCell sx={{ fontWeight: 700 }}>Date</TableCell>
+                  <TableCell sx={{ fontWeight: 700 }} align="right">Salaire</TableCell>
+                  <TableCell sx={{ fontWeight: 700 }} align="right">Prime</TableCell>
+                  <TableCell sx={{ fontWeight: 700 }} align="right">Total</TableCell>
+                  <TableCell sx={{ fontWeight: 700 }}>Mode paiement</TableCell>
+                  <TableCell sx={{ fontWeight: 700 }} align="center">Actions</TableCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {filteredCharges.length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={8} align="center" sx={{ py: 4 }}>
+                      <Typography color="text.secondary">Aucune charge trouvée</Typography>
+                    </TableCell>
+                  </TableRow>
+                ) : (
+                  filteredCharges.map((charge) => (
+                    <TableRow key={charge.id} hover>
+                      <TableCell>
+                        <Box>
+                          <Typography sx={{ fontWeight: 600 }}>{charge.employe}</Typography>
+                          {charge.cin && (
+                            <Typography variant="caption" color="text.secondary">
+                              CIN: {charge.cin}
+                            </Typography>
+                          )}
+                        </Box>
+                      </TableCell>
+                      <TableCell>
+                        <Chip
+                          label={charge.poste || 'N/A'}
+                          size="small"
+                          sx={{
+                            bgcolor: getPosteColor(charge.poste) + '20',
+                            color: getPosteColor(charge.poste),
+                            fontWeight: 600
+                          }}
+                        />
+                      </TableCell>
+                      <TableCell>{charge.date}</TableCell>
+                      <TableCell align="right">{charge.salaire?.toFixed(2)} MAD</TableCell>
+                      <TableCell align="right">{charge.prime?.toFixed(2)} MAD</TableCell>
+                      <TableCell align="right">
+                        <Typography sx={{ fontWeight: 700, color: '#667eea' }}>
+                          {charge.total?.toFixed(2)} MAD
+                        </Typography>
+                      </TableCell>
+                      <TableCell>
+                        {charge.modePaiement ? (
+                          <Chip 
+                            label={charge.modePaiement} 
+                            size="small"
+                            color={charge.modePaiement === 'Espèces' ? 'success' : 'default'}
+                          />
+                        ) : (
+                          <Typography variant="caption" color="text.secondary">N/A</Typography>
+                        )}
+                      </TableCell>
+                      <TableCell align="center">
+                        <IconButton onClick={() => handleViewDetails(charge)} size="small">
+                          <VisibilityIcon />
+                        </IconButton>
+                        <IconButton onClick={() => handleOpenDialog(charge)} size="small">
+                          <EditIcon />
+                        </IconButton>
+                        <IconButton onClick={() => handleDelete(charge)} size="small" color="error">
+                          <DeleteIcon />
+                        </IconButton>
+                      </TableCell>
+                    </TableRow>
+                  ))
+                )}
+              </TableBody>
+            </Table>
+          </TableContainer>
+        ) : (
+          <Box sx={{ p: { xs: 1, sm: 2 } }}>
             {filteredCharges.length === 0 ? (
-              <TableRow>
-                <TableCell colSpan={7} align="center" sx={{ py: 4 }}>
-                  <Typography color="text.secondary">Aucune charge trouvée</Typography>
-                </TableCell>
-              </TableRow>
+              <Box sx={{ textAlign: 'center', py: 4 }}>
+                <Typography color="text.secondary">Aucune charge trouvée</Typography>
+              </Box>
             ) : (
               filteredCharges.map((charge) => (
-                <TableRow key={charge.id} hover>
-                  <TableCell>{charge.date}</TableCell>
-                  <TableCell sx={{ fontWeight: 600 }}>{charge.employe}</TableCell>
-                  <TableCell>
-                    <Chip label={charge.poste || '-'} size="small" sx={{ bgcolor: '#e2e8f0' }} />
-                  </TableCell>
-                  <TableCell>{charge.salaire?.toFixed(2)} MAD</TableCell>
-                  <TableCell sx={{ fontWeight: 700, color: '#667eea' }}>
-                    {charge.total?.toFixed(2)} MAD
-                  </TableCell>
-                  <TableCell>
-                    <Chip 
-                      label={charge.modePaiement || 'Non spécifié'} 
-                      size="small"
-                      sx={{ 
-                        bgcolor: charge.modePaiement === 'Espèces' ? '#dcfce7' : '#e2e8f0',
-                        color: charge.modePaiement === 'Espèces' ? '#16a34a' : '#64748b',
-                        fontWeight: 600
-                      }}
-                    />
-                  </TableCell>
-                  <TableCell>
-                    <IconButton
-                      size="small"
-                      onClick={() => handleOpenDetails(charge)}
-                      sx={{ color: '#667eea', mr: 1 }}
-                    >
+                <Card key={charge.id} sx={{ mb: 2 }}>
+                  <CardContent>
+                    <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', mb: 1 }}>
+                      <Typography variant="h6" sx={{ fontWeight: 700 }}>
+                        {charge.employe}
+                      </Typography>
+                      <Chip
+                        label={charge.poste || 'N/A'}
+                        size="small"
+                        sx={{
+                          bgcolor: getPosteColor(charge.poste) + '20',
+                          color: getPosteColor(charge.poste),
+                          fontWeight: 600
+                        }}
+                      />
+                    </Box>
+                    
+                    <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+                      {charge.date} {charge.cin && `• CIN: ${charge.cin}`}
+                    </Typography>
+
+                    <Divider sx={{ my: 1 }} />
+
+                    <Grid container spacing={1}>
+                      <Grid item xs={6}>
+                        <Typography variant="caption" color="text.secondary">Salaire</Typography>
+                        <Typography variant="body2" sx={{ fontWeight: 600 }}>
+                          {charge.salaire?.toFixed(2)} MAD
+                        </Typography>
+                      </Grid>
+                      <Grid item xs={6}>
+                        <Typography variant="caption" color="text.secondary">Prime</Typography>
+                        <Typography variant="body2" sx={{ fontWeight: 600 }}>
+                          {charge.prime?.toFixed(2)} MAD
+                        </Typography>
+                      </Grid>
+                      <Grid item xs={6}>
+                        <Typography variant="caption" color="text.secondary">Total</Typography>
+                        <Typography variant="body1" sx={{ fontWeight: 700, color: '#667eea' }}>
+                          {charge.total?.toFixed(2)} MAD
+                        </Typography>
+                      </Grid>
+                      <Grid item xs={6}>
+                        <Typography variant="caption" color="text.secondary">Mode paiement</Typography>
+                        <Typography variant="body2" sx={{ fontWeight: 600 }}>
+                          {charge.modePaiement ? (
+                            <Chip 
+                              label={charge.modePaiement} 
+                              size="small"
+                              color={charge.modePaiement === 'Espèces' ? 'success' : 'default'}
+                            />
+                          ) : (
+                            'N/A'
+                          )}
+                        </Typography>
+                      </Grid>
+                    </Grid>
+                  </CardContent>
+                  <CardActions sx={{ justifyContent: 'flex-end', p: 1 }}>
+                    <IconButton onClick={() => handleViewDetails(charge)} size="small">
                       <VisibilityIcon />
                     </IconButton>
-                    <IconButton
-                      size="small"
-                      onClick={() => handleOpenDialog(charge)}
-                      sx={{ color: '#06b6d4', mr: 1 }}
-                    >
+                    <IconButton onClick={() => handleOpenDialog(charge)} size="small">
                       <EditIcon />
                     </IconButton>
-                    <IconButton
-                      size="small"
-                      onClick={() => handleDelete(charge.id)}
-                      sx={{ color: '#ef4444' }}
-                    >
+                    <IconButton onClick={() => handleDelete(charge)} size="small" color="error">
                       <DeleteIcon />
                     </IconButton>
-                  </TableCell>
-                </TableRow>
+                  </CardActions>
+                </Card>
               ))
             )}
-          </TableBody>
-        </Table>
-      </TableContainer>
+          </Box>
+        )}
+      </Paper>
 
-      {/* Dialogue d'ajout/modification */}
-      <Dialog open={dialogOpen} onClose={handleCloseDialog} maxWidth="md" fullWidth>
-        <DialogTitle sx={{ fontWeight: 700, color: '#1e293b' }}>
-          {editingCharge ? 'Modifier la charge' : 'Nouvelle charge du personnel'}
+      {/* Drawer pour les filtres sur mobile */}
+      <Drawer
+        anchor="bottom"
+        open={filterDrawerOpen}
+        onClose={() => setFilterDrawerOpen(false)}
+        PaperProps={{
+          sx: {
+            borderTopLeftRadius: 16,
+            borderTopRightRadius: 16,
+            maxHeight: '80vh'
+          }
+        }}
+      >
+        {FiltersContent()}
+      </Drawer>
+
+      {/* Dialog de formulaire avec tabs */}
+      <Dialog 
+        open={dialogOpen} 
+        onClose={handleCloseDialog}
+        fullScreen={isMobile}
+        maxWidth="md" 
+        fullWidth
+        PaperProps={{
+          sx: {
+            borderRadius: isMobile ? 0 : 2
+          }
+        }}
+      >
+        <DialogTitle sx={{ 
+          fontWeight: 700,
+          color: '#1e293b',
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          p: { xs: 2, sm: 3 }
+        }}>
+          <Typography variant={isMobile ? "h6" : "h5"} sx={{ fontWeight: 700 }}>
+            {editingCharge ? 'Modifier la charge' : 'Nouvelle charge'}
+          </Typography>
+          {isMobile && (
+            <IconButton onClick={handleCloseDialog}>
+              <CloseIcon />
+            </IconButton>
+          )}
         </DialogTitle>
-        <DialogContent>
-          <Tabs
-            value={currentTab}
-            onChange={(e, newValue) => setCurrentTab(newValue)}
-            sx={{ mb: 2, borderBottom: 1, borderColor: 'divider' }}
+        
+        <DialogContent sx={{ p: { xs: 2, sm: 3 } }}>
+          <Tabs 
+            value={currentTab} 
+            onChange={(e, v) => setCurrentTab(v)}
+            variant={isMobile ? "scrollable" : "fullWidth"}
+            scrollButtons={isMobile ? "auto" : false}
+            sx={{ borderBottom: 1, borderColor: 'divider', mb: 2 }}
           >
-            <Tab label="👤 Informations employé" />
-            <Tab label="💰 Rémunération" />
-            <Tab label="📄 Documents" />
-            <Tab label="💳 Paiement" />
+            <Tab icon={<PersonIcon />} label="Employé" />
+            <Tab icon={<MoneyIcon />} label="Rémunération" />
+            <Tab icon={<DescriptionIcon />} label="Document" />
+            <Tab icon={<MoneyIcon />} label="Paiement" />
           </Tabs>
 
-          {/* Onglet 1 : Informations employé */}
+          {/* Tab 0: Informations employé */}
           {currentTab === 0 && (
-            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, mt: 2 }}>
+            <Stack spacing={2} sx={{ mt: 2 }}>
               <TextField
-                label="Nom de l'employé"
+                label="Nom de l'employé *"
                 value={formData.employe}
                 onChange={(e) => setFormData({ ...formData, employe: e.target.value })}
                 fullWidth
                 required
-                autoFocus
               />
 
               <Grid container spacing={2}>
-                <Grid item xs={12} md={6}>
+                <Grid item xs={12} sm={6}>
                   <TextField
                     label="CIN"
                     value={formData.cin}
@@ -779,7 +886,7 @@ export default function ChargesPersonnels() {
                     fullWidth
                   />
                 </Grid>
-                <Grid item xs={12} md={6}>
+                <Grid item xs={12} sm={6}>
                   <TextField
                     label="Téléphone"
                     value={formData.telephone}
@@ -798,30 +905,25 @@ export default function ChargesPersonnels() {
                 rows={2}
               />
 
-              <Grid container spacing={2}>
-                <Grid item xs={12} md={6}>
-                  <TextField
-                    label="N° Sécurité Sociale"
-                    value={formData.numeroSecuriteSociale}
-                    onChange={(e) => setFormData({ ...formData, numeroSecuriteSociale: e.target.value })}
-                    fullWidth
-                  />
-                </Grid>
-                <Grid item xs={12} md={6}>
-                  <FormControl fullWidth>
-                    <InputLabel>Poste</InputLabel>
-                    <Select
-                      value={formData.poste}
-                      onChange={(e) => setFormData({ ...formData, poste: e.target.value })}
-                      label="Poste"
-                    >
-                      {typesPostes.map(poste => (
-                        <MenuItem key={poste} value={poste}>{poste}</MenuItem>
-                      ))}
-                    </Select>
-                  </FormControl>
-                </Grid>
-              </Grid>
+              <TextField
+                label="N° Sécurité Sociale"
+                value={formData.numeroSecuriteSociale}
+                onChange={(e) => setFormData({ ...formData, numeroSecuriteSociale: e.target.value })}
+                fullWidth
+              />
+
+              <FormControl fullWidth>
+                <InputLabel>Poste</InputLabel>
+                <Select
+                  value={formData.poste}
+                  onChange={(e) => setFormData({ ...formData, poste: e.target.value })}
+                  label="Poste"
+                >
+                  {typesPostes.map(poste => (
+                    <MenuItem key={poste} value={poste}>{poste}</MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
 
               <TextField
                 label="Date d'embauche"
@@ -831,42 +933,26 @@ export default function ChargesPersonnels() {
                 fullWidth
                 InputLabelProps={{ shrink: true }}
               />
-
-              <TextField
-                label="Description du poste"
-                value={formData.description}
-                onChange={(e) => setFormData({ ...formData, description: e.target.value })}
-                multiline
-                rows={3}
-                fullWidth
-              />
-            </Box>
+            </Stack>
           )}
 
-          {/* Onglet 2 : Rémunération */}
+          {/* Tab 1: Rémunération */}
           {currentTab === 1 && (
-            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, mt: 2 }}>
-              <Alert severity="info">
-                Renseignez les éléments de rémunération. Le total sera calculé automatiquement.
+            <Stack spacing={2} sx={{ mt: 2 }}>
+              <Alert severity="info" icon={<MoneyIcon />}>
+                Tous les montants en MAD (Dirhams Marocains)
               </Alert>
-              
-              <TextField
-                label="Date"
-                type="date"
-                value={formData.date}
-                onChange={(e) => setFormData({ ...formData, date: e.target.value })}
-                fullWidth
-                InputLabelProps={{ shrink: true }}
-              />
 
               <TextField
-                label="Salaire de base"
+                label="Salaire de base *"
                 type="number"
                 value={formData.salaire}
                 onChange={(e) => setFormData({ ...formData, salaire: e.target.value })}
                 fullWidth
                 required
-                InputProps={{ endAdornment: 'MAD' }}
+                InputProps={{
+                  endAdornment: <Typography variant="body2">MAD</Typography>
+                }}
               />
 
               <TextField
@@ -875,104 +961,88 @@ export default function ChargesPersonnels() {
                 value={formData.prime}
                 onChange={(e) => setFormData({ ...formData, prime: e.target.value })}
                 fullWidth
-                InputProps={{ endAdornment: 'MAD' }}
+                InputProps={{
+                  endAdornment: <Typography variant="body2">MAD</Typography>
+                }}
               />
 
               <Grid container spacing={2}>
-                <Grid item xs={12} md={6}>
+                <Grid item xs={12} sm={6}>
                   <TextField
                     label="Heures supplémentaires"
                     type="number"
                     value={formData.heuresSupplementaires}
                     onChange={(e) => setFormData({ ...formData, heuresSupplementaires: e.target.value })}
                     fullWidth
-                    InputProps={{ endAdornment: 'h' }}
+                    InputProps={{
+                      endAdornment: <Typography variant="body2">h</Typography>
+                    }}
                   />
                 </Grid>
-                <Grid item xs={12} md={6}>
+                <Grid item xs={12} sm={6}>
                   <TextField
                     label="Taux horaire"
                     type="number"
                     value={formData.tauxHoraire}
                     onChange={(e) => setFormData({ ...formData, tauxHoraire: e.target.value })}
                     fullWidth
-                    InputProps={{ endAdornment: 'MAD/h' }}
+                    InputProps={{
+                      endAdornment: <Typography variant="body2">MAD/h</Typography>
+                    }}
                   />
                 </Grid>
               </Grid>
 
               <TextField
-                label="Indemnités diverses"
+                label="Indemnités"
                 type="number"
                 value={formData.indemnites}
                 onChange={(e) => setFormData({ ...formData, indemnites: e.target.value })}
                 fullWidth
-                InputProps={{ endAdornment: 'MAD' }}
+                InputProps={{
+                  endAdornment: <Typography variant="body2">MAD</Typography>
+                }}
               />
 
-              <Paper sx={{ p: 2, bgcolor: '#f8fafc', mt: 1 }}>
+              <Paper sx={{ p: 2, bgcolor: '#f8fafc' }}>
                 <Typography variant="body2" sx={{ fontWeight: 600, mb: 1 }}>
-                  Récapitulatif de la rémunération
+                  Calcul automatique
                 </Typography>
                 <Grid container spacing={1}>
                   <Grid item xs={6}>
-                    <Typography variant="body2">Salaire de base :</Typography>
+                    <Typography variant="caption" color="text.secondary">H. Supp. :</Typography>
                   </Grid>
                   <Grid item xs={6}>
-                    <Typography variant="body2" align="right">
-                      {(parseFloat(formData.salaire) || 0).toFixed(2)} MAD
-                    </Typography>
-                  </Grid>
-                  <Grid item xs={6}>
-                    <Typography variant="body2">Prime :</Typography>
-                  </Grid>
-                  <Grid item xs={6}>
-                    <Typography variant="body2" align="right">
-                      {(parseFloat(formData.prime) || 0).toFixed(2)} MAD
-                    </Typography>
-                  </Grid>
-                  <Grid item xs={6}>
-                    <Typography variant="body2">Heures supplémentaires :</Typography>
-                  </Grid>
-                  <Grid item xs={6}>
-                    <Typography variant="body2" align="right">
+                    <Typography variant="body2" align="right" sx={{ fontWeight: 600 }}>
                       {((parseFloat(formData.heuresSupplementaires) || 0) * (parseFloat(formData.tauxHoraire) || 0)).toFixed(2)} MAD
                     </Typography>
                   </Grid>
-                  <Grid item xs={6}>
-                    <Typography variant="body2">Indemnités :</Typography>
-                  </Grid>
-                  <Grid item xs={6}>
-                    <Typography variant="body2" align="right">
-                      {(parseFloat(formData.indemnites) || 0).toFixed(2)} MAD
-                    </Typography>
-                  </Grid>
-                  <Grid item xs={12}><Divider sx={{ my: 1 }} /></Grid>
+                  <Grid item xs={12}><Divider /></Grid>
                   <Grid item xs={6}>
                     <Typography variant="body1" sx={{ fontWeight: 700 }}>Total :</Typography>
                   </Grid>
                   <Grid item xs={6}>
                     <Typography variant="body1" align="right" sx={{ fontWeight: 700, color: '#667eea' }}>
-                      {(
-                        (parseFloat(formData.salaire) || 0) +
-                        (parseFloat(formData.prime) || 0) +
-                        ((parseFloat(formData.heuresSupplementaires) || 0) * (parseFloat(formData.tauxHoraire) || 0)) +
-                        (parseFloat(formData.indemnites) || 0)
-                      ).toFixed(2)} MAD
+                      {calculerTotal().toFixed(2)} MAD
                     </Typography>
                   </Grid>
                 </Grid>
               </Paper>
-            </Box>
+
+              <TextField
+                label="Date de la charge"
+                type="date"
+                value={formData.date}
+                onChange={(e) => setFormData({ ...formData, date: e.target.value })}
+                fullWidth
+                InputLabelProps={{ shrink: true }}
+              />
+            </Stack>
           )}
 
-          {/* Onglet 3 : Documents */}
+          {/* Tab 2: Document */}
           {currentTab === 2 && (
-            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, mt: 2 }}>
-              <Alert severity="info" icon={<DescriptionIcon />}>
-                Documents justificatifs et pièces jointes
-              </Alert>
-
+            <Stack spacing={2} sx={{ mt: 2 }}>
               <FormControl fullWidth>
                 <InputLabel>Type de document</InputLabel>
                 <Select
@@ -986,51 +1056,53 @@ export default function ChargesPersonnels() {
                 </Select>
               </FormControl>
 
-              <Grid container spacing={2}>
-                <Grid item xs={12} md={6}>
-                  <TextField
-                    label="Numéro du document"
-                    value={formData.numeroDocument}
-                    onChange={(e) => setFormData({ ...formData, numeroDocument: e.target.value })}
-                    fullWidth
-                    placeholder="Ex: BP-2025-001"
-                  />
-                </Grid>
-                <Grid item xs={12} md={6}>
-                  <TextField
-                    label="Date du document"
-                    type="date"
-                    value={formData.dateDocument}
-                    onChange={(e) => setFormData({ ...formData, dateDocument: e.target.value })}
-                    fullWidth
-                    InputLabelProps={{ shrink: true }}
-                  />
-                </Grid>
-              </Grid>
+              <TextField
+                label="Numéro du document"
+                value={formData.numeroDocument}
+                onChange={(e) => setFormData({ ...formData, numeroDocument: e.target.value })}
+                fullWidth
+              />
 
               <TextField
-                label="Référence/Lien pièce jointe"
+                label="Date du document"
+                type="date"
+                value={formData.dateDocument}
+                onChange={(e) => setFormData({ ...formData, dateDocument: e.target.value })}
+                fullWidth
+                InputLabelProps={{ shrink: true }}
+              />
+
+              <TextField
+                label="Pièce jointe (URL)"
                 value={formData.pieceJointe}
                 onChange={(e) => setFormData({ ...formData, pieceJointe: e.target.value })}
                 fullWidth
-                placeholder="URL ou référence du fichier"
-                helperText="Vous pouvez indiquer un lien Google Drive, Dropbox, etc."
+                placeholder="https://..."
               />
 
               <TextField
-                label="Notes supplémentaires"
+                label="Description"
+                value={formData.description}
+                onChange={(e) => setFormData({ ...formData, description: e.target.value })}
+                fullWidth
+                multiline
+                rows={3}
+              />
+
+              <TextField
+                label="Notes"
                 value={formData.notes}
                 onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
-                multiline
-                rows={4}
                 fullWidth
+                multiline
+                rows={2}
               />
-            </Box>
+            </Stack>
           )}
 
-          {/* Onglet 4 : Paiement */}
+          {/* Tab 3: Paiement - IMPORTANT POUR LA CAISSE */}
           {currentTab === 3 && (
-            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, mt: 2 }}>
+            <Stack spacing={2} sx={{ mt: 2 }}>
               <Alert severity="info" icon={<MoneyIcon />}>
                 Mode de paiement (important pour la caisse)
               </Alert>
@@ -1072,12 +1144,7 @@ export default function ChargesPersonnels() {
                   </Grid>
                   <Grid item xs={6}>
                     <Typography variant="body2" align="right" sx={{ fontWeight: 700 }}>
-                      {(
-                        (parseFloat(formData.salaire) || 0) +
-                        (parseFloat(formData.prime) || 0) +
-                        ((parseFloat(formData.heuresSupplementaires) || 0) * (parseFloat(formData.tauxHoraire) || 0)) +
-                        (parseFloat(formData.indemnites) || 0)
-                      ).toFixed(2)} MAD
+                      {calculerTotal().toFixed(2)} MAD
                     </Typography>
                   </Grid>
                   <Grid item xs={6}>
@@ -1090,16 +1157,31 @@ export default function ChargesPersonnels() {
                   </Grid>
                 </Grid>
               </Paper>
-            </Box>
+            </Stack>
           )}
         </DialogContent>
-        <DialogActions sx={{ p: 3, pt: 2 }}>
-          <Button onClick={handleCloseDialog}>Annuler</Button>
+
+        <DialogActions sx={{ 
+          p: { xs: 2, sm: 3 }, 
+          pt: 2,
+          flexDirection: { xs: 'column-reverse', sm: 'row' },
+          gap: { xs: 1, sm: 0 }
+        }}>
+          <Button 
+            onClick={handleCloseDialog}
+            fullWidth={isMobile}
+          >
+            Annuler
+          </Button>
           <Button
             variant="contained"
             onClick={handleSave}
             disabled={!formData.employe || !formData.salaire}
-            sx={{ background: 'linear-gradient(135deg, #667eea, #764ba2)' }}
+            fullWidth={isMobile}
+            sx={{ 
+              background: 'linear-gradient(135deg, #667eea, #764ba2)',
+              ml: { sm: 1 }
+            }}
           >
             {editingCharge ? 'Modifier' : 'Enregistrer'}
           </Button>
@@ -1107,13 +1189,51 @@ export default function ChargesPersonnels() {
       </Dialog>
 
       {/* Dialogue de détails */}
-      <Dialog open={detailsDialogOpen} onClose={() => setDetailsDialogOpen(false)} maxWidth="sm" fullWidth>
-        <DialogTitle sx={{ fontWeight: 700, color: '#1e293b' }}>
-          Détails de la charge
+      <Dialog 
+        open={detailsDialogOpen} 
+        onClose={() => setDetailsDialogOpen(false)}
+        fullScreen={isMobile}
+        maxWidth="sm" 
+        fullWidth
+        PaperProps={{
+          sx: {
+            borderRadius: isMobile ? 0 : 2
+          }
+        }}
+      >
+        <DialogTitle sx={{ 
+          fontWeight: 700, 
+          color: '#1e293b',
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          p: { xs: 2, sm: 3 }
+        }}>
+          <Typography variant={isMobile ? "h6" : "h5"} sx={{ fontWeight: 700 }}>
+            Détails de la charge
+          </Typography>
+          {isMobile && (
+            <IconButton onClick={() => setDetailsDialogOpen(false)}>
+              <CloseIcon />
+            </IconButton>
+          )}
         </DialogTitle>
-        <DialogContent>
+        
+        <DialogContent sx={{ p: { xs: 2, sm: 3 } }}>
           {selectedCharge && (
-            <Box sx={{ mt: 2 }}>
+            <Box sx={{ mt: 1 }}>
+              <Stack direction="row" spacing={1} sx={{ mb: 2 }}>
+                <Chip
+                  icon={<PersonIcon />}
+                  label={selectedCharge.poste || 'Non spécifié'}
+                  sx={{
+                    bgcolor: getPosteColor(selectedCharge.poste) + '20',
+                    color: getPosteColor(selectedCharge.poste),
+                    fontWeight: 700
+                  }}
+                />
+              </Stack>
+
               <Typography variant="h6" sx={{ fontWeight: 700, mb: 2 }}>
                 {selectedCharge.employe}
               </Typography>
@@ -1166,7 +1286,7 @@ export default function ChargesPersonnels() {
                   <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 1 }}>Paiement</Typography>
                   <Typography variant="body2">Mode : {selectedCharge.modePaiement}</Typography>
                   {selectedCharge.referenceVirement && (
-                    <Typography variant="body2">Référence : {selectedCharge.referenceVirement}</Typography>
+                    <Typography variant="body2" sx={{ mt: 0.5 }}>Référence : {selectedCharge.referenceVirement}</Typography>
                   )}
                   {selectedCharge.modePaiement === 'Espèces' && (
                     <Alert severity="info" sx={{ mt: 1 }}>
@@ -1181,10 +1301,10 @@ export default function ChargesPersonnels() {
                   <Divider sx={{ my: 2 }} />
                   <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 1 }}>Document</Typography>
                   <Typography variant="body2">Type : {selectedCharge.typeDocument}</Typography>
-                  <Typography variant="body2">N° : {selectedCharge.numeroDocument || '-'}</Typography>
-                  <Typography variant="body2">Date : {selectedCharge.dateDocument || '-'}</Typography>
+                  <Typography variant="body2" sx={{ mt: 0.5 }}>N° : {selectedCharge.numeroDocument || '-'}</Typography>
+                  <Typography variant="body2" sx={{ mt: 0.5 }}>Date : {selectedCharge.dateDocument || '-'}</Typography>
                   {selectedCharge.pieceJointe && (
-                    <Typography variant="body2">
+                    <Typography variant="body2" sx={{ mt: 0.5 }}>
                       Fichier : <a href={selectedCharge.pieceJointe} target="_blank" rel="noopener noreferrer">Voir</a>
                     </Typography>
                   )}
@@ -1201,8 +1321,14 @@ export default function ChargesPersonnels() {
             </Box>
           )}
         </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setDetailsDialogOpen(false)}>Fermer</Button>
+        
+        <DialogActions sx={{ p: { xs: 2, sm: 3 }, pt: 1 }}>
+          <Button 
+            onClick={() => setDetailsDialogOpen(false)}
+            fullWidth={isMobile}
+          >
+            Fermer
+          </Button>
         </DialogActions>
       </Dialog>
     </Box>
