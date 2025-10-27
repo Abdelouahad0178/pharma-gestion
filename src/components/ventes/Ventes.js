@@ -6,6 +6,7 @@ import { useUserRole } from "../../contexts/UserRoleContext";
 import {
   collection,
   getDocs,
+  getDoc,
   doc,
   query,
   orderBy,
@@ -17,6 +18,55 @@ import {
   runTransaction,
   addDoc,
 } from "firebase/firestore";
+
+/* ======================================================
+   ⚙️ Assurer l’appartenance utilisateur → société
+   (évite les 403/permission-denied avec les règles Firestore)
+====================================================== */
+async function ensureMembership(user, societeId) {
+  try {
+    if (!user || !societeId) return;
+    const uRef = doc(db, "users", user.uid);
+    const snap = await getDoc(uRef);
+
+    const base = {
+      uid: user.uid,
+      email: user.email || null,
+      displayName: user.displayName || null,
+      updatedAt: Timestamp.now(),
+    };
+
+    if (!snap.exists()) {
+      await setDoc(
+        uRef,
+        {
+          ...base,
+          createdAt: Timestamp.now(),
+          societeId,
+          // rôle par défaut si inexistant côté backend
+          role: "vendeuse",
+        },
+        { merge: true }
+      );
+      return;
+    }
+
+    const data = snap.data() || {};
+    if (data.societeId !== societeId || !data.societeId) {
+      await setDoc(
+        uRef,
+        {
+          ...base,
+          societeId,
+        },
+        { merge: true }
+      );
+    }
+  } catch (e) {
+    // on ne bloque pas l’UI, mais on logge
+    console.warn("[ensureMembership] ", e?.message || e);
+  }
+}
 
 /* ======================================================
    Constantes / helpers temps-réel
@@ -43,8 +93,8 @@ const normalizeStockValue = (val) => {
   if (val === undefined || val === null) return "unknown";
   if (typeof val === "number") return val === 1 ? "stock1" : val === 2 ? "stock2" : "unknown";
   const raw = String(val).toLowerCase().replace(/[\s_\-]/g, "");
-  if (["stock1","s1","magasin1","depot1","principal","primary","p","m1","1"].includes(raw)) return "stock1";
-  if (["stock2","s2","magasin2","depot2","secondaire","secondary","s","m2","2"].includes(raw)) return "stock2";
+  if (["stock1", "s1", "magasin1", "depot1", "principal", "primary", "p", "m1", "1"].includes(raw)) return "stock1";
+  if (["stock2", "s2", "magasin2", "depot2", "secondaire", "secondary", "s", "m2", "2"].includes(raw)) return "stock2";
   return "unknown";
 };
 const pickDocStock = (docData) => {
@@ -333,10 +383,17 @@ export default function Ventes() {
   const [lastRealtimeBeat, setLastRealtimeBeat] = useState(null);
   const lastAddTsRef = useRef(0);
 
+  /* ===== CHARGEMENT ===== */
+  useEffect(() => { setWaiting(loading || !societeId || !user); }, [loading, societeId, user]);
+
+  // ✅ s’assurer au montage (et à chaque changement user/societe) que l’utilisateur est rattaché
+  useEffect(() => { if (user && societeId) { ensureMembership(user, societeId); } }, [user, societeId]);
+
   /* ===== LOGGING ACTIVITÉ ===== */
   const logActivity = useCallback(async (type, details) => {
     if (!societeId || !user) return;
     try {
+      await ensureMembership(user, societeId);
       await addDoc(collection(db, "societe", societeId, "activities"), {
         type,
         userId: user.uid,
@@ -353,9 +410,7 @@ export default function Ventes() {
     }
   }, [societeId, user]);
 
-  /* ===== CHARGEMENT ===== */
-  useEffect(() => { setWaiting(loading || !societeId || !user); }, [loading, societeId, user]);
-
+  /* ===== DATA (temps réel) ===== */
   useEffect(() => {
     if (!societeId) return;
 
@@ -615,6 +670,8 @@ export default function Ventes() {
     setError("");
 
     try {
+      await ensureMembership(user, societeId);
+
       await runTransaction(db, async (transaction) => {
         const montantTotal = articles.reduce(
           (sum, a) => sum + (safeNumber(a.prixUnitaire) * safeNumber(a.quantite) - safeNumber(a.remise)), 0
@@ -805,6 +862,8 @@ export default function Ventes() {
     setError("");
 
     try {
+      await ensureMembership(user, societeId);
+
       await runTransaction(db, async (transaction) => {
         const arts = vente.articles || [];
         for (const article of arts) {
@@ -887,6 +946,7 @@ export default function Ventes() {
     const opId = `${venteId}#${lineIndex}`;
     const ref = doc(db, "societe", societeId, DISMISSED_COLL, opId);
     try {
+      await ensureMembership(user, societeId);
       if (dismiss) {
         await setDoc(ref, { dismissed: true, by: user?.email || user?.uid || "user", at: Timestamp.now() }, { merge: true });
         setSuccess("Ligne ignorée pour la sync stock.");
@@ -1338,7 +1398,7 @@ export default function Ventes() {
             </div>
           )}
 
-          {/* ÉTAPE 2: Finalisation (conditionnelle) */}
+          {/* ÉTAPE 2: Finalisation */}
           {showFinalizationSection && articles.length > 0 && (
             <div style={{background:"linear-gradient(135deg,#f3e8ff,#e9d5ff)",borderRadius:16,padding:16,border:"2px solid #8b5cf6"}}>
               <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}}>

@@ -1,4 +1,4 @@
-// src/components/Navbar.js - Version complète avec gestion permissions personnalisées + Analytics
+// src/components/Navbar.js - Version complète avec gestion permissions personnalisées + Analytics + Charges
 import React, { useState, useEffect } from "react";
 import { Link, useNavigate, useLocation } from "react-router-dom";
 import {
@@ -33,7 +33,9 @@ import {
   ManageAccounts as ManageAccountsIcon,
   Star as StarIcon,
   BarChart as BarChartIcon, // Analytics
-  Gavel as GavelIcon        // Documents légaux
+  Gavel as GavelIcon,        // Documents légaux
+  Person as PersonIcon,       // 🆕 Charges Personnels
+  Receipt as ReceiptIcon      // 🆕 Charges Divers
 } from "@mui/icons-material";
 
 import { signOut } from "firebase/auth";
@@ -76,7 +78,7 @@ export default function Navbar() {
     return () => clearInterval(id);
   }, []);
 
-  // ================= MENU (Documents légaux déplacé sous Paramètres) ==================
+  // ================= MENU ==================
   const menuItems = [
     { text: "Dashboard", icon: <DashboardIcon />, path: "/dashboard", permission: "voir_dashboard", description: "Tableau de bord principal" },
     { text: "Achats", icon: <ShoppingCartIcon />, path: "/achats", permission: "voir_achats", description: "Gestion des achats fournisseurs" },
@@ -85,13 +87,16 @@ export default function Navbar() {
     { text: "Stock", icon: <LocalPharmacyIcon />, path: "/stock", permission: "voir_stock", description: "Gestion du stock pharmacie" },
     { text: "Devis & Factures", icon: <DescriptionIcon />, path: "/devis-factures", permission: "voir_devis_factures", description: "Gestion devis et factures" },
     { text: "Paiements", icon: <AttachMoneyIcon />, path: "/paiements", permission: "voir_paiements", description: "Suivi des paiements" },
+    
+    // 🆕 Section Charges Divers
+    { text: "Charges Personnels", icon: <PersonIcon />, path: "/charges-personnels", permission: "voir_dashboard", description: "Gestion des charges du personnel" },
+    { text: "Charges Divers", icon: <ReceiptIcon />, path: "/charges-divers", permission: "voir_dashboard", description: "Gestion des charges diverses" },
+    
     { text: "Statistiques", icon: <BarChartIcon />, path: "/analytics", permission: "voir_dashboard", description: "Analyses et graphiques de performance", isNew: true },
     { text: "Sauvegardes", icon: <BackupIcon />, path: "/backup", permission: "voir_dashboard", description: "Sauvegarde des données", isNew: true, hasOwnerBonus: true },
     { text: "Utilisateurs", icon: <PeopleIcon />, path: "/users", permission: "gerer_utilisateurs", description: "Gestion des invitations et utilisateurs", isAdmin: true },
     { text: "👑 Gestion Rôles", icon: <ManageAccountsIcon />, path: "/gestion-utilisateurs", permission: "gerer_utilisateurs", ownerOnly: true, description: "Promotion/rétrogradation des utilisateurs", isOwnerSpecial: true },
     { text: "Paramètres", icon: <SettingsIcon />, path: "/parametres", permission: "parametres", description: "Configuration système" },
-
-    // 👇👇 Déplacé ici : juste après Paramètres
     { text: "Documents légaux", icon: <GavelIcon />, path: "/legal", permission: "voir_dashboard", description: "CGU, Confidentialité, Mentions, SLA" },
   ];
 
@@ -234,44 +239,45 @@ export default function Navbar() {
                   }),
                   "&:hover": {
                     background:
-                      location.pathname === item.path ? "#fff" : "#fff3",
-                    color:
-                      location.pathname === item.path ? "#1976d2" : "#1c3db1",
+                      location.pathname === item.path
+                        ? "#fff"
+                        : "rgba(255,255,255,0.1)",
                   },
                 }}
               >
-                <ListItemIcon sx={{ color: "inherit" }}>
-                  {item.isOwnerSpecial ? (
-                    <Badge
-                      badgeContent="👑"
-                      sx={{
-                        "& .MuiBadge-badge": {
-                          fontSize: "10px",
-                          height: "16px",
-                          minWidth: "16px",
-                          background: "transparent",
-                        },
-                      }}
-                    >
-                      {item.icon}
-                    </Badge>
-                  ) : isExtra ? (
-                    <Badge
-                      badgeContent="✨"
-                      sx={{
-                        "& .MuiBadge-badge": {
-                          fontSize: "8px",
-                          height: "14px",
-                          minWidth: "14px",
-                          background: "transparent",
-                        },
-                      }}
-                    >
-                      {item.icon}
-                    </Badge>
-                  ) : item.isNew ? (
+                {item.isOwnerSpecial && (
+                  <Box
+                    sx={{
+                      position: "absolute",
+                      right: 10,
+                      top: "50%",
+                      transform: "translateY(-50%)",
+                      fontSize: "1.2rem",
+                    }}
+                  >
+                    👑
+                  </Box>
+                )}
+
+                {item.hasOwnerBonus && isOwner && (
+                  <Box
+                    sx={{
+                      position: "absolute",
+                      right: 10,
+                      top: "50%",
+                      transform: "translateY(-50%)",
+                      fontSize: "1rem",
+                    }}
+                  >
+                    ⚡
+                  </Box>
+                )}
+
+                <ListItemIcon sx={{ color: "inherit", minWidth: 42 }}>
+                  {item.isNew ? (
                     <Badge
                       badgeContent="NEW"
+                      color="success"
                       sx={{
                         "& .MuiBadge-badge": {
                           fontSize: "7px",

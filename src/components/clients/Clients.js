@@ -69,6 +69,10 @@ export default function Clients(){
   // Stock (lecture seule pour options + PV + fournisseur)
   const [stockEntries, setStockEntries] = useState([]);
 
+  // UI erreurs / notifications
+  const [uiError, setUiError] = useState('');
+  const [uiNotice, setUiNotice] = useState('');
+
   // Form création
   const [creating, setCreating] = useState(false);
   const [form, setForm] = useState({
@@ -117,33 +121,51 @@ export default function Clients(){
 
   /* ====================== Realtime: Ordonnances ====================== */
   useEffect(()=>{
+    setUiError('');
     if(!societeId) return;
-    const ref = collection(db, 'societes', societeId, 'ordonnances');
-    const q = query(ref, orderBy('createdAt','desc'));
-    return onSnapshot(q, snap=>{
-      const arr=[]; snap.forEach(d=>arr.push({id:d.id, ...d.data()}));
-      setOrdonnances(arr);
-    }, err=>console.error('Erreur listener ordonnances:', err));
+    // 'societe' (singulier)
+    const ref = collection(db, 'societe', societeId, 'ordonnances');
+    const qy = query(ref, orderBy('createdAt','desc'));
+    return onSnapshot(
+      qy,
+      snap => {
+        const arr=[]; snap.forEach(d=>arr.push({id:d.id, ...d.data()}));
+        setOrdonnances(arr);
+      },
+      err => {
+        console.error('Erreur listener ordonnances:', err);
+        setUiError(err?.code === 'permission-denied'
+          ? "Permissions insuffisantes pour lire les ordonnances de cette pharmacie."
+          : "Erreur lors de la lecture des ordonnances.");
+      }
+    );
   },[societeId]);
 
   /* ====================== Realtime: Stock (nom + PV + fournisseur) ====================== */
   useEffect(()=>{
     if(!societeId) return;
     const ref = collection(db, 'societe', societeId, 'stock_entries'); // "societe" (singulier)
-    const q = query(ref, orderBy('nom'));
-    return onSnapshot(q, snap=>{
-      const list=[];
-      snap.forEach(dc=>{
-        const d = dc.data();
-        list.push({
-          id: dc.id,
-          nom: d.nom || '',
-          prixVente: Number(d.prixVente || 0),
-          fournisseur: d.fournisseur || ''
+    const qy = query(ref, orderBy('nom'));
+    return onSnapshot(
+      qy,
+      snap=>{
+        const list=[];
+        snap.forEach(dc=>{
+          const d = dc.data();
+          list.push({
+            id: dc.id,
+            nom: d.nom || '',
+            prixVente: Number(d.prixVente || 0),
+            fournisseur: d.fournisseur || ''
+          });
         });
-      });
-      setStockEntries(list);
-    }, err=>console.error('Erreur listener stock_entries:', err));
+        setStockEntries(list);
+      },
+      err=>{
+        console.error('Erreur listener stock_entries:', err);
+        // On ne remonte pas en UI (optionnel) car c’est “confort”
+      }
+    );
   },[societeId]);
 
   /* ====================== Recherche / Filtres ====================== */
@@ -186,8 +208,8 @@ export default function Clients(){
     setForm(f=>{
       const items = f.items.slice();
       if (value === '__create_inline__') {
-        // Mode "Nouveau (sans stock)" — on ne lie rien, on ouvre le bloc de saisie locale
-        items[idx] = { ...items[idx], productId: '', productName: '', supplier:'', newName:'', newPV:'', newSupplier:'' , __showInline: true };
+        // Mode "Nouveau (sans stock)"
+        items[idx] = { ...items[idx], productId: '', productName: '', supplier:'', newName:'', newPV:'', newSupplier:'', __showInline: true };
       } else {
         const selected = stockEntries.find(s=>s.id===value);
         items[idx] = {
@@ -224,7 +246,7 @@ export default function Clients(){
 
       items[idx] = {
         ...it,
-        productId: '',             // << pas de lien au stock
+        productId: '',             // pas de lien au stock
         productName: name,
         supplier: fourn || '',
         unitPrice: it.unitPrice || (Number.isFinite(pv) ? pv : ''),
@@ -250,8 +272,11 @@ export default function Clients(){
   /* ====================== Numéro d’ordonnance ====================== */
   const computeNextNumero = ()=>{
     const prefix = `ORD-${toYYYYMM()}-`;
-    const seq = ordonnances.map(o=>String(o.numero||'')).filter(n=>n.startsWith(prefix))
-      .map(n=>Number(n.slice(prefix.length))).filter(Number.isFinite);
+    const seq = ordonnances
+      .map(o=>String(o.numero||''))
+      .filter(n=>n.startsWith(prefix))
+      .map(n=>Number(n.slice(prefix.length)))
+      .filter(Number.isFinite);
     const next = (seq.length ? Math.max(...seq) : 0) + 1;
     return `${prefix}${String(next).padStart(4,'0')}`;
   };
@@ -267,7 +292,10 @@ export default function Clients(){
   }),[]);
 
   const createOrdonnance = async ()=>{
-    if(!societeId) return;
+    if(!societeId) {
+      alert("Impossible de créer : votre compte n’est rattaché à aucune pharmacie.");
+      return;
+    }
     const numero = computeNextNumero();
 
     // On ignore les lignes complètement vides (ni id ni nom)
@@ -308,26 +336,45 @@ export default function Clients(){
     }
 
     try{
-      const ref = collection(db, 'societes', societeId, 'ordonnances');
-      await addDoc(ref, payload);
-      setCreating(false); resetForm();
-    }catch(e){ console.error(e); alert("Erreur lors de la création de l’ordonnance."); }
+      // 'societe' (singulier)
+      const ref = collection(db, 'societe', societeId, 'ordonnances');
+      const docRef = await addDoc(ref, payload);
+      console.log('[ORDO] Créée:', docRef.id);
+      setUiNotice(`Ordonnance ${numero} créée.`);
+      setTimeout(()=>setUiNotice(''), 2500);
+      setCreating(false);
+      resetForm();
+    }catch(e){
+      console.error(e);
+      const msg = String(e?.code||'');
+      if (msg.includes('permission-denied')) {
+        alert("Permissions insuffisantes pour créer une ordonnance dans cette pharmacie.");
+      } else {
+        alert("Erreur lors de la création de l’ordonnance.");
+      }
+    }
   };
 
   const updateStatus = async (id, status, extra={})=>{
     if(!societeId || !id) return;
     try{
-      const ref = doc(db, 'societes', societeId, 'ordonnances', id);
+      const ref = doc(db, 'societe', societeId, 'ordonnances', id);
       await updateDoc(ref, { status, updatedAt: serverTimestamp(), ...extra });
-    }catch(e){ console.error(e); alert('Erreur lors de la mise à jour du statut.'); }
+    }catch(e){
+      console.error(e);
+      alert('Erreur lors de la mise à jour du statut.');
+    }
   };
   const removeOrdonnance = async (id)=>{
     if(!societeId || !id) return;
     if(!window.confirm('Supprimer cette ordonnance ?')) return;
     try{
-      const ref = doc(db, 'societes', societeId, 'ordonnances', id);
+      const ref = doc(db, 'societe', societeId, 'ordonnances', id);
       await deleteDoc(ref);
-    }catch(e){ console.error(e); alert('Erreur lors de la suppression.'); }
+    }catch(e){
+      console.error(e);
+      alert('Erreur lors de la suppression.');
+    }
   };
 
   /* ====================== Actions ====================== */
@@ -366,6 +413,20 @@ export default function Clients(){
   };
 
   /* ====================== UI ====================== */
+
+  // 🔒 Garde explicite si le compte n’est pas rattaché à une pharmacie
+  if (!societeId) {
+    return (
+      <div className="fullscreen-table-wrap" style={{ padding: 20 }}>
+        <div className="fullscreen-table-title">Clients & Suivi des Ordonnances</div>
+        <div className="paper-card" style={{ maxWidth: 560, margin: '20px auto' }}>
+          <h3>Compte non rattaché</h3>
+          <p>Votre compte n’est rattaché à aucune pharmacie. Demandez au propriétaire de vous inviter, ou rattachez-vous avec un code d’invitation.</p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="clients-root">
       <Styles />
@@ -374,11 +435,27 @@ export default function Clients(){
       <div className="clients-header">
         <div className="fullscreen-table-title">Clients & Suivi des Ordonnances</div>
 
+        {/* Bandeaux UI */}
+        {uiError && (
+          <div style={{margin:'8px 0', padding:'10px 12px', borderRadius:8, background:'#fee2e2', color:'#991b1b', fontWeight:600}}>
+            {uiError}
+          </div>
+        )}
+        {uiNotice && (
+          <div style={{margin:'8px 0', padding:'10px 12px', borderRadius:8, background:'#dcfce7', color:'#065f46', fontWeight:600}}>
+            {uiNotice}
+          </div>
+        )}
+
         {/* Barre d’actions */}
         <div style={{ display:'flex', gap:8, marginBottom:12 }}>
           <div style={{ flex:1 }}>
-            <input className="form-input" placeholder="Rechercher (client, téléphone, numéro, produit)…"
-              value={qText} onChange={(e)=>setQText(e.target.value)} />
+            <input
+              className="form-input"
+              placeholder="Rechercher (client, téléphone, numéro, produit)…"
+              value={qText}
+              onChange={(e)=>setQText(e.target.value)}
+            />
           </div>
           <button onClick={()=>setCreating(true)} style={{...btn('#10b981','#fff'), whiteSpace:'nowrap'}}>
             + Nouvelle ordonnance
@@ -393,9 +470,19 @@ export default function Clients(){
             { key:'pretes', label:'Prêtes' },
             { key:'terminees', label:'Terminées' },
           ].map(t=>(
-            <button key={t.key} onClick={()=>setTab(t.key)}
-              style={{ padding:'10px 14px', borderRadius:8, border:'none', cursor:'pointer', color:'#fff', fontWeight:700,
-                background: tab===t.key ? 'linear-gradient(135deg,#6366f1,#a855f7)' : 'transparent' }}>
+            <button
+              key={t.key}
+              onClick={()=>setTab(t.key)}
+              style={{
+                padding:'10px 14px',
+                borderRadius:8,
+                border:'none',
+                cursor:'pointer',
+                color:'#fff',
+                fontWeight:700,
+                background: tab===t.key ? 'linear-gradient(135deg,#6366f1,#a855f7)' : 'transparent'
+              }}
+            >
               {t.label}
             </button>
           ))}
@@ -607,8 +694,11 @@ export default function Clients(){
                         {/* Sélecteur depuis le stock + option "Nouveau (sans stock)" */}
                         <div>
                           <label className="form-label">Depuis le stock / Nouveau</label>
-                          <select className="form-input" value={it.productId || (it.__showInline ? '__create_inline__' : it.productId)}
-                            onChange={(e)=>chooseStockProduct(idx, e.target.value)}>
+                          <select
+                            className="form-input"
+                            value={it.__showInline ? '__create_inline__' : (it.productId || '')}
+                            onChange={(e)=>chooseStockProduct(idx, e.target.value)}
+                          >
                             <option value="">— Choisir un article (existant) —</option>
                             {stockEntries.map(p=>(
                               <option key={p.id} value={p.id}>
@@ -632,9 +722,10 @@ export default function Clients(){
                               <div style={{ display:'flex', gap:8, marginTop:8, flexWrap:'wrap' }}>
                                 <button onClick={()=>createInlineItem(idx)} style={btn('#0ea5e9','#fff')}>Insérer dans l’ordonnance</button>
                                 <button onClick={()=>{
-                                  // annuler le mode inline
                                   updateItemField(idx,'__showInline',false);
-                                  updateItemField(idx,'newName',''); updateItemField(idx,'newPV',''); updateItemField(idx,'newSupplier','');
+                                  updateItemField(idx,'newName','');
+                                  updateItemField(idx,'newPV','');
+                                  updateItemField(idx,'newSupplier','');
                                 }} style={btn('transparent','#9fb3c8',true,'#334155')}>Annuler</button>
                               </div>
                             </div>

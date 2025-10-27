@@ -1,4 +1,4 @@
-// src/components/paiements/Paiements.js
+// src/components/paiements/Paiements.js - Version enrichie avec Charges + TOTEAUX PAR TABLE
 import React, { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import { db } from "../../firebase/config";
 import {
@@ -114,6 +114,9 @@ const getModeIcon = (mode) => {
   if (m === "especes" || m === "espèces") return "💵";
   if (m === "cheque" || m === "chèque") return "🏦";
   if (m === "traite") return "📝";
+  if (m === "virement bancaire" || m === "virement") return "🏧";
+  if (m === "carte bancaire" || m === "carte") return "💳";
+  if (m === "prelevement" || m === "prélèvement") return "🔄";
   return "💳";
 };
 
@@ -122,6 +125,9 @@ const getModeColor = (mode) => {
   if (m === "especes" || m === "espèces") return "#10b981";
   if (m === "cheque" || m === "chèque") return "#3b82f6";
   if (m === "traite") return "#8b5cf6";
+  if (m === "virement bancaire" || m === "virement") return "#f59e0b";
+  if (m === "carte bancaire" || m === "carte") return "#ec4899";
+  if (m === "prelevement" || m === "prélèvement") return "#14b8a6";
   return "#6b7280";
 };
 
@@ -217,6 +223,16 @@ const useInjectStyles = () => {
       .form-group{ margin-bottom:16px; }
       .form-label{ display:block; font-size:13px; font-weight:700; color:#374151; margin-bottom:6px; }
       .form-input:focus{ outline:none; border-color:var(--p); box-shadow:0 0 0 3px rgba(99,102,241,0.1); }
+      .main-tabs{ display:flex; gap:8px; margin-bottom:16px; border-bottom:3px solid var(--border); }
+      .main-tab-btn{ padding:12px 24px; border:none; background:transparent; cursor:pointer; font-weight:700; color:#6b7280; border-bottom:3px solid transparent; transition:all 0.2s; font-size:15px; }
+      .main-tab-btn:hover{ color:var(--p); }
+      .main-tab-btn.active{ color:var(--p); border-bottom-color:var(--p); }
+      .badge-type{ display:inline-block; padding:4px 10px; border-radius:6px; font-size:11px; font-weight:700; }
+      .mode-badge{ display:inline-flex; align-items:center; gap:6px; padding:6px 12px; border-radius:8px; font-weight:700; font-size:12px; box-shadow:0 2px 6px rgba(0,0,0,.08); }
+      .subcard{ background:#f8fafc; border:1px solid #e5e7eb; border-radius:12px; padding:16px; margin-top:12px; }
+      .grid-add{ display:grid; grid-template-columns:100px 150px 120px 130px 150px 120px 1fr 80px; gap:8px; align-items:center; }
+      .rowbtn{ background:var(--p); color:#fff; border:0; padding:6px 12px; border-radius:8px; cursor:pointer; font-weight:700; font-size:12px; }
+      .rowbtn:hover{ background:var(--p2); }
       @media print { .no-print{ display:none !important; } }
     `;
     document.head.appendChild(style);
@@ -228,10 +244,18 @@ export default function Paiements() {
   useInjectStyles();
   const { societeId, user, role, loading } = useUserRole();
 
+  // 🆕 Onglet principal : documents, chargesPersonnels, chargesDivers
+  const [mainTab, setMainTab] = useState("documents");
+
   const [relatedTo, setRelatedTo] = useState("ventes");
   const [notification, setNotification] = useState(null);
   const [documents, setDocuments] = useState([]);
   const [paiements, setPaiements] = useState([]);
+  
+  // 🆕 États pour les charges
+  const [chargesPersonnels, setChargesPersonnels] = useState([]);
+  const [chargesDivers, setChargesDivers] = useState([]);
+
   const [filterName, setFilterName] = useState("");
   const [filterStatus, setFilterStatus] = useState("all");
   const [dateFrom, setDateFrom] = useState("");
@@ -254,6 +278,8 @@ export default function Paiements() {
 
   const unsubDocsRef = useRef(null);
   const unsubPaysRef = useRef(null);
+  const unsubChargesPersoRef = useRef(null);
+  const unsubChargesDiversRef = useRef(null);
 
   const showNote = useCallback((message, type = "success") => {
     setNotification({ message, type });
@@ -400,21 +426,143 @@ export default function Paiements() {
     );
   }, [societeId, relatedTo]);
 
+  // 🆕 CHARGEMENT DES CHARGES PERSONNELS (NON-ESPÈCES)
+  const loadChargesPersonnels = useCallback(() => {
+    if (!societeId) return;
+    if (unsubChargesPersoRef.current) unsubChargesPersoRef.current();
+    const c = collection(db, "societe", societeId, "chargesPersonnels");
+    unsubChargesPersoRef.current = onSnapshot(
+      c,
+      (snap) => {
+        const arr = [];
+        snap.forEach((d) => {
+          const data = d.data();
+          const mode = norm(data.modePaiement || "");
+          
+          // Exclure les espèces
+          const isEspeces = mode === "especes" || mode === "espèces";
+          
+          if (mode && !isEspeces) {
+            arr.push({ id: d.id, ...data });
+          }
+        });
+        console.log("✅ Charges Personnels chargées:", arr.length);
+        setChargesPersonnels(arr);
+      },
+      (e) => console.error("❌ Erreur charges personnels:", e)
+    );
+  }, [societeId]);
+
+  // 🆕 CHARGEMENT DES CHARGES DIVERS (NON-ESPÈCES)
+  const loadChargesDivers = useCallback(() => {
+    if (!societeId) return;
+    if (unsubChargesDiversRef.current) unsubChargesDiversRef.current();
+    const c = collection(db, "societe", societeId, "chargesDivers");
+    unsubChargesDiversRef.current = onSnapshot(
+      c,
+      (snap) => {
+        const arr = [];
+        snap.forEach((d) => {
+          const data = d.data();
+          const mode = norm(data.modePaiement || "");
+          const statut = norm(data.statut || "");
+          
+          // Exclure les espèces
+          const isEspeces = mode === "especes" || mode === "espèces";
+          
+          // Inclure si : a un mode de paiement NON-ESPÈCES et statut Payé (ou vide qui signifie payé par défaut)
+          const isPaid = !statut || statut === "paye" || statut === "payé";
+          
+          if (mode && !isEspeces && isPaid) {
+            arr.push({ id: d.id, ...data });
+          }
+        });
+        console.log("✅ Charges Divers chargées:", arr.length);
+        setChargesDivers(arr);
+      },
+      (e) => console.error("❌ Erreur charges divers:", e)
+    );
+  }, [societeId]);
+
   useEffect(() => {
     if (!societeId) return;
     loadDocuments();
     loadPaiements();
+    loadChargesPersonnels();
+    loadChargesDivers();
     return () => {
       if (unsubDocsRef.current) unsubDocsRef.current();
       if (unsubPaysRef.current) unsubPaysRef.current();
+      if (unsubChargesPersoRef.current) unsubChargesPersoRef.current();
+      if (unsubChargesDiversRef.current) unsubChargesDiversRef.current();
     };
-  }, [societeId, relatedTo, loadDocuments, loadPaiements]);
+  }, [societeId, relatedTo, loadDocuments, loadPaiements, loadChargesPersonnels, loadChargesDivers]);
 
   useEffect(() => {
     if (role === "vendeuse") {
       setRelatedTo("ventes");
     }
   }, [role]);
+
+  // 🆕 FILTRAGE DES CHARGES PERSONNELS
+  const filteredChargesPersonnels = useMemo(() => {
+    let result = [...chargesPersonnels];
+
+    if (filterMode !== "all") {
+      result = result.filter((c) => isModeWanted(c.modePaiement, filterMode));
+    }
+
+    if (filterName) {
+      const searchTerm = norm(filterName);
+      result = result.filter((c) => {
+        const emp = norm(c.employe || "");
+        const poste = norm(c.poste || "");
+        const cin = norm(c.cin || "");
+        return emp.includes(searchTerm) || poste.includes(searchTerm) || cin.includes(searchTerm);
+      });
+    }
+
+    if (dateFrom || dateTo) {
+      result = result.filter((c) => {
+        const dateStr = c.date || "";
+        if (dateFrom && dateStr < dateFrom) return false;
+        if (dateTo && dateStr > dateTo) return false;
+        return true;
+      });
+    }
+
+    return result;
+  }, [chargesPersonnels, filterMode, filterName, dateFrom, dateTo]);
+
+  // 🆕 FILTRAGE DES CHARGES DIVERS
+  const filteredChargesDivers = useMemo(() => {
+    let result = [...chargesDivers];
+
+    if (filterMode !== "all") {
+      result = result.filter((c) => isModeWanted(c.modePaiement, filterMode));
+    }
+
+    if (filterName) {
+      const searchTerm = norm(filterName);
+      result = result.filter((c) => {
+        const lib = norm(c.libelle || "");
+        const frs = norm(c.fournisseur || "");
+        const cat = norm(c.categorie || "");
+        return lib.includes(searchTerm) || frs.includes(searchTerm) || cat.includes(searchTerm);
+      });
+    }
+
+    if (dateFrom || dateTo) {
+      result = result.filter((c) => {
+        const dateStr = c.date || "";
+        if (dateFrom && dateStr < dateFrom) return false;
+        if (dateTo && dateStr > dateTo) return false;
+        return true;
+      });
+    }
+
+    return result;
+  }, [chargesDivers, filterMode, filterName, dateFrom, dateTo]);
 
   const filteredDocs = useMemo(() => {
     const nameTerm = norm(filterName);
@@ -425,148 +573,139 @@ export default function Paiements() {
       const meta = docIndex[d.id];
       if (!meta) return false;
 
-      if (nameTerm) {
-        const inName = norm(meta.name).includes(nameTerm);
-        const inNum = norm(meta.numberStr).includes(nameTerm);
-        if (!inName && !inNum) return false;
-      }
-
-      if (filterMode !== "all" || from || to) {
-        const pays = paiementsByDoc[d.id] || [];
-        const matchAny = pays.some((p) => {
-          if (!isModeWanted(p.mode, filterMode)) return false;
-          const pd = toDateSafe(p.date) || new Date(0);
-          if (from && pd < from) return false;
-          if (to && pd > to) return false;
-          return true;
-        });
-        if (!matchAny) return false;
+      if (nameTerm && !norm(meta.name).includes(nameTerm)) {
+        const numStr = norm(meta.numberStr);
+        if (!numStr.includes(nameTerm)) return false;
       }
 
       if (filterStatus === "paid" && meta.solde > 0.01) return false;
       if (filterStatus === "due" && meta.solde <= 0.01) return false;
 
+      if (filterMode !== "all") {
+        const pays = paiementsByDoc[d.id] || [];
+        const hasMode = pays.some((p) => isModeWanted(p.mode, filterMode));
+        if (!hasMode) return false;
+      }
+
+      if (from || to) {
+        const pays = paiementsByDoc[d.id] || [];
+        const inRange = pays.some((p) => {
+          const pd = toDateSafe(p.date);
+          if (!pd) return false;
+          if (from && pd < from) return false;
+          if (to && pd > to) return false;
+          return true;
+        });
+        if (!inRange) return false;
+      }
+
       return true;
     });
-  }, [
-    documents,
-    docIndex,
-    paiementsByDoc,
-    filterName,
-    dateFrom,
-    dateTo,
-    filterMode,
-    filterStatus,
-  ]);
-
-  const docsTotals = useMemo(() => {
-    let sumTotal = 0;
-    let sumPaid = 0;
-    let sumSolde = 0;
-    for (const d of filteredDocs) {
-      const meta = docIndex[d.id];
-      if (!meta) continue;
-      sumTotal += Number(meta.total) || 0;
-      sumPaid += Number(meta.paid) || 0;
-      sumSolde += Number(meta.solde) || 0;
-    }
-    return {
-      count: filteredDocs.length,
-      total: sumTotal,
-      paid: sumPaid,
-      solde: sumSolde,
-    };
-  }, [filteredDocs, docIndex]);
-
-  const filteredDocIds = useMemo(
-    () => new Set(filteredDocs.map((d) => d.id)),
-    [filteredDocs]
-  );
-
-  const paymentsTotals = useMemo(() => {
-    const from = dateFrom ? new Date(`${dateFrom}T00:00:00`) : null;
-    const to = dateTo ? new Date(`${dateTo}T23:59:59`) : null;
-
-    let especes = 0;
-    let cheque = 0;
-    let traite = 0;
-    let count = 0;
-
-    for (const p of paiements) {
-      if (!filteredDocIds.has(p.docId)) continue;
-
-      const pd = toDateSafe(p.date) || new Date(0);
-      if (from && pd < from) continue;
-      if (to && pd > to) continue;
-      if (!isModeWanted(p.mode, filterMode)) continue;
-
-      const amt = Number(p.montant) || 0;
-      const m = norm(p.mode);
-      if (m === "espèces" || m === "especes") especes += amt;
-      else if (m === "cheque" || m === "chèque") cheque += amt;
-      else if (m === "traite") traite += amt;
-
-      count++;
-    }
-
-    return {
-      especes,
-      cheque,
-      traite,
-      total: especes + cheque + traite,
-      count,
-    };
-  }, [paiements, filterMode, dateFrom, dateTo, filteredDocIds]);
+  }, [documents, filterName, filterStatus, filterMode, dateFrom, dateTo, docIndex, paiementsByDoc]);
 
   const filteredPaymentsForDoc = useCallback(
     (docId) => {
-      if (!filteredDocIds.has(docId)) return [];
+      const all = paiementsByDoc[docId] || [];
       const from = dateFrom ? new Date(`${dateFrom}T00:00:00`) : null;
       const to = dateTo ? new Date(`${dateTo}T23:59:59`) : null;
-      const pays = paiementsByDoc[docId] || [];
-      return pays.filter((p) => {
-        if (!isModeWanted(p.mode, filterMode)) return false;
-        const pd = toDateSafe(p.date) || new Date(0);
-        if (from && pd < from) return false;
-        if (to && pd > to) return false;
+
+      return all.filter((p) => {
+        if (filterMode !== "all" && !isModeWanted(p.mode, filterMode)) return false;
+        if (from || to) {
+          const pd = toDateSafe(p.date);
+          if (!pd) return false;
+          if (from && pd < from) return false;
+          if (to && pd > to) return false;
+        }
         return true;
       });
     },
-    [paiementsByDoc, filterMode, dateFrom, dateTo, filteredDocIds]
+    [paiementsByDoc, filterMode, dateFrom, dateTo]
   );
 
+  const paymentsTotals = useMemo(() => {
+    const totals = { Espèces: 0, Chèque: 0, Traite: 0 };
+    filteredDocs.forEach((d) => {
+      const pays = filteredPaymentsForDoc(d.id);
+      pays.forEach((p) => {
+        const m = p.mode || "Espèces";
+        totals[m] = (totals[m] || 0) + (Number(p.montant) || 0);
+      });
+    });
+    return totals;
+  }, [filteredDocs, filteredPaymentsForDoc]);
+
+  const docsTotals = useMemo(() => {
+    let total = 0;
+    let paid = 0;
+    let solde = 0;
+    filteredDocs.forEach((d) => {
+      const meta = docIndex[d.id];
+      if (!meta) return;
+      total += meta.total;
+      paid += meta.paid;
+      solde += meta.solde;
+    });
+    return { total, paid, solde };
+  }, [filteredDocs, docIndex]);
+
+  // 🆕 Totaux (table Charges Personnels filtrée)
+  const totalsChargesPersonnels = useMemo(() => {
+    const byMode = {};
+    let salaire = 0;
+    let total = 0;
+    filteredChargesPersonnels.forEach((c) => {
+      const s = Number(c.salaire || 0);
+      const t = Number(c.total || 0);
+      salaire += s;
+      total += t;
+      const m = c.modePaiement || "—";
+      byMode[m] = (byMode[m] || 0) + t;
+    });
+    return { salaire, total, byMode };
+  }, [filteredChargesPersonnels]);
+
+  // 🆕 Totaux (table Charges Divers filtrée)
+  const totalsChargesDivers = useMemo(() => {
+    const byMode = {};
+    let montant = 0;
+    filteredChargesDivers.forEach((c) => {
+      const t = Number(c.montant || 0);
+      montant += t;
+      const m = c.modePaiement || "—";
+      byMode[m] = (byMode[m] || 0) + t;
+    });
+    return { montant, byMode };
+  }, [filteredChargesDivers]);
+
   const updateDocStatus = useCallback(
-    async (docId, newPaidTotal, docTotal) => {
-      if (!societeId || !user) return;
-      let statut = "impayé";
-      if (newPaidTotal >= docTotal - 0.001) statut = "payé";
-      else if (newPaidTotal > 0) statut = "partiel";
+    async (docId, newPaidTotal, total) => {
+      if (!societeId) return;
+      const isFullyPaid = newPaidTotal >= total - 0.01;
+      const status = isFullyPaid ? "payé" : "partiel";
+      const docRef = doc(db, "societe", societeId, relatedTo, docId);
       try {
-        await updateDoc(doc(db, "societe", societeId, relatedTo, docId), {
-          statutPaiement: statut,
+        await updateDoc(docRef, {
+          statutPaiement: status,
           montantPaye: newPaidTotal,
-          lastPaymentUpdate: Timestamp.now(),
-          modifiePar: user.uid,
-          modifieParEmail: user.email,
-          modifieParRole: role,
-          modifieLe: Timestamp.now(),
         });
       } catch (e) {
-        console.error("maj statut", e);
+        console.error("Erreur updateDocStatus:", e);
       }
     },
-    [societeId, user, role, relatedTo]
+    [societeId, relatedTo]
   );
 
   const handleSelectDocPay = useCallback(
-    (docId) => {
-      setSelectedDocPay(docId);
-      const meta = docIndex[docId];
-      if (!meta) {
+    (val) => {
+      setSelectedDocPay(val);
+      if (!val) {
         setCashAmount("");
         setCreateInstr([]);
         return;
       }
+      const meta = docIndex[val];
+      if (!meta) return;
       if (payMode === "Espèces") {
         setCashAmount(meta.solde > 0 ? String(meta.solde.toFixed(2)) : "");
       } else {
@@ -1042,17 +1181,12 @@ export default function Paiements() {
                         norm(p.mode) === "cheque" || norm(p.mode) === "chèque";
                       const isTraite = norm(p.mode) === "traite";
                       const canLabel = isCheque || isTraite;
-                      const lab = canLabel
-                        ? labelInstruments(
-                            Array.isArray(p.instruments) ? p.instruments : []
-                          )
-                        : "—";
                       return `
                         <tr>
-                          <td class="left">${escapeHtml(formatDateTime(p.date))}</td>
-                          <td>${getModeIcon(p.mode)} ${escapeHtml(p.mode || "—")}</td>
-                          <td class="money">${fmtDH(p.montant)}</td>
-                          <td>${escapeHtml(lab)}</td>
+                          <td class="left">${formatDateTime(p.date)}</td>
+                          <td>${getModeIcon(p.mode)} ${escapeHtml(p.mode)}</td>
+                          <td>${fmtDH(p.montant)}</td>
+                          <td class="soft">${escapeHtml(canLabel ? labelInstruments(p.instruments) : "—")}</td>
                         </tr>
                       `;
                     })
@@ -1061,76 +1195,66 @@ export default function Paiements() {
               </table>
             `;
         return `
-          <section class="doc-block">
-            <h4>${escapeHtml(meta.name)} • ${escapeHtml(meta.numberStr)}</h4>
+          <div class="doc-detail">
+            <div class="detail-title">${escapeHtml(meta.name)} — ${escapeHtml(meta.numberStr)}</div>
             ${inner}
-          </section>
+          </div>
         `;
       })
       .join("");
 
-    const recap = `
-      <div class="recap">
-        <div><span class="muted">💵 Espèces</span><b>${fmtDH(
-          paymentsTotals.especes
-        )}</b></div>
-        <div><span class="muted">🏦 Chèque</span><b>${fmtDH(
-          paymentsTotals.cheque
-        )}</b></div>
-        <div><span class="muted">📝 Traite</span><b>${fmtDH(
-          paymentsTotals.traite
-        )}</b></div>
-        <div><span class="muted">Grand total</span><b>${fmtDH(
-          paymentsTotals.total
-        )}</b></div>
-        <div><span class="muted"># paiements</span><b>${
-          paymentsTotals.count
-        }</b></div>
-      </div>
-    `;
+    const recapModes = Object.keys(paymentsTotals)
+      .map((m) => {
+        const t = paymentsTotals[m];
+        if (t === 0) return "";
+        return `<div><b>${m}:</b> ${fmtDH(t)}</div>`;
+      })
+      .filter((x) => x)
+      .join("");
+    const recap =
+      recapModes || `<div class="muted">Aucun paiement correspondant aux filtres.</div>`;
 
     const html = `
 <!DOCTYPE html>
 <html lang="fr">
 <head>
-<meta charset="utf-8" />
-<title>${escapeHtml(title)}</title>
-<style>
-  :root{ --ink:#0f172a; --muted:#6b7280; --border:#e5e7eb; --bg:#ffffff; --brand:#4f46e5; }
-  *{ box-sizing:border-box; }
-  body{ font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,'Helvetica Neue',Arial; color:#0f172a; background:#fff; margin:24px; }
-  h1{ margin:0 0 4px 0; font-size:22px; }
-  .meta{ color:var(--muted); margin-bottom:16px; font-size:12px; }
-  .filters{ background:#f8fafc; border:1px solid var(--border); padding:8px 12px; border-radius:8px; margin: 8px 0 16px 0; }
-  table{ width:100%; border-collapse:collapse; }
-  table.main thead th{ font-size:12px; text-transform:uppercase; letter-spacing:.3px; text-align:center; border-bottom:2px solid var(--border); padding:8px; }
-  table.main tbody td{ padding:8px; border-bottom:1px solid var(--border); text-align:center; }
-  table.main tfoot td{ padding:10px 8px; font-weight:900; border-top:2px solid var(--border); background:#f8fafc; }
-  .left{text-align:left}
-  .money{ font-weight:800; }
-  .neg{ color:#b91c1c; font-weight:800; }
-  .pos{ color:#065f46; font-weight:800; }
-  .section-title{ margin:24px 0 8px 0; font-size:16px; border-left:4px solid var(--brand); padding-left:8px; }
-  .doc-block{ page-break-inside: avoid; border:1px solid var(--border); border-radius:8px; padding:10px; margin:8px 0; }
-  .doc-block h4{ margin:0 0 8px 0; }
-  table.inner thead th{ text-align:left; border-bottom:1px solid var(--border); padding:6px; font-size:12px; }
-  table.inner tbody td{ padding:6px; border-bottom:1px dashed #f1f5f9; }
-  .muted{ color:var(--muted); }
-  .recap{ display:grid; grid-template-columns: repeat(5, minmax(120px,1fr)); gap:8px; margin-top:8px; }
-  .recap > div{ border:1px solid var(--border); border-radius:8px; padding:8px; display:flex; align-items:center; justify-content:space-between; }
-  @media print { body{ margin:0.6cm; } .doc-block{ page-break-inside: avoid; } .recap{ grid-template-columns: repeat(5, 1fr); } }
-</style>
+  <meta charset="UTF-8"/>
+  <title>${title}</title>
+  <style>
+    @page { margin:15mm; }
+    body{ font-family:Arial,sans-serif; font-size:12px; color:#111; }
+    .header{ text-align:center; margin-bottom:20px; }
+    .title{ font-size:20px; font-weight:900; margin-bottom:4px; }
+    .subtitle{ font-size:12px; color:#666; margin-bottom:10px; }
+    .filterSummary{ font-size:11px; color:#444; font-style:italic; }
+    .section{ margin-bottom:30px; }
+    .section-title{ font-size:14px; font-weight:700; margin-bottom:8px; border-bottom:2px solid #333; padding-bottom:4px; }
+    table{ width:100%; border-collapse:collapse; margin-top:6px; }
+    table thead th{ background:#eee; text-align:center; font-weight:700; padding:8px 6px; border:1px solid #aaa; }
+    table tbody td{ border:1px solid #ddd; padding:6px; text-align:center; }
+    td.left{ text-align:left; }
+    td.money{ color:#6366f1; font-weight:700; }
+    td.neg{ color:#e11d48; font-weight:700; }
+    td.pos{ color:#10b981; font-weight:700; }
+    tfoot td{ background:#f9f9f9; font-weight:900; padding:8px; border:1px solid #aaa; }
+    .muted{ color:#999; font-size:11px; }
+    .doc-detail{ margin:12px 0; }
+    .detail-title{ font-weight:700; margin-bottom:4px; }
+    .inner{ width:100%; border-collapse:collapse; margin-top:4px; }
+    .inner td,.inner th{ border:1px solid #ddd; padding:5px; }
+    .soft{ font-size:10px; color:#666; }
+  </style>
 </head>
 <body>
-  <header>
-    <h1>${escapeHtml(title)}</h1>
-    <div class="meta">Imprimé le ${now.toLocaleString("fr-FR")}</div>
-    <div class="filters"><b>Filtres:</b> ${escapeHtml(filterSummary || "Aucun")}</div>
-  </header>
+  <div class="header">
+    <div class="title">${title}</div>
+    <div class="subtitle">Édité le ${formatDateTime(now)}</div>
+    <div class="filterSummary">${filterSummary}</div>
+  </div>
 
-  <section>
-    <div class="section-title">Documents</div>
-    <table class="main">
+  <section class="section">
+    <div class="section-title">Résumé des documents (filtrés)</div>
+    <table>
       <thead>
         <tr>
           <th class="left">${relatedTo === "ventes" ? "Client" : "Fournisseur"}</th>
@@ -1144,20 +1268,16 @@ export default function Paiements() {
         </tr>
       </thead>
       <tbody>
-        ${
-          rowsDocs ||
-          `<tr><td colspan="8" class="muted" style="text-align:center;padding:12px">Aucun document</td></tr>`
-        }
+        ${rowsDocs}
       </tbody>
       <tfoot>
         <tr>
-          <td class="left" colspan="2">Totaux (${docsTotals.count} doc.)</td>
-          <td>—</td>
-          <td class="money">${fmtDH(docsTotals.total)}</td>
+          <td colspan="3" style="text-align:left">TOTAL</td>
+          <td>${fmtDH(docsTotals.total)}</td>
           <td>${fmtDH(docsTotals.paid)}</td>
           <td class="${docsTotals.solde > 0.01 ? "neg" : "pos"}">${fmtDH(
-            docsTotals.solde
-          )}</td>
+      docsTotals.solde
+    )}</td>
           <td colspan="2">—</td>
         </tr>
       </tfoot>
@@ -1250,11 +1370,9 @@ export default function Paiements() {
   return (
     <div className="paie-wrap">
       <div className="hdr">
-        <h1 style={{ margin: 0, fontWeight: 900 }}>💰 Gestion des Paiements (CRUD)</h1>
+        <h1 style={{ margin: 0, fontWeight: 900 }}>💰 Gestion des Paiements</h1>
         <div style={{ opacity: 0.9, marginTop: 6 }}>
-          {relatedTo === "ventes"
-            ? "Encaissement complet : Créer, Modifier, Supprimer — Ventes"
-            : "Règlement complet : Créer, Modifier, Supprimer — Achats"}
+          Suivi complet : Documents, Charges Personnels, Charges Divers
         </div>
       </div>
 
@@ -1264,646 +1382,872 @@ export default function Paiements() {
         </div>
       )}
 
-      <div className="card" style={{ marginBottom: 16 }}>
-        <div className="controls" style={{ marginBottom: 10 }}>
-          <button
-            className={`btn ${relatedTo === "ventes" ? "on" : ""}`}
-            onClick={() => {
-              setRelatedTo("ventes");
-              setExpandedDocId(null);
-              setSelectedDocPay("");
-              setCashAmount("");
-              setPayMode("Espèces");
-              setCreateInstr([]);
-            }}
-          >
-            📊 Ventes
-          </button>
-          {!isVendeuse && (
-            <button
-              className={`btn ${relatedTo === "achats" ? "on" : ""}`}
-              onClick={() => {
-                setRelatedTo("achats");
-                setExpandedDocId(null);
-                setSelectedDocPay("");
-                setCashAmount("");
-                setPayMode("Espèces");
-                setCreateInstr([]);
-              }}
-            >
-              🛒 Achats
-            </button>
-          )}
+      {/* 🆕 ONGLETS PRINCIPAUX */}
+      <div className="main-tabs">
+        <button
+          className={`main-tab-btn ${mainTab === "documents" ? "active" : ""}`}
+          onClick={() => setMainTab("documents")}
+        >
+          📋 Documents ({filteredDocs.length})
+        </button>
+        <button
+          className={`main-tab-btn ${mainTab === "chargesPersonnels" ? "active" : ""}`}
+          onClick={() => setMainTab("chargesPersonnels")}
+        >
+          👤 Charges Personnels ({filteredChargesPersonnels.length})
+        </button>
+        <button
+          className={`main-tab-btn ${mainTab === "chargesDivers" ? "active" : ""}`}
+          onClick={() => setMainTab("chargesDivers")}
+        >
+          📊 Charges Divers ({filteredChargesDivers.length})
+        </button>
+      </div>
 
-          <input
-            className="field"
-            placeholder={
-              relatedTo === "ventes" ? "Filtrer client/N°…" : "Filtrer fournisseur/N°…"
-            }
-            value={filterName}
-            onChange={(e) => setFilterName(e.target.value)}
-            style={{ minWidth: 220 }}
-          />
-
-          <input
-            className="field"
-            type="date"
-            value={dateFrom}
-            onChange={(e) => setDateFrom(e.target.value)}
-            title="Date paiement - début"
-          />
-          <input
-            className="field"
-            type="date"
-            value={dateTo}
-            onChange={(e) => setDateTo(e.target.value)}
-            title="Date paiement - fin"
-          />
-
-          <select
-            className="select"
-            value={filterMode}
-            onChange={(e) => setFilterMode(e.target.value)}
-            title="Mode paiement (filtre sur paiements)"
-          >
-            <option value="all">Tous modes</option>
-            <option value="Espèces">💵 Espèces</option>
-            <option value="Cheque">🏦 Chèque</option>
-            <option value="Traite">📝 Traite</option>
-          </select>
-
-          <select
-            className="select"
-            value={filterStatus}
-            onChange={(e) => setFilterStatus(e.target.value)}
-            title="Statut document"
-          >
-            <option value="all">Tous statuts</option>
-            <option value="paid">Payés</option>
-            <option value="due">Avec solde</option>
-          </select>
-
-          <button className="btn primary" onClick={handlePrint} title="Imprimer l'état filtré">
-            🖨️ Imprimer
-          </button>
-        </div>
-
-        <div className="subcard">
-          <h3 style={{ margin: "0 0 10px 0" }}>
-            {relatedTo === "ventes" ? "➕ Régler une vente" : "➕ Régler un achat"}
-          </h3>
-
-          <div className="controls" style={{ marginBottom: 8 }}>
-            <select
-              className="select"
-              value={selectedDocPay}
-              onChange={(e) => handleSelectDocPay(e.target.value)}
-              style={{ minWidth: 360 }}
-            >
-              <option value="">
-                -- Choisir un {relatedTo === "ventes" ? "document de vente" : "bon d'achat"} avec solde --
-              </option>
-              {docsWithBalance.map((d) => {
-                const meta = docIndex[d.id];
-                const label = `${meta.name} • ${meta.numberStr} • Reste: ${fmtDH(
-                  meta.solde
-                )}`;
-                return (
-                  <option key={d.id} value={d.id}>
-                    {label}
-                  </option>
-                );
-              })}
-            </select>
-
-            <select
-              className="select"
-              value={payMode}
-              onChange={(e) => {
-                const val = e.target.value;
-                setPayMode(val);
-                if (val === "Espèces") {
-                  const meta = docIndex[selectedDocPay];
-                  setCashAmount(
-                    meta && meta.solde > 0 ? String(meta.solde.toFixed(2)) : ""
-                  );
-                  setCreateInstr([]);
-                } else {
+      {/* ========== ONGLET DOCUMENTS (CODE ORIGINAL + TFOOT) ========== */}
+      {mainTab === "documents" && (
+        <>
+          <div className="card" style={{ marginBottom: 16 }}>
+            <div className="controls" style={{ marginBottom: 10 }}>
+              <button
+                className={`btn ${relatedTo === "ventes" ? "on" : ""}`}
+                onClick={() => {
+                  setRelatedTo("ventes");
+                  setExpandedDocId(null);
+                  setSelectedDocPay("");
                   setCashAmount("");
+                  setPayMode("Espèces");
                   setCreateInstr([]);
+                }}
+              >
+                📊 Ventes
+              </button>
+              {!isVendeuse && (
+                <button
+                  className={`btn ${relatedTo === "achats" ? "on" : ""}`}
+                  onClick={() => {
+                    setRelatedTo("achats");
+                    setExpandedDocId(null);
+                    setSelectedDocPay("");
+                    setCashAmount("");
+                    setPayMode("Espèces");
+                    setCreateInstr([]);
+                  }}
+                >
+                  🛒 Achats
+                </button>
+              )}
+
+              <input
+                className="field"
+                placeholder={
+                  relatedTo === "ventes" ? "Filtrer client/N°…" : "Filtrer fournisseur/N°…"
                 }
-              }}
-            >
-              <option>Espèces</option>
-              <option>Chèque</option>
-              <option>Traite</option>
-            </select>
+                value={filterName}
+                onChange={(e) => setFilterName(e.target.value)}
+                style={{ minWidth: 220 }}
+              />
 
-            {payMode === "Espèces" ? (
-              <>
-                <input
-                  className="field"
-                  type="number"
-                  step="0.01"
-                  placeholder="Montant espèces"
-                  value={cashAmount}
-                  onChange={(e) => setCashAmount(e.target.value)}
-                  style={{ width: 160 }}
-                />
-                <button className="btn primary" onClick={handleCreatePayment}>
-                  ✅ Enregistrer (Espèces)
-                </button>
-              </>
-            ) : (
-              <>
-                <button className="btn" onClick={addCreateInstrument}>
-                  ➕ Ajouter {payMode.toLowerCase()}
-                </button>
-                <div className="soft">
-                  Total instruments : <b>{fmtDH(createInstrTotal)}</b>
-                </div>
-                <button className="btn primary" onClick={handleCreatePayment}>
-                  ✅ Enregistrer ({payMode})
-                </button>
-              </>
-            )}
-          </div>
+              <input
+                className="field"
+                type="date"
+                value={dateFrom}
+                onChange={(e) => setDateFrom(e.target.value)}
+                title="Date paiement - début"
+              />
+              <input
+                className="field"
+                type="date"
+                value={dateTo}
+                onChange={(e) => setDateTo(e.target.value)}
+                title="Date paiement - fin"
+              />
 
-          {payMode !== "Espèces" && createInstr.length > 0 && (
-            <div style={{ width: "100%", overflowX: "auto" }}>
-              <div className="grid-add" style={{ minWidth: 900 }}>
-                <div style={{ fontWeight: 800 }}>Type</div>
-                <div style={{ fontWeight: 800 }}>Banque</div>
-                <div style={{ fontWeight: 800 }}>N°</div>
-                <div style={{ fontWeight: 800 }}>Échéance</div>
-                <div style={{ fontWeight: 800 }}>Titulaire</div>
-                <div style={{ fontWeight: 800 }}>Montant</div>
-                <div style={{ fontWeight: 800 }}>Résumé</div>
-                <div style={{ fontWeight: 800 }}>—</div>
+              <select
+                className="select"
+                value={filterMode}
+                onChange={(e) => setFilterMode(e.target.value)}
+                title="Mode paiement (filtre sur paiements)"
+              >
+                <option value="all">Tous modes</option>
+                <option value="Espèces">💵 Espèces</option>
+                <option value="Cheque">🏦 Chèque</option>
+                <option value="Traite">📝 Traite</option>
+              </select>
 
-                {createInstr.map((it, i) => (
-                  <React.Fragment key={i}>
-                    <select
-                      className="select"
-                      value={it.type}
-                      onChange={(e) => updateCreateInstrument(i, "type", e.target.value)}
-                    >
-                      <option value="chèque">Chèque</option>
-                      <option value="traite">Traite</option>
-                    </select>
+              <select
+                className="select"
+                value={filterStatus}
+                onChange={(e) => setFilterStatus(e.target.value)}
+                title="Statut document"
+              >
+                <option value="all">Tous statuts</option>
+                <option value="paid">Payés</option>
+                <option value="due">Avec solde</option>
+              </select>
 
-                    <input
-                      className="field"
-                      placeholder="Banque"
-                      value={it.banque || ""}
-                      onChange={(e) => updateCreateInstrument(i, "banque", e.target.value)}
-                    />
+              <button className="btn primary" onClick={handlePrint} title="Imprimer l'état filtré">
+                🖨️ Imprimer
+              </button>
+            </div>
 
-                    <input
-                      className="field"
-                      placeholder="Numéro"
-                      value={it.numero || ""}
-                      onChange={(e) => updateCreateInstrument(i, "numero", e.target.value)}
-                    />
+            <div className="subcard">
+              <h3 style={{ margin: "0 0 10px 0" }}>
+                {relatedTo === "ventes" ? "➕ Régler une vente" : "➕ Régler un achat"}
+              </h3>
 
-                    <input
-                      className="field"
-                      type="date"
-                      value={it.echeance || ""}
-                      onChange={(e) => updateCreateInstrument(i, "echeance", e.target.value)}
-                    />
+              <div className="controls" style={{ marginBottom: 8 }}>
+                <select
+                  className="select"
+                  value={selectedDocPay}
+                  onChange={(e) => handleSelectDocPay(e.target.value)}
+                  style={{ minWidth: 360 }}
+                >
+                  <option value="">
+                    -- Choisir un {relatedTo === "ventes" ? "document de vente" : "bon d'achat"} avec solde --
+                  </option>
+                  {docsWithBalance.map((d) => {
+                    const meta = docIndex[d.id];
+                    const label = `${meta.name} • ${meta.numberStr} • Reste: ${fmtDH(
+                      meta.solde
+                    )}`;
+                    return (
+                      <option key={d.id} value={d.id}>
+                        {label}
+                      </option>
+                    );
+                  })}
+                </select>
 
-                    <input
-                      className="field"
-                      placeholder="Titulaire"
-                      value={it.titulaire || ""}
-                      onChange={(e) => updateCreateInstrument(i, "titulaire", e.target.value)}
-                    />
+                <select
+                  className="select"
+                  value={payMode}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setPayMode(val);
+                    if (val === "Espèces") {
+                      const meta = docIndex[selectedDocPay];
+                      setCashAmount(
+                        meta && meta.solde > 0 ? String(meta.solde.toFixed(2)) : ""
+                      );
+                      setCreateInstr([]);
+                    } else {
+                      setCashAmount("");
+                      setCreateInstr([]);
+                    }
+                  }}
+                >
+                  <option>Espèces</option>
+                  <option>Chèque</option>
+                  <option>Traite</option>
+                </select>
 
+                {payMode === "Espèces" ? (
+                  <>
                     <input
                       className="field"
                       type="number"
                       step="0.01"
-                      placeholder="Montant"
-                      value={it.montant || ""}
-                      onChange={(e) => updateCreateInstrument(i, "montant", e.target.value)}
+                      placeholder="Montant espèces"
+                      value={cashAmount}
+                      onChange={(e) => setCashAmount(e.target.value)}
+                      style={{ width: 160 }}
                     />
-
+                    <button className="btn primary" onClick={handleCreatePayment}>
+                      ✅ Enregistrer (Espèces)
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <button className="btn" onClick={addCreateInstrument}>
+                      ➕ Ajouter {payMode.toLowerCase()}
+                    </button>
                     <div className="soft">
-                      {`${(it.type || "chèque").toUpperCase()} • ${
-                        it.numero || "—"
-                      } • ${it.banque || "—"}`}
+                      Total instruments : <b>{fmtDH(createInstrTotal)}</b>
                     </div>
-
-                    <div>
-                      <button className="btn warn" onClick={() => removeCreateInstrument(i)}>
-                        🗑️ Supprimer
-                      </button>
-                    </div>
-                  </React.Fragment>
-                ))}
+                    <button className="btn primary" onClick={handleCreatePayment}>
+                      ✅ Enregistrer ({payMode})
+                    </button>
+                  </>
+                )}
               </div>
-            </div>
-          )}
-        </div>
-      </div>
 
-      <div className="card">
-        <h3 style={{ margin: "0 0 10px 0" }}>
-          {relatedTo === "ventes" ? "📋 Documents de Vente" : "📋 Bons d'Achat (Reçus)"}
-        </h3>
-        <div className="tbl-wrap">
-          <table className="tbl">
-            <thead>
-              <tr>
-                <th className="left">
-                  {relatedTo === "ventes" ? "Client" : "Fournisseur"}
-                </th>
-                <th>N°</th>
-                <th>Date</th>
-                <th>Total</th>
-                <th>Payé</th>
-                <th>Solde</th>
-                <th>Statut</th>
-                <th>Modes paiement</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filteredDocs.map((d) => {
-                const meta = docIndex[d.id];
-                if (!meta) return null;
-                const expanded = expandedDocId === d.id;
-                const pays = paiementsByDoc[d.id] || [];
-                return (
-                  <React.Fragment key={d.id}>
-                    <tr style={{ background: expanded ? "#eef2ff" : "#fff" }}>
-                      <td className="left">{meta.name}</td>
-                      <td>{meta.numberStr}</td>
-                      <td className="soft">{meta.dateStr}</td>
-                      <td className="money">{fmtDH(meta.total)}</td>
-                      <td>{fmtDH(meta.paid)}</td>
-                      <td
-                        style={{
-                          color: meta.solde > 0.01 ? "#ef4444" : "#10b981",
-                          fontWeight: 800,
-                        }}
-                      >
-                        {fmtDH(meta.solde)}
-                      </td>
-                      <td>
-                        <span
-                          className="chip"
-                          style={{
-                            background: meta.solde > 0.01 ? "#f59e0b" : "#10b981",
-                            color: "#fff",
-                          }}
+              {payMode !== "Espèces" && createInstr.length > 0 && (
+                <div style={{ width: "100%", overflowX: "auto" }}>
+                  <div className="grid-add" style={{ minWidth: 900 }}>
+                    <div style={{ fontWeight: 800 }}>Type</div>
+                    <div style={{ fontWeight: 800 }}>Banque</div>
+                    <div style={{ fontWeight: 800 }}>N°</div>
+                    <div style={{ fontWeight: 800 }}>Échéance</div>
+                    <div style={{ fontWeight: 800 }}>Titulaire</div>
+                    <div style={{ fontWeight: 800 }}>Montant</div>
+                    <div style={{ fontWeight: 800 }}>Résumé</div>
+                    <div style={{ fontWeight: 800 }}>—</div>
+
+                    {createInstr.map((it, i) => (
+                      <React.Fragment key={i}>
+                        <select
+                          className="select"
+                          value={it.type}
+                          onChange={(e) => updateCreateInstrument(i, "type", e.target.value)}
                         >
-                          {meta.solde > 0.01 ? "Partiel/Impayé" : "Payé"}
-                        </span>
-                      </td>
-                      <td>
-                        {meta.paymentModes.length > 0 ? (
-                          <div
+                          <option value="chèque">Chèque</option>
+                          <option value="traite">Traite</option>
+                        </select>
+
+                        <input
+                          className="field"
+                          placeholder="Banque"
+                          value={it.banque || ""}
+                          onChange={(e) => updateCreateInstrument(i, "banque", e.target.value)}
+                        />
+
+                        <input
+                          className="field"
+                          placeholder="Numéro"
+                          value={it.numero || ""}
+                          onChange={(e) => updateCreateInstrument(i, "numero", e.target.value)}
+                        />
+
+                        <input
+                          className="field"
+                          type="date"
+                          value={it.echeance || ""}
+                          onChange={(e) => updateCreateInstrument(i, "echeance", e.target.value)}
+                        />
+
+                        <input
+                          className="field"
+                          placeholder="Titulaire"
+                          value={it.titulaire || ""}
+                          onChange={(e) => updateCreateInstrument(i, "titulaire", e.target.value)}
+                        />
+
+                        <input
+                          className="field"
+                          type="number"
+                          step="0.01"
+                          placeholder="Montant"
+                          value={it.montant || ""}
+                          onChange={(e) => updateCreateInstrument(i, "montant", e.target.value)}
+                        />
+
+                        <div className="soft">
+                          {`${(it.type || "chèque").toUpperCase()} • ${
+                            it.numero || "—"
+                          } • ${it.banque || "—"}`}
+                        </div>
+
+                        <div>
+                          <button className="btn warn" onClick={() => removeCreateInstrument(i)}>
+                            🗑️ Supprimer
+                          </button>
+                        </div>
+                      </React.Fragment>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="card">
+            <h3 style={{ margin: "0 0 10px 0" }}>
+              {relatedTo === "ventes" ? "📋 Documents de Vente" : "📋 Bons d'Achat (Reçus)"}
+            </h3>
+            <div className="tbl-wrap">
+              <table className="tbl">
+                <thead>
+                  <tr>
+                    <th className="left">
+                      {relatedTo === "ventes" ? "Client" : "Fournisseur"}
+                    </th>
+                    <th>N°</th>
+                    <th>Date</th>
+                    <th>Total</th>
+                    <th>Payé</th>
+                    <th>Solde</th>
+                    <th>Statut</th>
+                    <th>Modes paiement</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredDocs.map((d) => {
+                    const meta = docIndex[d.id];
+                    if (!meta) return null;
+                    const expanded = expandedDocId === d.id;
+                    const pays = paiementsByDoc[d.id] || [];
+                    const paysFiltered = filteredPaymentsForDoc(d.id);
+                    const subTotal = paysFiltered.reduce(
+                      (s, p) => s + (Number(p.montant) || 0),
+                      0
+                    );
+                    return (
+                      <React.Fragment key={d.id}>
+                        <tr style={{ background: expanded ? "#eef2ff" : "#fff" }}>
+                          <td className="left">{meta.name}</td>
+                          <td>{meta.numberStr}</td>
+                          <td className="soft">{meta.dateStr}</td>
+                          <td className="money">{fmtDH(meta.total)}</td>
+                          <td>{fmtDH(meta.paid)}</td>
+                          <td
                             style={{
-                              display: "flex",
-                              gap: 4,
-                              flexWrap: "wrap",
-                              justifyContent: "center",
+                              color: meta.solde > 0.01 ? "#ef4444" : "#10b981",
+                              fontWeight: 800,
                             }}
                           >
-                            {meta.paymentModes.map((mode, idx) => (
-                              <span
-                                key={idx}
-                                className="mode-summary"
-                                style={{
-                                  background: getModeColor(mode),
-                                  color: "#fff",
-                                }}
-                              >
-                                {getModeIcon(mode)} {mode}
-                              </span>
-                            ))}
-                          </div>
-                        ) : (
-                          <span className="soft">—</span>
-                        )}
-                      </td>
-                      <td>
-                        <button
-                          className="rowbtn"
-                          onClick={() => toggleExpand(d.id)}
-                          title="Voir paiements"
-                        >
-                          {expanded ? "⬆️ Masquer" : "⬇️ Voir"} ({pays.length})
-                        </button>
-                      </td>
-                    </tr>
-
-                    {expanded && (
-                      <tr>
-                        <td colSpan={9} style={{ padding: 12 }}>
-                          <div className="subcard">
-                            <h4
+                            {fmtDH(meta.solde)}
+                          </td>
+                          <td>
+                            <span
+                              className="chip"
                               style={{
-                                margin: "0 0 12px 0",
-                                textAlign: "left",
-                                display: "flex",
-                                alignItems: "center",
-                                gap: 8,
+                                background: meta.solde > 0.01 ? "#f59e0b" : "#10b981",
+                                color: "#fff",
                               }}
                             >
-                              💳 Paiements de <strong>{meta.name}</strong> • {meta.numberStr}
-                              <span
+                              {meta.solde > 0.01 ? "Partiel/Impayé" : "Payé"}
+                            </span>
+                          </td>
+                          <td>
+                            {meta.paymentModes.length > 0 ? (
+                              <div
                                 style={{
-                                  background: "#eef2ff",
-                                  color: "#4f46e5",
-                                  padding: "3px 10px",
-                                  borderRadius: 16,
-                                  fontSize: 12,
-                                  fontWeight: 700,
+                                  display: "flex",
+                                  gap: 4,
+                                  flexWrap: "wrap",
+                                  justifyContent: "center",
                                 }}
                               >
-                                {pays.length} paiement{pays.length > 1 ? "s" : ""}
-                              </span>
-                            </h4>
-
-                            {pays.length === 0 ? (
-                              <div className="soft">Aucun paiement enregistré.</div>
-                            ) : (
-                              <div style={{ display: "grid", gap: 12 }}>
-                                {pays.map((p) => {
-                                  const isCheque =
-                                    norm(p.mode) === "cheque" || norm(p.mode) === "chèque";
-                                  const isTraite = norm(p.mode) === "traite";
-                                  const canEditInstr = isCheque || isTraite;
-                                  const label =
-                                    canEditInstr && Array.isArray(p.instruments)
-                                      ? labelInstruments(p.instruments)
-                                      : canEditInstr
-                                      ? "Aucun — à compléter"
-                                      : "—";
-
-                                  return (
-                                    <div key={p.id} className="payment-group">
-                                      <div
-                                        style={{
-                                          display: "flex",
-                                          justifyContent: "space-between",
-                                          alignItems: "center",
-                                          marginBottom: 8,
-                                        }}
-                                      >
-                                        <div
-                                          style={{
-                                            display: "flex",
-                                            alignItems: "center",
-                                            gap: 10,
-                                          }}
-                                        >
-                                          <span
-                                            className="payment-badge"
-                                            style={{
-                                              background: getModeColor(p.mode),
-                                              color: "#fff",
-                                            }}
-                                          >
-                                            {getModeIcon(p.mode)} {p.mode || "—"}
-                                          </span>
-                                          <span
-                                            style={{
-                                              fontSize: 20,
-                                              fontWeight: 800,
-                                              color: "#059669",
-                                            }}
-                                          >
-                                            {fmtDH(p.montant)}
-                                          </span>
-                                        </div>
-                                        <div style={{ display: "flex", gap: 6 }}>
-                                          <button
-                                            className="btn secondary"
-                                            onClick={() => handleEditPayment(p)}
-                                            style={{ fontSize: 12 }}
-                                            title="Modifier ce paiement"
-                                          >
-                                            ✏️ Modifier
-                                          </button>
-                                          {canEditInstr && (
-                                            <button
-                                              className="btn"
-                                              onClick={() => openInstrumentsEditor(p)}
-                                              style={{ fontSize: 12 }}
-                                              title="Gérer les instruments"
-                                            >
-                                              ⚙️ Instruments
-                                            </button>
-                                          )}
-                                          <button
-                                            className="btn danger"
-                                            onClick={() => handleDeletePayment(p)}
-                                            style={{ fontSize: 12 }}
-                                            title="Supprimer ce paiement"
-                                          >
-                                            🗑️
-                                          </button>
-                                        </div>
-                                      </div>
-
-                                      <div
-                                        style={{
-                                          fontSize: 12,
-                                          color: "#6b7280",
-                                          marginBottom: canEditInstr && label !== "—" ? 8 : 0,
-                                        }}
-                                      >
-                                        📅 {formatDateTime(p.date)}
-                                        {p.creeParEmail && (
-                                          <span style={{ marginLeft: 12 }}>
-                                            👤 Par: {p.creeParEmail}{" "}
-                                            {p.creeParRole ? `(${p.creeParRole})` : ""}
-                                          </span>
-                                        )}
-                                      </div>
-
-                                      {canEditInstr && label !== "—" && (
-                                        <div
-                                          style={{
-                                            background: "#f0f9ff",
-                                            border: "1px solid #bfdbfe",
-                                            borderRadius: 8,
-                                            padding: 8,
-                                            fontSize: 13,
-                                          }}
-                                        >
-                                          <strong style={{ color: "#1e40af" }}>
-                                            📎 Instruments:
-                                          </strong>{" "}
-                                          {label}
-                                        </div>
-                                      )}
-                                    </div>
-                                  );
-                                })}
+                                {meta.paymentModes.map((mode, idx) => (
+                                  <span
+                                    key={idx}
+                                    className="mode-summary"
+                                    style={{
+                                      background: getModeColor(mode),
+                                      color: "#fff",
+                                    }}
+                                  >
+                                    {getModeIcon(mode)} {mode}
+                                  </span>
+                                ))}
                               </div>
+                            ) : (
+                              <span className="soft">—</span>
                             )}
-                          </div>
-                        </td>
-                      </tr>
-                    )}
-                  </React.Fragment>
-                );
-              })}
+                          </td>
+                          <td>
+                            <button
+                              className="rowbtn"
+                              onClick={() => toggleExpand(d.id)}
+                              title="Voir paiements"
+                            >
+                              {expanded ? "⬆️ Masquer" : "⬇️ Voir"} ({pays.length})
+                            </button>
+                          </td>
+                        </tr>
 
-              {filteredDocs.length === 0 && (
-                <tr>
-                  <td colSpan={9} style={{ padding: 16, textAlign: "center" }}>
-                    <span className="soft">Aucun document pour ces filtres.</span>
-                  </td>
-                </tr>
-              )}
-            </tbody>
-
-            <tfoot>
-              <tr>
-                <td className="left" colSpan={2}>
-                  <span>Totaux ({docsTotals.count} doc.)</span>
-                </td>
-                <td>—</td>
-                <td className="money">{fmtDH(docsTotals.total)}</td>
-                <td>{fmtDH(docsTotals.paid)}</td>
-                <td style={{ fontWeight: 900 }}>{fmtDH(docsTotals.solde)}</td>
-                <td colSpan={3}>—</td>
-              </tr>
-            </tfoot>
-          </table>
-        </div>
-      </div>
-
-      <div className="card" style={{ marginTop: 16 }}>
-        <h3 style={{ marginTop: 0 }}>
-          📊 Totaux des paiements — {relatedTo === "ventes" ? "Ventes" : "Achats"} (docs filtrés)
-        </h3>
-        <div className="controls" style={{ flexWrap: "wrap" }}>
-          <div className="subcard" style={{ minWidth: 240 }}>
-            <div className="soft">💵 Espèces</div>
-            <div className="money" style={{ fontSize: 18 }}>
-              {fmtDH(paymentsTotals.especes)}
+                        {expanded && (
+                          <tr>
+                            <td colSpan="9" style={{ padding: 0, background: "#f8fafc" }}>
+                              <div style={{ padding: 16 }}>
+                                <h4 style={{ margin: "0 0 8px 0" }}>Paiements enregistrés</h4>
+                                {paysFiltered.length === 0 ? (
+                                  <div className="soft">Aucun paiement (selon filtres).</div>
+                                ) : (
+                                  <table className="tbl" style={{ marginTop: 8 }}>
+                                    <thead>
+                                      <tr>
+                                        <th>Date</th>
+                                        <th>Mode</th>
+                                        <th>Montant</th>
+                                        <th>Instruments</th>
+                                        <th>Actions</th>
+                                      </tr>
+                                    </thead>
+                                    <tbody>
+                                      {paysFiltered.map((p) => {
+                                        const isCheque =
+                                          norm(p.mode) === "cheque" || norm(p.mode) === "chèque";
+                                        const isTraite = norm(p.mode) === "traite";
+                                        return (
+                                          <tr key={p.id}>
+                                            <td>{formatDateTime(p.date)}</td>
+                                            <td>
+                                              <span
+                                                className="mode-summary"
+                                                style={{
+                                                  background: getModeColor(p.mode),
+                                                  color: "#fff",
+                                                }}
+                                              >
+                                                {getModeIcon(p.mode)} {p.mode}
+                                              </span>
+                                            </td>
+                                            <td style={{ fontWeight: 800 }}>{fmtDH(p.montant)}</td>
+                                            <td className="soft">
+                                              {isCheque || isTraite
+                                                ? labelInstruments(p.instruments)
+                                                : "—"}
+                                            </td>
+                                            <td>
+                                              <div style={{ display: "flex", gap: 4, justifyContent: "center" }}>
+                                                <button
+                                                  className="btn"
+                                                  onClick={() => handleEditPayment(p)}
+                                                  style={{ padding: "4px 8px", fontSize: 11 }}
+                                                >
+                                                  ✏️ Modifier
+                                                </button>
+                                                {(isCheque || isTraite) && (
+                                                  <button
+                                                    className="btn warn"
+                                                    onClick={() => openInstrumentsEditor(p)}
+                                                    style={{ padding: "4px 8px", fontSize: 11 }}
+                                                  >
+                                                    🔧 Instruments
+                                                  </button>
+                                                )}
+                                                <button
+                                                  className="btn danger"
+                                                  onClick={() => handleDeletePayment(p)}
+                                                  style={{ padding: "4px 8px", fontSize: 11 }}
+                                                >
+                                                  🗑️
+                                                </button>
+                                              </div>
+                                            </td>
+                                          </tr>
+                                        );
+                                      })}
+                                    </tbody>
+                                    {/* 🆕 SOUS-TOTAL des paiements affichés pour CE document */}
+                                    <tfoot>
+                                      <tr>
+                                        <td className="left">TOTAL (paiements affichés)</td>
+                                        <td>—</td>
+                                        <td style={{ fontWeight: 900 }}>{fmtDH(subTotal)}</td>
+                                        <td colSpan="2">—</td>
+                                      </tr>
+                                    </tfoot>
+                                  </table>
+                                )}
+                              </div>
+                            </td>
+                          </tr>
+                        )}
+                      </React.Fragment>
+                    );
+                  })}
+                </tbody>
+                {/* 🆕 TFOOT GLOBAL POUR LA TABLE DOCUMENTS */}
+                <tfoot>
+                  <tr>
+                    <td className="left" colSpan={3}>TOTAL (docs filtrés)</td>
+                    <td className="money">{fmtDH(docsTotals.total)}</td>
+                    <td style={{ fontWeight: 900 }}>{fmtDH(docsTotals.paid)}</td>
+                    <td style={{ fontWeight: 900, color: docsTotals.solde > 0.01 ? "#ef4444" : "#10b981" }}>
+                      {fmtDH(docsTotals.solde)}
+                    </td>
+                    <td colSpan={3} style={{ textAlign: "left" }}>
+                      {/* Récap modes sur docs filtrés */}
+                      {Object.entries(paymentsTotals).map(([m, v]) =>
+                        v > 0 ? (
+                          <span
+                            key={m}
+                            className="mode-summary"
+                            style={{ background: getModeColor(m), color: "#fff" }}
+                          >
+                            {getModeIcon(m)} {m}: {fmtDH(v)}
+                          </span>
+                        ) : null
+                      )}
+                    </td>
+                  </tr>
+                </tfoot>
+              </table>
             </div>
           </div>
-          <div className="subcard" style={{ minWidth: 240 }}>
-            <div className="soft">🏦 Chèque</div>
-            <div className="money" style={{ fontSize: 18 }}>
-              {fmtDH(paymentsTotals.cheque)}
-            </div>
-          </div>
-          <div className="subcard" style={{ minWidth: 240 }}>
-            <div className="soft">📝 Traite</div>
-            <div className="money" style={{ fontSize: 18 }}>
-              {fmtDH(paymentsTotals.traite)}
-            </div>
-          </div>
-          <div className="subcard" style={{ minWidth: 260 }}>
-            <div className="soft">Grand total (paiements filtrés & docs filtrés)</div>
-            <div className="money" style={{ fontSize: 20 }}>
-              {fmtDH(paymentsTotals.total)}
-            </div>
-            <div className="soft" style={{ marginTop: 4 }}>
-              {paymentsTotals.count} paiement{paymentsTotals.count > 1 ? "s" : ""} retenu(s)
-            </div>
-          </div>
-        </div>
-      </div>
+        </>
+      )}
 
-      {/* MODAL D'ÉDITION DE PAIEMENT */}
-      {editingPayment && (
-        <div
-          className="modal-overlay"
-          onClick={(e) => {
-            if (e.target === e.currentTarget) handleCancelEditPayment();
-          }}
-        >
-          <div className="modal-content">
-            <div className="modal-header">
-              <h3 style={{ margin: 0, fontSize: 20, fontWeight: 700 }}>
-                ✏️ Modifier le paiement
-              </h3>
-              <button className="modal-close" onClick={handleCancelEditPayment}>
-                ×
-              </button>
-            </div>
+      {/* ========== ONGLET CHARGES PERSONNELS ========== */}
+      {mainTab === "chargesPersonnels" && (
+        <>
+          <div className="card" style={{ marginBottom: 16 }}>
+            <div className="controls">
+              <input
+                className="field"
+                placeholder="🔍 Rechercher employé, poste, CIN..."
+                value={filterName}
+                onChange={(e) => setFilterName(e.target.value)}
+                style={{ minWidth: 280 }}
+              />
 
-            <div style={{ marginBottom: 16 }}>
-              <div
-                style={{
-                  background: "#f0f9ff",
-                  border: "1px solid #bfdbfe",
-                  borderRadius: 10,
-                  padding: 12,
+              <input
+                className="field"
+                type="date"
+                value={dateFrom}
+                onChange={(e) => setDateFrom(e.target.value)}
+                title="Date début"
+              />
+              <input
+                className="field"
+                type="date"
+                value={dateTo}
+                onChange={(e) => setDateTo(e.target.value)}
+                title="Date fin"
+              />
+
+              <select
+                className="select"
+                value={filterMode}
+                onChange={(e) => setFilterMode(e.target.value)}
+              >
+                <option value="all">Tous modes</option>
+                <option value="Chèque">🏦 Chèque</option>
+                <option value="Virement bancaire">🏧 Virement</option>
+                <option value="Carte bancaire">💳 Carte</option>
+                <option value="Prélèvement">🔄 Prélèvement</option>
+              </select>
+
+              <button
+                className="btn secondary"
+                onClick={() => {
+                  setFilterName("");
+                  setDateFrom("");
+                  setDateTo("");
+                  setFilterMode("all");
                 }}
               >
-                <strong>Document:</strong>{" "}
-                {docIndex[editingPayment.docId]?.name} •{" "}
-                {docIndex[editingPayment.docId]?.numberStr}
-              </div>
+                🔄 Réinitialiser
+              </button>
             </div>
+            
+            <div className="notice" style={{ background: "#dbeafe", color: "#1e40af", marginTop: 12 }}>
+              👤 Total charges personnels chargées : <strong>{chargesPersonnels.length}</strong>
+              {" • "}Filtrées : <strong>{filteredChargesPersonnels.length}</strong>
+              {" • "}💡 Les paiements en espèces sont gérés directement dans la page Charges Personnels
+            </div>
+          </div>
 
-            <div className="form-group">
-              <label className="form-label">Date & heure du paiement</label>
-              {/* ✅ on utilise datetime-local au lieu de date */}
+          <div className="card">
+            <h3 style={{ marginTop: 0 }}>👤 Charges Personnels (Non-Espèces)</h3>
+            <p className="soft" style={{ marginBottom: 12 }}>
+              Liste des charges du personnel payées par modes non-espèces (chèque, virement, carte, etc.)
+            </p>
+
+            {chargesPersonnels.length === 0 ? (
+              <div className="notice warning">
+                <strong>⚠️ Aucune charge personnel trouvée</strong>
+                <p style={{ margin: "8px 0 0 0", fontSize: 13 }}>
+                  Vérifiez que vous avez bien créé des charges du personnel avec un mode de paiement autre qu'espèces dans la page "Charges Personnels".
+                </p>
+              </div>
+            ) : filteredChargesPersonnels.length === 0 ? (
+              <div className="notice warning">
+                <strong>🔍 Aucune charge personnel correspondant aux filtres</strong>
+                <p style={{ margin: "8px 0 0 0", fontSize: 13 }}>
+                  Total de charges personnels disponibles : {chargesPersonnels.length}. Essayez de modifier les filtres.
+                </p>
+              </div>
+            ) : (
+              <div className="tbl-wrap">
+                <table className="tbl">
+                  <thead>
+                    <tr>
+                      <th>Employé</th>
+                      <th>Poste</th>
+                      <th>Date</th>
+                      <th>Salaire</th>
+                      <th>Total</th>
+                      <th>Mode de paiement</th>
+                      <th>Référence</th>
+                      <th>Document</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredChargesPersonnels.map((charge) => (
+                      <tr key={charge.id}>
+                        <td className="left">{charge.employe || "—"}</td>
+                        <td>{charge.poste || "—"}</td>
+                        <td>{charge.date || "—"}</td>
+                        <td className="money">{fmtDH(charge.salaire || 0)}</td>
+                        <td style={{ fontWeight: 700, color: "#667eea" }}>
+                          {fmtDH(charge.total || 0)}
+                        </td>
+                        <td>
+                          <span
+                            className="mode-badge"
+                            style={{
+                              background: `${getModeColor(charge.modePaiement)}15`,
+                              color: getModeColor(charge.modePaiement),
+                            }}
+                          >
+                            {getModeIcon(charge.modePaiement)} {charge.modePaiement}
+                          </span>
+                        </td>
+                        <td className="soft">{charge.referenceVirement || "—"}</td>
+                        <td className="soft">{charge.typeDocument || "—"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                  {/* 🆕 TFOOT: Totaux séparés (salaire / total) + récap par mode */}
+                  <tfoot>
+                    <tr>
+                      <td className="left" colSpan={3}>TOTAL (charges personnels filtrées)</td>
+                      <td className="money">{fmtDH(totalsChargesPersonnels.salaire)}</td>
+                      <td style={{ fontWeight: 900 }}>{fmtDH(totalsChargesPersonnels.total)}</td>
+                      <td colSpan={3} style={{ textAlign: "left" }}>
+                        {Object.entries(totalsChargesPersonnels.byMode).map(([m, v]) =>
+                          v > 0 ? (
+                            <span
+                              key={m}
+                              className="mode-badge"
+                              style={{
+                                background: `${getModeColor(m)}15`,
+                                color: getModeColor(m),
+                                marginRight: 6
+                              }}
+                            >
+                              {getModeIcon(m)} {m}: {fmtDH(v)}
+                            </span>
+                          ) : null
+                        )}
+                      </td>
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+            )}
+          </div>
+        </>
+      )}
+
+      {/* ========== ONGLET CHARGES DIVERS ========== */}
+      {mainTab === "chargesDivers" && (
+        <>
+          <div className="card" style={{ marginBottom: 16 }}>
+            <div className="controls">
               <input
+                className="field"
+                placeholder="🔍 Rechercher libellé, fournisseur, catégorie..."
+                value={filterName}
+                onChange={(e) => setFilterName(e.target.value)}
+                style={{ minWidth: 320 }}
+              />
+
+              <input
+                className="field"
+                type="date"
+                value={dateFrom}
+                onChange={(e) => setDateFrom(e.target.value)}
+                title="Date début"
+              />
+              <input
+                className="field"
+                type="date"
+                value={dateTo}
+                onChange={(e) => setDateTo(e.target.value)}
+                title="Date fin"
+              />
+
+              <select
+                className="select"
+                value={filterMode}
+                onChange={(e) => setFilterMode(e.target.value)}
+              >
+                <option value="all">Tous modes</option>
+                <option value="Chèque">🏦 Chèque</option>
+                <option value="Virement bancaire">🏧 Virement</option>
+                <option value="Carte bancaire">💳 Carte</option>
+                <option value="Prélèvement">🔄 Prélèvement</option>
+              </select>
+
+              <button
+                className="btn secondary"
+                onClick={() => {
+                  setFilterName("");
+                  setDateFrom("");
+                  setDateTo("");
+                  setFilterMode("all");
+                }}
+              >
+                🔄 Réinitialiser
+              </button>
+            </div>
+            
+            <div className="notice" style={{ background: "#dbeafe", color: "#1e40af", marginTop: 12 }}>
+              📊 Total charges divers chargées : <strong>{chargesDivers.length}</strong> 
+              {" • "}Filtrées : <strong>{filteredChargesDivers.length}</strong>
+              {" • "}💡 Les paiements en espèces sont gérés directement dans la page Charges Divers
+            </div>
+          </div>
+
+          <div className="card">
+            <h3 style={{ marginTop: 0 }}>📊 Charges Divers (Non-Espèces)</h3>
+            <p className="soft" style={{ marginBottom: 12 }}>
+              Liste des charges diverses payées par modes non-espèces (chèque, virement, carte, etc.)
+            </p>
+
+            {chargesDivers.length === 0 ? (
+              <div className="notice warning">
+                <strong>⚠️ Aucune charge diverse trouvée</strong>
+                <p style={{ margin: "8px 0 0 0", fontSize: 13 }}>
+                  Vérifiez que vous avez bien créé des charges diverses avec un mode de paiement autre qu'espèces dans la page "Charges Divers".
+                </p>
+              </div>
+            ) : filteredChargesDivers.length === 0 ? (
+              <div className="notice warning">
+                <strong>🔍 Aucune charge diverse correspondant aux filtres</strong>
+                <p style={{ margin: "8px 0 0 0", fontSize: 13 }}>
+                  Total de charges divers disponibles : {chargesDivers.length}. Essayez de modifier les filtres.
+                </p>
+              </div>
+            ) : (
+              <div className="tbl-wrap">
+                <table className="tbl">
+                  <thead>
+                    <tr>
+                      <th>Catégorie</th>
+                      <th>Libellé</th>
+                      <th>Fournisseur</th>
+                      <th>Date</th>
+                      <th>Montant</th>
+                      <th>Mode de paiement</th>
+                      <th>Référence</th>
+                      <th>N° Facture</th>
+                      <th>Statut</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredChargesDivers.map((charge) => (
+                      <tr key={charge.id}>
+                        <td>
+                          <span
+                            className="badge-type"
+                            style={{
+                              background: "#f3f4f6",
+                              color: "#374151",
+                            }}
+                          >
+                            {charge.categorie || "—"}
+                          </span>
+                        </td>
+                        <td className="left">{charge.libelle || "—"}</td>
+                        <td className="left">{charge.fournisseur || "—"}</td>
+                        <td>{charge.date || "—"}</td>
+                        <td style={{ fontWeight: 700, color: "#667eea" }}>
+                          {fmtDH(charge.montant || 0)}
+                        </td>
+                        <td>
+                          <span
+                            className="mode-badge"
+                            style={{
+                              background: `${getModeColor(charge.modePaiement)}15`,
+                              color: getModeColor(charge.modePaiement),
+                            }}
+                          >
+                            {getModeIcon(charge.modePaiement)} {charge.modePaiement}
+                          </span>
+                        </td>
+                        <td className="soft">{charge.referenceVirement || "—"}</td>
+                        <td className="soft">{charge.numeroFacture || "—"}</td>
+                        <td>
+                          <span
+                            className="chip"
+                            style={{
+                              background: "#10b981",
+                              color: "#fff",
+                              fontSize: 10,
+                            }}
+                          >
+                            {charge.statut || "Payé"}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                  {/* 🆕 TFOOT: Total + récap par mode */}
+                  <tfoot>
+                    <tr>
+                      <td className="left" colSpan={4}>TOTAL (charges divers filtrées)</td>
+                      <td style={{ fontWeight: 900, color: "#667eea" }}>{fmtDH(totalsChargesDivers.montant)}</td>
+                      <td colSpan={4} style={{ textAlign: "left" }}>
+                        {Object.entries(totalsChargesDivers.byMode).map(([m, v]) =>
+                          v > 0 ? (
+                            <span
+                              key={m}
+                              className="mode-badge"
+                              style={{
+                                background: `${getModeColor(m)}15`,
+                                color: getModeColor(m),
+                                marginRight: 6
+                              }}
+                            >
+                              {getModeIcon(m)} {m}: {fmtDH(v)}
+                            </span>
+                          ) : null
+                        )}
+                      </td>
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+            )}
+          </div>
+        </>
+      )}
+
+      {/* MODAL ÉDITION PAIEMENT (uniquement pour documents) */}
+      {editingPayment && mainTab === "documents" && (
+        <div
+          className="card"
+          style={{
+            marginTop: 16,
+            borderColor: "#fbbf24",
+            boxShadow: "0 8px 20px rgba(251,191,36,.12)",
+          }}
+        >
+          <h3 style={{ marginTop: 0 }}>
+            ✏️ Modifier le paiement
+          </h3>
+
+          <div style={{ display: "flex", flexDirection: "column", gap: 12, marginTop: 12 }}>
+            <div>
+              <label className="form-label">Date et heure du paiement</label>
+              <input
+                className="field"
                 type="datetime-local"
-                className="form-input"
                 value={editPaymentDateTime}
                 onChange={(e) => setEditPaymentDateTime(e.target.value)}
+                style={{ width: "100%" }}
               />
             </div>
 
-            <div className="form-group">
+            <div>
               <label className="form-label">Mode de paiement</label>
               <select
-                className="form-input"
+                className="select"
                 value={editPaymentMode}
-                onChange={(e) => {
-                  const newMode = e.target.value;
-                  setEditPaymentMode(newMode);
-                  if (newMode === "Espèces") {
-                    setEditPaymentAmount(String(editingPayment.montant || ""));
-                    setEditPaymentInstruments([]);
-                  } else {
-                    setEditPaymentAmount("");
-                    setEditPaymentInstruments(
-                      Array.isArray(editingPayment.instruments)
-                        ? editingPayment.instruments
-                        : []
-                    );
-                  }
-                }}
+                onChange={(e) => setEditPaymentMode(e.target.value)}
+                style={{ width: "100%" }}
               >
-                <option>Espèces</option>
-                <option>Chèque</option>
-                <option>Traite</option>
+                <option value="Espèces">Espèces</option>
+                <option value="Chèque">Chèque</option>
+                <option value="Traite">Traite</option>
               </select>
             </div>
 
-            {editPaymentMode === "Espèces" ? (
-              <div className="form-group">
-                <label className="form-label">Montant (DH)</label>
-                <input
-                  type="number"
-                  step="0.01"
-                  className="form-input"
-                  value={editPaymentAmount}
-                  onChange={(e) => setEditPaymentAmount(e.target.value)}
-                  placeholder="0.00"
-                />
-              </div>
-            ) : (
-              <div className="form-group">
-                <label className="form-label">Instruments ({editPaymentMode})</label>
-                <button className="btn" onClick={addEditInstrument} style={{ marginBottom: 8 }}>
-                  ➕ Ajouter un instrument
-                </button>
+            {(norm(editPaymentMode) === "cheque" || norm(editPaymentMode) === "chèque" || norm(editPaymentMode) === "traite") ? (
+              <div>
+                <div className="controls" style={{ marginBottom: 8 }}>
+                  <button className="btn" onClick={addEditInstrument}>
+                    ➕ Ajouter instrument
+                  </button>
+                  <span className="soft">{labelInstruments(editPaymentInstruments)}</span>
+                </div>
 
                 {editPaymentInstruments.length > 0 && (
                   <div style={{ width: "100%", overflowX: "auto" }}>
@@ -1992,6 +2336,18 @@ export default function Paiements() {
                   )}
                 </div>
               </div>
+            ) : (
+              <div>
+                <label className="form-label">Montant (DH)</label>
+                <input
+                  className="field"
+                  type="number"
+                  step="0.01"
+                  value={editPaymentAmount}
+                  onChange={(e) => setEditPaymentAmount(e.target.value)}
+                  style={{ width: "100%" }}
+                />
+              </div>
             )}
 
             <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 20 }}>
@@ -2006,8 +2362,8 @@ export default function Paiements() {
         </div>
       )}
 
-      {/* ÉDITEUR D'INSTRUMENTS (Gérer instruments) */}
-      {editingInstrumentsFor && (
+      {/* ÉDITEUR D'INSTRUMENTS (uniquement pour documents) */}
+      {editingInstrumentsFor && mainTab === "documents" && (
         <div
           className="card"
           style={{

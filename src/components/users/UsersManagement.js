@@ -1,5 +1,7 @@
 // src/components/users/UsersManagement.js
-// Version responsive + permissions GRANULAIRES (migration auto des anciennes permissions globales)
+// Version responsive + permissions GRANULAIRES + soft delete (désactiver/réactiver)
+// - Archivage sous societe/{sid}/archives_users/{uid}
+// - Invitations: ajoute emailLower pour matcher les règles Firestore
 
 import React, { useState, useEffect } from "react";
 import { db } from "../../firebase/config";
@@ -8,12 +10,16 @@ import {
   doc,
   setDoc,
   updateDoc,
+  getDoc,
   Timestamp,
+  serverTimestamp,
   collection,
   query,
   where,
   getDocs,
-  limit
+  limit,
+  arrayRemove,
+  arrayUnion,
 } from "firebase/firestore";
 import CustomPermissionsManager from "../CustomPermissionsManager";
 import UserPermissionsDisplay from "../UserPermissionsDisplay";
@@ -21,12 +27,9 @@ import permissions, { PERMISSION_LABELS } from "../../utils/permissions";
 
 /* =========================================================
  * 1) Définition des groupes → permissions fines (mapping)
- *    On NE stocke JAMAIS la clé "globale" (ex: 'achats')
- *    On ne stocke QUE les clés fines : voir_/creer_/modifier_
  * ========================================================= */
 const PERMISSION_GROUPS = {
   achats: ["voir_achats", "creer_achats", "modifier_achats"],
-  // (Optionnel) Si tu veux déjà préparer d'autres groupes, dé-commente et adapte :
   // ventes: ["voir_ventes", "creer_ventes", "modifier_ventes"],
   // stock: ["voir_stock", "creer_stock", "modifier_stock"],
   // clients: ["voir_clients", "creer_clients", "modifier_clients"],
@@ -34,10 +37,10 @@ const PERMISSION_GROUPS = {
 
 /* Legacy keys qui doivent être converties vers des clés fines */
 const LEGACY_TO_GROUP = {
-  "achat": "achats",
-  "achats": "achats",
-  "ACHAT": "achats",
-  "ACHATS": "achats",
+  achat: "achats",
+  achats: "achats",
+  ACHAT: "achats",
+  ACHATS: "achats",
   "achats:*": "achats",
   "achat:*": "achats",
 };
@@ -49,42 +52,35 @@ function uniq(arr) {
   return Array.from(new Set(arr));
 }
 
-/** 
+/**
  * Normalise un tableau de permissions custom :
- * - Remplace toute permission "globale" (ex: 'achats', 'achats:*') par ses permissions fines.
- * - Supprime les doublons.
- * - Enlève les clés globales pour ne garder que les fines.
- * Retourne { normalized, changed }.
+ * - Étend les clés globales vers les clés fines,
+ * - retire toutes les globales,
+ * - déduplique.
  */
 function normalizeCustomPermissions(custom) {
   const input = Array.isArray(custom) ? custom : [];
   let changed = false;
   let output = [...input];
 
-  // 1) Étendre les anciennes clés "globale" vers les fines
+  // Étendre anciennes clés vers fines
   input.forEach((key) => {
-    const maybeGroup =
-      LEGACY_TO_GROUP[key] || // cas exact (achats, achats:*, etc.)
-      LEGACY_TO_GROUP[key?.toLowerCase?.()] || null;
-
+    const maybeGroup = LEGACY_TO_GROUP[key] || LEGACY_TO_GROUP[key?.toLowerCase?.()] || null;
     if (maybeGroup && PERMISSION_GROUPS[maybeGroup]) {
-      // Injecter toutes les permissions fines de ce groupe
       output = output.concat(PERMISSION_GROUPS[maybeGroup]);
       changed = true;
     }
   });
 
-  // 2) Supprimer toutes les clés "globales" potentielles
+  // Retirer les globales
   const globalKeys = new Set([
     ...Object.keys(LEGACY_TO_GROUP),
-    ...Object.keys(LEGACY_TO_GROUP).map((k) => k.toLowerCase())
+    ...Object.keys(LEGACY_TO_GROUP).map((k) => k.toLowerCase()),
   ]);
   output = output.filter((k) => !globalKeys.has(k) && !globalKeys.has(k?.toLowerCase?.()));
 
-  // 3) Dédupliquer
+  // Dédupliquer
   const deduped = uniq(output);
-
-  // 4) Rien d'autre à normaliser ici (tu peux ajouter d'autres règles si besoin)
   if (deduped.length !== input.length || changed || deduped.some((k, i) => k !== input[i])) {
     changed = true;
   }
@@ -92,10 +88,6 @@ function normalizeCustomPermissions(custom) {
   return { normalized: deduped, changed };
 }
 
-/**
- * Retourne la liste de permissions de base pour un rôle (définies dans utils/permissions)
- * On suppose que `permissions[role]` contient UNIQUEMENT des clés fines (bonne pratique).
- */
 function getDefaultPermissionsForRole(role) {
   const r = (role || "").toLowerCase();
   return Array.isArray(permissions[r]) ? permissions[r] : [];
@@ -105,7 +97,15 @@ function getDefaultPermissionsForRole(role) {
  * 3) Composant principal
  * ========================================================= */
 export default function UsersManagement() {
-  const { user, societeId, role, loading, isOwner, canManageUsers, refreshCustomPermissions } = useUserRole();
+  const {
+    user,
+    societeId,
+    role,
+    loading,
+    isOwner,
+    canManageUsers, // selon ton contexte: bool ou fonction. On ne modifie pas son usage actuel.
+    refreshCustomPermissions,
+  } = useUserRole();
 
   // États
   const [utilisateurs, setUtilisateurs] = useState([]);
@@ -128,7 +128,7 @@ export default function UsersManagement() {
   const [screenSize, setScreenSize] = useState({
     isMobile: typeof window !== "undefined" ? window.innerWidth < 768 : true,
     isTablet: typeof window !== "undefined" ? window.innerWidth >= 768 && window.innerWidth < 1024 : false,
-    isDesktop: typeof window !== "undefined" ? window.innerWidth >= 1024 : false
+    isDesktop: typeof window !== "undefined" ? window.innerWidth >= 1024 : false,
   });
 
   useEffect(() => {
@@ -136,7 +136,7 @@ export default function UsersManagement() {
       setScreenSize({
         isMobile: window.innerWidth < 768,
         isTablet: window.innerWidth >= 768 && window.innerWidth < 1024,
-        isDesktop: window.innerWidth >= 1024
+        isDesktop: window.innerWidth >= 1024,
       });
     };
     window.addEventListener("resize", handleResize, { passive: true });
@@ -144,8 +144,7 @@ export default function UsersManagement() {
   }, []);
 
   // Accès
-  const hasAccess =
-    isOwner || ["pharmacien", "admin", "ADMIN", "docteur"].includes((role || "").toLowerCase());
+  const hasAccess = isOwner || ["pharmacien", "admin", "ADMIN", "docteur"].includes((role || "").toLowerCase());
 
   // ============== Utils d'affichage ==============
   const getExtraPermissionsCount = (userData) => {
@@ -184,7 +183,7 @@ export default function UsersManagement() {
         const snapshot = await getDocs(qUsers);
         const usersList = [];
 
-        // On re-normalise au passage si des anciennes clés existent
+        // Re-normaliser si anciennes clés
         const updates = [];
         snapshot.forEach((d) => {
           const userData = d.data();
@@ -193,8 +192,10 @@ export default function UsersManagement() {
 
           if (changed) {
             updates.push(
-              updateDoc(doc(db, "users", d.id), { customPermissions: normalized, modifieLe: Timestamp.now() })
-                .catch((e) => console.error("Migration permissions (save) échouée:", e))
+              updateDoc(doc(db, "users", d.id), {
+                customPermissions: normalized,
+                modifieLe: Timestamp.now(),
+              }).catch((e) => console.error("Migration permissions (save) échouée:", e))
             );
           }
 
@@ -205,7 +206,7 @@ export default function UsersManagement() {
             nom: userData.nom || "",
             prenom: userData.prenom || "",
             actif: userData.actif !== false,
-            customPermissions: normalized
+            customPermissions: normalized,
           });
         });
 
@@ -235,13 +236,15 @@ export default function UsersManagement() {
 
         snapshot.forEach((d) => {
           const userData = d.data();
-          // Normalisation / migration des permissions custom pour CHAQUE utilisateur
+          // Normalisation / migration des permissions custom
           const rawCustom = userData.customPermissions || [];
           const { normalized, changed } = normalizeCustomPermissions(rawCustom);
           if (changed) {
             updates.push(
-              updateDoc(doc(db, "users", d.id), { customPermissions: normalized, modifieLe: Timestamp.now() })
-                .catch((e) => console.error("Migration permissions (save) échouée:", e))
+              updateDoc(doc(db, "users", d.id), {
+                customPermissions: normalized,
+                modifieLe: Timestamp.now(),
+              }).catch((e) => console.error("Migration permissions (save) échouée:", e))
             );
           }
 
@@ -252,7 +255,7 @@ export default function UsersManagement() {
             nom: userData.nom || "",
             prenom: userData.prenom || "",
             actif: userData.actif !== false,
-            customPermissions: normalized
+            customPermissions: normalized,
           });
         });
 
@@ -265,11 +268,7 @@ export default function UsersManagement() {
 
     const loadInvitations = async () => {
       try {
-        const qInv = query(
-          collection(db, "invitations"),
-          where("societeId", "==", societeId),
-          limit(20)
-        );
+        const qInv = query(collection(db, "invitations"), where("societeId", "==", societeId), limit(20));
         const snapshot = await getDocs(qInv);
         const invitationsList = [];
         snapshot.forEach((d) => {
@@ -279,7 +278,7 @@ export default function UsersManagement() {
             email: inviteData.email,
             role: inviteData.role,
             statut: inviteData.statut || "pending",
-            createdAt: inviteData.createdAt
+            createdAt: inviteData.createdAt,
           });
         });
         setInvitations(invitationsList);
@@ -292,7 +291,7 @@ export default function UsersManagement() {
     loadInvitations();
   }, [user?.uid, societeId, hasAccess]);
 
-  // ====== Invitations (inchangé) ======
+  // ====== Invitations ======
   const sendInvitation = async (e) => {
     e.preventDefault();
     if (!inviteEmail.trim()) {
@@ -303,20 +302,22 @@ export default function UsersManagement() {
 
     setSendingInvite(true);
     try {
+      const emailLower = inviteEmail.trim().toLowerCase();
       const inviteToken =
         Math.random().toString(36).substring(2, 15) +
         Math.random().toString(36).substring(2, 15);
 
       const invitationData = {
-        email: inviteEmail.toLowerCase().trim(),
+        email: emailLower,            // on garde l'email normalisé ici
+        emailLower,                   // champ explicit pour les règles
         role: inviteRole,
         societeId,
         statut: "pending",
-        createdAt: Timestamp.now(),
+        createdAt: serverTimestamp(),
         expiresAt: Timestamp.fromDate(new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)),
         invitePar: user.uid,
         inviteParEmail: user.email || "",
-        inviteToken
+        inviteToken,                  // utilisé par AcceptInvitation et les règles
       };
 
       await setDoc(doc(collection(db, "invitations")), invitationData);
@@ -324,14 +325,14 @@ export default function UsersManagement() {
       const inviteLink = `${window.location.origin}/accept-invitation?token=${inviteToken}`;
 
       setInvitationCode({
-        email: inviteEmail,
+        email: emailLower,
         token: inviteToken,
         link: inviteLink,
         role: inviteRole,
-        expiresAt: invitationData.expiresAt
+        expiresAt: invitationData.expiresAt,
       });
 
-      setNotification({ message: `Invitation créée pour ${inviteEmail}`, type: "success" });
+      setNotification({ message: `Invitation créée pour ${emailLower}`, type: "success" });
       setTimeout(() => setNotification(null), 3000);
 
       setShowInviteCode(true);
@@ -357,25 +358,79 @@ export default function UsersManagement() {
     }
   };
 
+  /**
+   * Soft delete complet :
+   * - Si on désactive: archive snapshot + active:false + retire des membres
+   * - Si on réactive : active:true + ré-ajoute dans membres
+   */
   const toggleUserLock = async (userId, currentStatus, userEmail) => {
     if (updatingUser === userId) return;
     setUpdatingUser(userId);
     try {
-      const userDocRef = doc(db, "users", userId);
-      const updateData = {
-        actif: !currentStatus,
-        modifieLe: Timestamp.now(),
-        modifiePar: user.uid
-      };
-      await updateDoc(userDocRef, updateData);
+      const userRef = doc(db, "users", userId);
+      const snap = await getDoc(userRef);
+      if (!snap.exists()) throw new Error("Le compte utilisateur n'existe pas.");
+      const target = snap.data();
 
-      setUtilisateurs((prev) =>
-        prev.map((u) => (u.id === userId ? { ...u, actif: !currentStatus } : u))
-      );
+      if (target.societeId !== societeId) {
+        throw new Error("Utilisateur d'une autre société ou non rattaché.");
+      }
+
+      if (currentStatus) {
+        // === Désactivation ===
+        // 1) archive snapshot
+        const archiveRef = doc(db, "societe", societeId, "archives_users", userId);
+        await setDoc(
+          archiveRef,
+          {
+            snapshotAt: serverTimestamp(),
+            snapshotBy: user.uid,
+            user: {
+              uid: userId,
+              email: target.email || null,
+              displayName: target.displayName || null,
+              role: target.role || null,
+              active: target.actif !== false,
+              joinedAt: target.joinedAt || null,
+            },
+          },
+          { merge: true }
+        );
+
+        // 2) Marquer inactif
+        await updateDoc(userRef, {
+          actif: false,
+          disabledAt: serverTimestamp(),
+          disabledBy: user.uid,
+          disabledReason: "removed_by_admin",
+          modifieLe: Timestamp.now(),
+        });
+
+        // 3) Retirer des membres
+        await updateDoc(doc(db, "societe", societeId), {
+          membres: arrayRemove(userId),
+        });
+      } else {
+        // === Réactivation ===
+        await updateDoc(userRef, {
+          actif: true,
+          reenabledAt: serverTimestamp(),
+          reenabledBy: user.uid,
+          modifieLe: Timestamp.now(),
+        });
+
+        // Ré-inscrire dans membres
+        await updateDoc(doc(db, "societe", societeId), {
+          membres: arrayUnion(userId),
+        });
+      }
+
+      // Mise à jour locale
+      setUtilisateurs((prev) => prev.map((u) => (u.id === userId ? { ...u, actif: !currentStatus } : u)));
 
       setNotification({
-        message: `${userEmail} ${!currentStatus ? "déverrouillé" : "verrouillé"}`,
-        type: "success"
+        message: `${userEmail} ${currentStatus ? "désactivé" : "réactivé"}`,
+        type: "success",
       });
       setTimeout(() => setNotification(null), 3000);
     } catch (error) {
@@ -393,7 +448,7 @@ export default function UsersManagement() {
     return ["pharmacien", "docteur", "admin"].includes(role?.toLowerCase()) || isOwner;
   };
 
-  // ========== Styles (inchangés sauf notes UI) ==========
+  // ========== Styles ==========
   const getResponsiveStyles = () => {
     const { isMobile, isTablet, isDesktop } = screenSize;
 
@@ -403,7 +458,7 @@ export default function UsersManagement() {
         minHeight: "100vh",
         padding: isMobile ? "10px" : isTablet ? "15px" : "20px",
         fontFamily: "Inter, Arial, sans-serif",
-        overflow: "auto"
+        overflow: "auto",
       },
       card: {
         background: "white",
@@ -412,22 +467,22 @@ export default function UsersManagement() {
         overflow: "hidden",
         margin: "0 auto",
         maxWidth: isDesktop ? "1200px" : "100%",
-        width: "100%"
+        width: "100%",
       },
       header: {
         background: "linear-gradient(135deg, #4a5568 0%, #2d3748 100%)",
         padding: isMobile ? "20px 15px" : isTablet ? "30px 20px" : "40px",
         textAlign: "center",
-        color: "white"
+        color: "white",
       },
       title: {
         fontSize: isMobile ? "1.8em" : isTablet ? "2.2em" : "2.5em",
         fontWeight: 800,
         margin: 0,
-        wordBreak: "break-word"
+        wordBreak: "break-word",
       },
       content: {
-        padding: isMobile ? "15px" : isTablet ? "25px" : "40px"
+        padding: isMobile ? "15px" : isTablet ? "25px" : "40px",
       },
       sectionHeader: {
         display: "flex",
@@ -435,19 +490,19 @@ export default function UsersManagement() {
         justifyContent: "space-between",
         alignItems: isMobile ? "stretch" : "center",
         marginBottom: isMobile ? "20px" : "30px",
-        gap: isMobile ? "15px" : "20px"
+        gap: isMobile ? "15px" : "20px",
       },
       sectionTitle: {
         color: "#2d3748",
         margin: 0,
         fontSize: isMobile ? "1.3em" : isTablet ? "1.5em" : "1.8em",
-        fontWeight: 700
+        fontWeight: 700,
       },
       headerButtons: {
         display: "flex",
         flexDirection: isMobile ? "column" : "row",
         gap: "10px",
-        alignSelf: isMobile ? "stretch" : "auto"
+        alignSelf: isMobile ? "stretch" : "auto",
       },
       button: {
         background: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
@@ -460,12 +515,12 @@ export default function UsersManagement() {
         fontSize: isMobile ? "0.9em" : "1em",
         minHeight: isMobile ? "44px" : "auto",
         transition: "all 0.3s ease",
-        width: isMobile ? "100%" : "auto"
+        width: isMobile ? "100%" : "auto",
       },
       usersContainer: {
         display: "grid",
         gap: isMobile ? "15px" : "20px",
-        marginBottom: "40px"
+        marginBottom: "40px",
       },
       userCard: {
         background: "#f8fafc",
@@ -475,7 +530,7 @@ export default function UsersManagement() {
         display: "flex",
         flexDirection: "column",
         gap: isMobile ? "15px" : "20px",
-        position: "relative"
+        position: "relative",
       },
       userInfo: { flex: 1, minWidth: 0 },
       userName: {
@@ -483,18 +538,18 @@ export default function UsersManagement() {
         color: "#2d3748",
         marginBottom: "5px",
         fontSize: isMobile ? "1em" : "1.1em",
-        wordBreak: "break-word"
+        wordBreak: "break-word",
       },
       userDetails: {
         fontSize: isMobile ? "0.8em" : "0.9em",
         color: "#6b7280",
-        wordBreak: "break-word"
+        wordBreak: "break-word",
       },
       permissionsInfo: {
         display: "flex",
         flexWrap: "wrap",
         gap: "5px",
-        marginTop: "8px"
+        marginTop: "8px",
       },
       permissionChip: {
         background: "#e0f2fe",
@@ -502,7 +557,7 @@ export default function UsersManagement() {
         fontSize: "0.75em",
         padding: "3px 8px",
         borderRadius: "12px",
-        fontWeight: 600
+        fontWeight: 600,
       },
       extraPermissionChip: {
         background: "#e8f5e8",
@@ -510,14 +565,14 @@ export default function UsersManagement() {
         fontSize: "0.75em",
         padding: "3px 8px",
         borderRadius: "12px",
-        fontWeight: 600
+        fontWeight: 600,
       },
       userActions: {
         display: "flex",
         alignItems: "center",
         justifyContent: "space-between",
         gap: "15px",
-        flexWrap: isMobile ? "wrap" : "nowrap"
+        flexWrap: isMobile ? "wrap" : "nowrap",
       },
       statusBadge: {
         padding: "6px 12px",
@@ -525,13 +580,13 @@ export default function UsersManagement() {
         fontSize: "0.8em",
         fontWeight: 600,
         whiteSpace: "nowrap",
-        flexShrink: 0
+        flexShrink: 0,
       },
       actionButtons: {
         display: "flex",
         gap: "8px",
         flexShrink: 0,
-        flexWrap: "wrap"
+        flexWrap: "wrap",
       },
       actionButton: {
         border: "none",
@@ -544,7 +599,7 @@ export default function UsersManagement() {
         minHeight: isMobile ? "44px" : "auto",
         minWidth: isMobile ? "44px" : "auto",
         whiteSpace: "nowrap",
-        transition: "all 0.3s ease"
+        transition: "all 0.3s ease",
       },
       permissionButton: {
         border: "none",
@@ -558,27 +613,30 @@ export default function UsersManagement() {
         transition: "all 0.3s ease",
         display: "flex",
         alignItems: "center",
-        gap: "4px"
+        gap: "4px",
       },
       input: {
         width: "100%",
         padding: isMobile ? "14px 12px" : "12px",
-        border: "2px solid #e2e8f0",
+        border: "2px solid ",
         borderRadius: "8px",
         marginBottom: "15px",
         fontSize: isMobile ? "16px" : "14px",
         minHeight: isMobile ? "44px" : "auto",
-        boxSizing: "border-box"
+        boxSizing: "border-box",
       },
       modalOverlay: {
         position: "fixed",
-        top: 0, left: 0, right: 0, bottom: 0,
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
         background: "rgba(0,0,0,0.5)",
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
         zIndex: 1000,
-        padding: isMobile ? "10px" : "20px"
+        padding: isMobile ? "10px" : "20px",
       },
       modalContent: {
         background: "white",
@@ -587,7 +645,7 @@ export default function UsersManagement() {
         width: "100%",
         maxWidth: isMobile ? "100%" : isTablet ? "500px" : "400px",
         maxHeight: isMobile ? "90vh" : "80vh",
-        overflow: "auto"
+        overflow: "auto",
       },
       notification: {
         position: "fixed",
@@ -600,11 +658,11 @@ export default function UsersManagement() {
         fontWeight: 600,
         zIndex: 1001,
         fontSize: isMobile ? "0.9em" : "1em",
-        maxWidth: isMobile ? "calc(100vw - 20px)" : "400px"
+        maxWidth: isMobile ? "calc(100vw - 20px)" : "400px",
       },
       invitationsContainer: {
         display: "grid",
-        gap: isMobile ? "12px" : "15px"
+        gap: isMobile ? "12px" : "15px",
       },
       invitationCard: {
         background: "#f8fafc",
@@ -615,8 +673,8 @@ export default function UsersManagement() {
         flexDirection: isMobile ? "column" : "row",
         justifyContent: "space-between",
         alignItems: isMobile ? "stretch" : "center",
-        gap: isMobile ? "10px" : "15px"
-      }
+        gap: isMobile ? "10px" : "15px",
+      },
     };
   };
 
@@ -636,7 +694,15 @@ export default function UsersManagement() {
   if (!hasAccess) {
     return (
       <div style={styles.container}>
-        <div style={{ textAlign: "center", color: "white", fontSize: "1.5em", paddingTop: "100px", padding: "20px" }}>
+        <div
+          style={{
+            textAlign: "center",
+            color: "white",
+            fontSize: "1.5em",
+            paddingTop: "100px",
+            padding: "20px",
+          }}
+        >
           Accès refusé. Seuls les administrateurs peuvent gérer les utilisateurs.
         </div>
       </div>
@@ -662,7 +728,7 @@ export default function UsersManagement() {
                 background:
                   notification.type === "success"
                     ? "linear-gradient(135deg, #48bb78 0%, #38a169 100%)"
-                    : "linear-gradient(135deg, #f56565 0%, #e53e3e 100%)"
+                    : "linear-gradient(135deg, #f56565 0%, #e53e3e 100%)",
               }}
             >
               {notification.message}
@@ -672,15 +738,13 @@ export default function UsersManagement() {
           {/* Section Utilisateurs */}
           <div style={{ marginBottom: "40px" }}>
             <div style={styles.sectionHeader}>
-              <h2 style={styles.sectionTitle}>
-                Équipe actuelle ({utilisateurs.length})
-              </h2>
+              <h2 style={styles.sectionTitle}>Équipe actuelle ({utilisateurs.length})</h2>
 
               <div style={styles.headerButtons}>
                 <button
                   style={{
                     ...styles.button,
-                    background: "linear-gradient(135deg, #48bb78 0%, #38a169 100%)"
+                    background: "linear-gradient(135deg, #48bb78 0%, #38a169 100%)",
                   }}
                   onClick={() => setShowInviteForm(true)}
                 >
@@ -692,8 +756,6 @@ export default function UsersManagement() {
             <div style={styles.usersContainer}>
               {utilisateurs.map((u) => {
                 const extraCount = getExtraPermissionsCount(u);
-
-                // Pour l'affichage, on montre le détail si l'utilisateur a des permissions fines d'achats
                 const achatsFins = (u.customPermissions || []).filter((p) =>
                   ["voir_achats", "creer_achats", "modifier_achats"].includes(p)
                 );
@@ -710,7 +772,7 @@ export default function UsersManagement() {
                         )}
                       </div>
                       <div style={styles.userDetails}>
-                        {u.email} • {u.role === 'docteur' ? 'Pharmacien' : (u.role || 'Vendeuse')}
+                        {u.email} • {u.role === "docteur" ? "Pharmacien" : u.role || "Vendeuse"}
                       </div>
 
                       {/* Infos permissions */}
@@ -719,13 +781,11 @@ export default function UsersManagement() {
                           {getDefaultPermissionsForRole(u.role).length} permissions de base
                         </span>
                         {extraCount > 0 && (
-                          <span style={styles.extraPermissionChip}>
-                            +{extraCount} permissions supplémentaires ✨
-                          </span>
+                          <span style={styles.extraPermissionChip}>+{extraCount} permissions supplémentaires ✨</span>
                         )}
                         {achatsFins.length > 0 && (
                           <span style={styles.permissionChip}>
-                            Achats: {achatsFins.map(p => p.replace("_achats","").toUpperCase()).join(" / ")}
+                            Achats: {achatsFins.map((p) => p.replace("_achats", "").toUpperCase()).join(" / ")}
                           </span>
                         )}
                       </div>
@@ -736,10 +796,10 @@ export default function UsersManagement() {
                         style={{
                           ...styles.statusBadge,
                           background: u.actif ? "#c6f6d5" : "#fed7d7",
-                          color: u.actif ? "#22543d" : "#c53030"
+                          color: u.actif ? "#22543d" : "#c53030",
                         }}
                       >
-                        {u.actif ? "Actif" : "Verrouillé"}
+                        {u.actif ? "Actif" : "Désactivé"}
                       </div>
 
                       <div style={styles.actionButtons}>
@@ -747,29 +807,32 @@ export default function UsersManagement() {
                         <button
                           style={{
                             ...styles.permissionButton,
-                            background: "linear-gradient(135deg, #4299e1 0%, #3182ce 100%)"
+                            background: "linear-gradient(135deg, #4299e1 0%, #3182ce 100%)",
                           }}
                           onClick={() => handleViewPermissions(u)}
                           title="Voir les permissions"
                         >
-                          👁️ {screenSize.isMobile ? "" : "Voir"}
+                          👁️
+                          {!screenSize.isMobile && <span style={{ marginLeft: 4 }}>Voir</span>}
                         </button>
 
                         {/* Gérer permissions personnalisées (vendeuse) */}
-                        {u.role?.toLowerCase() === 'vendeuse' && canManageUsers() && (
-                          <button
-                            style={{
-                              ...styles.permissionButton,
-                              background: "linear-gradient(135deg, #9f7aea 0%, #805ad5 100%)"
-                            }}
-                            onClick={() => handleOpenPermissions(u)}
-                            title="Gérer les permissions personnalisées"
-                          >
-                            ⚙️ {screenSize.isMobile ? "" : "Permissions"}
-                          </button>
-                        )}
+                        {u.role?.toLowerCase() === "vendeuse" &&
+                          (typeof canManageUsers === "function" ? canManageUsers() : canManageUsers) && (
+                            <button
+                              style={{
+                                ...styles.permissionButton,
+                                background: "linear-gradient(135deg, #9f7aea 0%, #805ad5 100%)",
+                              }}
+                              onClick={() => handleOpenPermissions(u)}
+                              title="Gérer les permissions personnalisées"
+                            >
+                              ⚙️
+                              {!screenSize.isMobile && <span style={{ marginLeft: 4 }}>Permissions</span>}
+                            </button>
+                          )}
 
-                        {/* Verrouiller / Déverrouiller */}
+                        {/* Désactiver / Réactiver */}
                         {canManageUser(u) && (
                           <button
                             style={{
@@ -778,17 +841,15 @@ export default function UsersManagement() {
                                 ? "linear-gradient(135deg, #ed8936 0%, #dd6b20 100%)"
                                 : "linear-gradient(135deg, #48bb78 0%, #38a169 100%)",
                               opacity: updatingUser === u.id ? 0.6 : 1,
-                              cursor: updatingUser === u.id ? "not-allowed" : "pointer"
+                              cursor: updatingUser === u.id ? "not-allowed" : "pointer",
                             }}
                             onClick={() => toggleUserLock(u.id, u.actif, u.email)}
                             disabled={updatingUser === u.id}
-                            title={u.actif ? "Verrouiller" : "Déverrouiller"}
+                            title={u.actif ? "Désactiver" : "Réactiver"}
                           >
-                            {updatingUser === u.id ? "..." : u.actif ? "🔒" : "🔓"}
+                            {updatingUser === u.id ? "..." : u.actif ? "🚫" : "✅"}
                             {!screenSize.isMobile && (
-                              <span style={{ marginLeft: 6 }}>
-                                {u.actif ? "Verrouiller" : "Déverrouiller"}
-                              </span>
+                              <span style={{ marginLeft: 6 }}>{u.actif ? "Désactiver" : "Réactiver"}</span>
                             )}
                           </button>
                         )}
@@ -813,19 +874,15 @@ export default function UsersManagement() {
                 {invitations.map((inv) => (
                   <div key={inv.id} style={styles.invitationCard}>
                     <div style={styles.userInfo}>
-                      <div style={{ fontWeight: 600, color: "#2d3748", marginBottom: "5px" }}>
-                        {inv.email}
-                      </div>
-                      <div style={{ fontSize: "0.8em", color: "#6b7280" }}>
-                        Rôle: {inv.role}
-                      </div>
+                      <div style={{ fontWeight: 600, color: "#2d3748", marginBottom: "5px" }}>{inv.email}</div>
+                      <div style={{ fontSize: "0.8em", color: "#6b7280" }}>Rôle: {inv.role}</div>
                     </div>
 
                     <div
                       style={{
                         ...styles.statusBadge,
                         background: inv.statut === "pending" ? "#fff3cd" : "#d4edda",
-                        color: inv.statut === "pending" ? "#856404" : "#155724"
+                        color: inv.statut === "pending" ? "#856404" : "#155724",
                       }}
                     >
                       {inv.statut === "pending" ? "En attente" : "Acceptée"}
@@ -846,7 +903,7 @@ export default function UsersManagement() {
               style={{
                 marginBottom: "20px",
                 color: "black",
-                fontSize: screenSize.isMobile ? "1.3em" : "1.5em"
+                fontSize: screenSize.isMobile ? "1.3em" : "1.5em",
               }}
             >
               Inviter un utilisateur
@@ -861,6 +918,7 @@ export default function UsersManagement() {
                 onChange={(e) => setInviteEmail(e.target.value)}
                 required
                 disabled={sendingInvite}
+                autoComplete="email"
               />
 
               <select
@@ -880,14 +938,14 @@ export default function UsersManagement() {
                   flexDirection: screenSize.isMobile ? "column" : "row",
                   gap: "15px",
                   justifyContent: "flex-end",
-                  marginTop: "20px"
+                  marginTop: "20px",
                 }}
               >
                 <button
                   type="button"
                   style={{
                     ...styles.button,
-                    background: "linear-gradient(135deg, #6b7280 0%, #4a5568 100%)"
+                    background: "linear-gradient(135deg, #6b7280 0%, #4a5568 100%)",
                   }}
                   onClick={() => setShowInviteForm(false)}
                   disabled={sendingInvite}
@@ -912,7 +970,7 @@ export default function UsersManagement() {
                 textAlign: "center",
                 marginBottom: "25px",
                 color: "#48bb78",
-                fontSize: screenSize.isMobile ? "1.3em" : "1.5em"
+                fontSize: screenSize.isMobile ? "1.3em" : "1.5em",
               }}
             >
               Invitation créée!
@@ -936,7 +994,7 @@ export default function UsersManagement() {
                   fontWeight: "bold",
                   textAlign: "center",
                   margin: "10px 0",
-                  wordBreak: "break-all"
+                  wordBreak: "break-all",
                 }}
               >
                 {invitationCode.token}
@@ -954,7 +1012,7 @@ export default function UsersManagement() {
                   wordBreak: "break-all",
                   margin: "10px 0",
                   maxHeight: "100px",
-                  overflow: "auto"
+                  overflow: "auto",
                 }}
               >
                 {invitationCode.link}
@@ -966,14 +1024,14 @@ export default function UsersManagement() {
                 display: "flex",
                 flexDirection: screenSize.isMobile ? "column" : "row",
                 gap: "10px",
-                marginBottom: "20px"
+                marginBottom: "20px",
               }}
             >
               <button
                 style={{
                   ...styles.button,
                   background: "linear-gradient(135deg, #4299e1 0%, #3182ce 100%)",
-                  flex: 1
+                  flex: 1,
                 }}
                 onClick={() => copyText(invitationCode.link)}
               >
@@ -1001,9 +1059,11 @@ export default function UsersManagement() {
         open={permissionDialogOpen}
         onClose={handleClosePermissions}
         userId={selectedUser?.id}
-        userName={selectedUser?.prenom && selectedUser?.nom
-          ? `${selectedUser.prenom} ${selectedUser.nom}`
-          : selectedUser?.email}
+        userName={
+          selectedUser?.prenom && selectedUser?.nom
+            ? `${selectedUser.prenom} ${selectedUser.nom}`
+            : selectedUser?.email
+        }
         societeId={societeId}
         onPermissionsUpdated={handlePermissionsUpdated}
       />
@@ -1011,32 +1071,34 @@ export default function UsersManagement() {
       {/* Dialog Voir permissions */}
       {viewPermissionsOpen && selectedUser && (
         <div style={styles.modalOverlay}>
-          <div style={{
-            ...styles.modalContent,
-            maxWidth: screenSize.isMobile ? "100%" : "600px",
-            maxHeight: "90vh"
-          }}>
+          <div
+            style={{
+              ...styles.modalContent,
+              maxWidth: screenSize.isMobile ? "100%" : "600px",
+              maxHeight: "90vh",
+            }}
+          >
             <UserPermissionsDisplay
               user={{
                 ...selectedUser,
-                displayName: selectedUser.prenom && selectedUser.nom
-                  ? `${selectedUser.prenom} ${selectedUser.nom}`
-                  : selectedUser.email
+                displayName:
+                  selectedUser.prenom && selectedUser.nom
+                    ? `${selectedUser.prenom} ${selectedUser.nom}`
+                    : selectedUser.email,
               }}
               variant="dialog"
               showDetails={true}
             />
-            <div style={{
-              display: 'flex',
-              justifyContent: 'flex-end',
-              marginTop: '20px',
-              paddingTop: '15px',
-              borderTop: '1px solid #e2e8f0'
-            }}>
-              <button
-                style={styles.button}
-                onClick={handleCloseViewPermissions}
-              >
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "flex-end",
+                marginTop: "20px",
+                paddingTop: "15px",
+                borderTop: "1px solid #e2e8f0",
+              }}
+            >
+              <button style={styles.button} onClick={handleCloseViewPermissions}>
                 Fermer
               </button>
             </div>

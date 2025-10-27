@@ -19,3 +19,25 @@ https://claude.ai/share/98d742bd-9f02-4f75-a5d1-40120ab66c8e//abonnement paypal
 
 
 https://claude.ai/chat/896e723f-d20c-4a2f-a5cd-b359b0bf6b69// formes juridiques
+
+
+
+
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // This rule allows anyone with your Firestore database reference to view, edit,
+    // and delete all data in your Firestore database. It is useful for getting
+    // started, but it is configured to expire after 30 days because it
+    // leaves your app open to attackers. At that time, all client
+    // requests to your Firestore database will be denied.
+    //
+    // Make sure to write security rules for your app before that time, or else
+    // all client requests to your Firestore database will be denied until you Update
+    // your rules
+    match /{document=**} {
+      allow read, write: if request.time < timestamp.date(2026, 8, 28);
+    }
+  }
+}

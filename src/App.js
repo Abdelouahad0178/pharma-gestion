@@ -1,4 +1,4 @@
-// src/App.js - Synchro ventes -> stock + Clients + Analytics + Legal + BackToTop (complet)
+// src/App.js - Synchro ventes -> stock + Clients + Analytics + Legal + Charges + BackToTop (complet)
 
 import React, { useState, useEffect, useRef } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate, useLocation } from 'react-router-dom';
@@ -35,7 +35,11 @@ import LegalDocuments from './components/legal/LegalDocuments';
 // 🆕 Page Abonnement (PayPal)
 import Abonnement from './pages/Abonnement';
 
-// 🢁 Bouton flottant “Retour en haut”
+// 🆕 Modules Charges - Gestion des charges
+import ChargesPersonnels from './components/charges/ChargesPersonnels';
+import ChargesDivers from './components/charges/ChargesDivers';
+
+// 🢁 Bouton flottant "Retour en haut"
 import BackToTop from './components/common/BackToTop';
 
 // Contexte & styles
@@ -347,6 +351,10 @@ function AppWrapper() {
           <Route path="/commandes/nouveau" element={<Protected permission="voir_ventes"><NouvelleCommande /></Protected>} />
           <Route path="/devis-factures" element={<Protected permission="voir_ventes"><DevisFactures /></Protected>} />
           <Route path="/paiements" element={<Protected permission="voir_ventes"><Paiements /></Protected>} />
+
+          {/* 🆕 Modules Charges - Gestion des charges personnels et diverses */}
+          <Route path="/charges-personnels" element={<Protected permission="voir_dashboard"><ChargesPersonnels /></Protected>} />
+          <Route path="/charges-divers" element={<Protected permission="voir_dashboard"><ChargesDivers /></Protected>} />
 
           {/* Analytics - Statistiques */}
           <Route path="/analytics" element={<Protected permission="voir_dashboard"><Analytics /></Protected>} />

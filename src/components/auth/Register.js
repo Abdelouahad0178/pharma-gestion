@@ -3,7 +3,26 @@ import React, { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { createUserWithEmailAndPassword, updateProfile } from "firebase/auth";
 import { auth, db } from "../../firebase/config";
-import { doc, setDoc, collection, query, where, getDocs, serverTimestamp } from "firebase/firestore";
+import {
+  doc,
+  setDoc,
+  collection,
+  query,
+  where,
+  getDocs,
+  serverTimestamp,
+} from "firebase/firestore";
+
+/* ===== Helper de debug : trace le chemin exact en cas d'échec règles ===== */
+async function safeSet(ref, data, options) {
+  try {
+    await setDoc(ref, data, options);
+    console.log("OK:", ref.path, data);
+  } catch (e) {
+    console.error("FAILED:", ref.path, e.code, e.message, { data });
+    throw e;
+  }
+}
 
 export default function Register() {
   const navigate = useNavigate();
@@ -24,7 +43,7 @@ export default function Register() {
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
 
-  // -------- Helpers --------
+  /* ================= Helpers ================= */
   const clearErrors = () => {
     setError("");
     setSuccess("");
@@ -33,7 +52,8 @@ export default function Register() {
   const generateCode = () => {
     const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
     let code = "";
-    for (let i = 0; i < 6; i++) code += chars.charAt(Math.floor(Math.random() * chars.length));
+    for (let i = 0; i < 6; i++)
+      code += chars.charAt(Math.floor(Math.random() * chars.length));
     return code;
   };
 
@@ -49,7 +69,7 @@ export default function Register() {
 
   const newSocieteIdFor = (uid) => `societe_${uid}_${Date.now()}`;
 
-  // -------- Flow: création d'une nouvelle société --------
+  /* ============= Flow: création d'une nouvelle société ============= */
   const handleCreateCompany = async (e) => {
     e?.preventDefault?.();
 
@@ -77,50 +97,70 @@ export default function Register() {
     clearErrors();
 
     try {
-      // 1) Créer le compte
+      // 1) Auth: créer le compte
       const cred = await createUserWithEmailAndPassword(auth, emailTrim, password);
       const uid = cred.user.uid;
 
-      // Affichage nom si fourni (facultatif)
+      // 1bis) Profile displayName (facultatif)
       if (dnameTrim) {
         try {
           await updateProfile(cred.user, { displayName: dnameTrim });
-        } catch {}
+        } catch {
+          /* ignore */
+        }
       }
 
-      // 2) Générer code d'invitation unique (pour inviter des employés plus tard)
-      const invite = await generateUniqueInviteCode();
-
-      // 3) Créer la société
-      const societeId = newSocieteIdFor(uid);
-      await setDoc(doc(db, "societe", societeId), {
-        nom: pharmaNameTrim,
-        adresse: pharmaAddressTrim,
-        telephone: pharmaPhoneTrim || "",
-        invitationCode: invite,          // Disponible pour inviter plus tard
-        membres: [uid],                   // Le créateur est membre
-        ownerId: uid,                     // Propriétaire permanent
-        createdBy: uid,
-        createdAt: serverTimestamp(),
-        active: true,
-        plan: "basic",
-      });
-
-      // 4) Créer/compléter le doc utilisateur - CRÉATEUR = PROPRIÉTAIRE
-      await setDoc(
+      // 2) Créer users/{uid} D'ABORD (societeId:null) -> évite l’erreur de règles au bootstrap
+      await safeSet(
         doc(db, "users", uid),
         {
           email: emailTrim,
           displayName: dnameTrim || null,
-          role: "docteur",             // Rôle admin
-          societeId,                    // Lien vers la société
-          isOwner: true,                // Propriétaire permanent
+          role: "docteur", // ou "pharmacien" si tu préfères
+          isOwner: true,   // propriétaire permanent
+          societeId: null, // pas encore rattaché
           locked: false,
           active: true,
           adminPopup: null,
           paymentWarning: null,
           createdAt: serverTimestamp(),
           createdBy: uid,
+        },
+        { merge: true }
+      );
+
+      // 3) Générer le code d'invitation (pour les futurs employés)
+      const invite = await generateUniqueInviteCode();
+
+      // 4) Créer la société (bootstrap) avec ownerUid (⚠️ pas ownerId)
+      const societeId = newSocieteIdFor(uid);
+      await safeSet(doc(db, "societe", societeId), {
+        nom: pharmaNameTrim,
+        adresse: pharmaAddressTrim,
+        telephone: pharmaPhoneTrim || "",
+        invitationCode: invite,
+        membres: [uid],
+        ownerUid: uid, // <— IMPORTANT pour passer les règles
+        createdBy: uid,
+        createdAt: serverTimestamp(),
+        active: true,
+        plan: "basic",
+      });
+
+      // 5) Rattacher l'utilisateur à la société
+      await safeSet(
+        doc(db, "users", uid),
+        { societeId },
+        { merge: true }
+      );
+
+      // 6) (Optionnel) Paramètres par défaut de la société
+      await safeSet(
+        doc(db, "societe", societeId, "parametres", "default"),
+        {
+          devise: "MAD",
+          tva: 0,
+          updatedAt: serverTimestamp(),
         },
         { merge: true }
       );
@@ -133,6 +173,10 @@ export default function Register() {
         setError("Un compte existe déjà avec cet email.");
       } else if (e?.code === "auth/weak-password") {
         setError("Le mot de passe doit contenir au moins 6 caractères.");
+      } else if (String(e?.message || "").includes("Missing or insufficient permissions")) {
+        setError(
+          "Permissions Firestore insuffisantes : vérifiez vos règles (création 'societe' avec 'ownerUid' + création de 'users/{uid}' avant), puis republiez."
+        );
       } else {
         setError("Erreur lors de la création de la pharmacie.");
       }
@@ -152,7 +196,7 @@ export default function Register() {
     clearErrors();
   };
 
-  // -------- UI --------
+  /* ================= UI ================= */
   return (
     <div
       className="fullscreen-table-wrap"
@@ -198,7 +242,10 @@ export default function Register() {
         )}
 
         {/* Formulaire : Création d'une nouvelle société (unique) */}
-        <form onSubmit={handleCreateCompany} style={{ display: "flex", flexDirection: "column", gap: 14, marginTop: 22 }}>
+        <form
+          onSubmit={handleCreateCompany}
+          style={{ display: "flex", flexDirection: "column", gap: 14, marginTop: 22 }}
+        >
           <div
             style={{
               background: "#e8f5e8",

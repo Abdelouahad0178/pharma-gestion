@@ -1,7 +1,10 @@
 // src/components/BackupExport.js
 import React, { useState } from 'react';
 import { db } from '../firebase/config';
-import { collection, getDocs, doc, getDoc } from 'firebase/firestore';
+import {
+  collection, getDocs, doc, getDoc,
+  query, where, // ⬅️ ajoutés
+} from 'firebase/firestore';
 import { useUserRole } from '../contexts/UserRoleContext';
 
 /* =========================
@@ -25,8 +28,6 @@ const toJsDate = (value) => {
       // Objet “timestamp-like”
       return new Date(value.seconds * 1000 + Math.floor((value.nanoseconds || 0) / 1e6));
     }
-    // NE PAS “deviner” les nombres (risque de casser des prix/quantités)
-    // NE PAS forcer les strings → on laisse tel quel si ce n'est pas déjà une Date.
     return null;
   } catch {
     return null;
@@ -38,33 +39,24 @@ const normalizeForExport = (data) => {
   const seen = new WeakSet();
 
   const _walk = (val) => {
-    // Null, primitives
     if (val === null) return null;
     const t = typeof val;
     if (t === 'string' || t === 'number' || t === 'boolean') return val;
     if (val === undefined) return null;
 
-    // Date / Timestamp Firestore
     const asDate = toJsDate(val);
     if (asDate) return asDate.toISOString();
 
-    // Tableaux
-    if (Array.isArray(val)) {
-      return val.map((item) => _walk(item));
-    }
+    if (Array.isArray(val)) return val.map((item) => _walk(item));
 
-    // Objets
     if (t === 'object') {
-      if (seen.has(val)) return null; // évite cycles improbables
+      if (seen.has(val)) return null;
       seen.add(val);
       const out = {};
-      for (const k of Object.keys(val)) {
-        out[k] = _walk(val[k]);
-      }
+      for (const k of Object.keys(val)) out[k] = _walk(val[k]);
       return out;
     }
 
-    // Fallback
     return val;
   };
 
@@ -101,7 +93,6 @@ export default function BackupExport() {
       const start = Date.now();
       const exportDate = new Date();
 
-      // Métadonnées d’export enrichies (ISO + FR + ms)
       const backup = {
         metadata: {
           exportDateIso: exportDate.toISOString(),
@@ -209,35 +200,38 @@ export default function BackupExport() {
         currentCollection++;
       }
 
-      // Export utilisateurs (propriétaire uniquement)
-      if (isOwner) {
+      // Export utilisateurs — propriétaire OU docteur (conforme aux règles)
+      if (isOwner || role === 'docteur') {
         setStatus('🔄 Export utilisateurs...');
         try {
-          const usersRef = collection(db, 'users');
-          const usersSnap = await getDocs(usersRef);
+          // ✅ IMPORTANT : requête filtrée côté serveur pour respecter les règles
+          const usersQ = query(collection(db, 'users'), where('societeId', '==', societeId));
+          const usersSnap = await getDocs(usersQ);
+
           backup.data.users = [];
+          let count = 0;
 
           usersSnap.forEach((userDoc) => {
-            const u = userDoc.data();
-            if (u?.societeId === societeId) {
-              const clean = normalizeForExport(u);
-              backup.data.users.push({
-                id: userDoc.id,
-                ...clean,
-                password: undefined, // sera supprimé au stringify
-                _exportedAt: new Date().toISOString(),
-              });
-              totalDocuments++;
-            }
+            const clean = normalizeForExport(userDoc.data());
+            backup.data.users.push({
+              id: userDoc.id,
+              ...clean,
+              password: undefined, // sera supprimé au stringify
+              _exportedAt: new Date().toISOString(),
+            });
+            count++;
+            totalDocuments++;
           });
 
           backup.statistics.collectionsDetails.users = {
             label: '👥 Utilisateurs',
-            count: backup.data.users.length,
+            count,
             priority: 'high',
             exported: true,
             exportedAt: new Date().toISOString(),
           };
+
+          console.log(`✅ 👥 Utilisateurs: ${count} doc(s) exporté(s)`);
         } catch (err) {
           console.warn('⚠️ Erreur export utilisateurs:', err);
           backup.data.users = [];
@@ -299,7 +293,7 @@ export default function BackupExport() {
       setStatus('📁 Génération du fichier JSON...');
 
       // JSON final
-      const jsonString = JSON.stringify(backup, null, 2);
+      const jsonString = JSON.stringify(backup, (k, v) => (v === undefined ? null : v), 2);
       const fileSize = new Blob([jsonString]).size;
       backup.statistics.fileSize = fileSize;
 
@@ -398,7 +392,7 @@ export default function BackupExport() {
       const day = new Date().toISOString().split('T')[0];
       const fileName = `quick-backup-${day}.json`;
 
-      const blob = new Blob([JSON.stringify(quick, null, 2)], { type: 'application/json' });
+      const blob = new Blob([JSON.stringify(quick, (k, v) => (v === undefined ? null : v), 2)], { type: 'application/json' });
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
@@ -448,25 +442,6 @@ export default function BackupExport() {
         <p style={{ color: '#99b2d4', fontSize: '0.95rem' }}>
           Exportez vos données de <strong>{societeName || 'votre pharmacie'}</strong> en format JSON
         </p>
-      </div>
-
-      <div style={{
-        display: 'flex', justifyContent: 'space-between', marginBottom: 20,
-        padding: 15, background: '#2b3951', borderRadius: 8, fontSize: '0.9rem'
-      }}>
-        <div>
-          <span style={{ color: '#99b2d4' }}>👤 Utilisateur : </span>
-          <span style={{ color: '#e4edfa', fontWeight: 600 }}>{user.email}</span>
-        </div>
-        <div>
-          <span style={{ color: '#99b2d4' }}>🔑 Rôle : </span>
-          <span style={{
-            color: isOwner ? '#28a745' : role === 'docteur' ? '#ffc107' : '#17a2b8',
-            fontWeight: 600
-          }}>
-            {isOwner ? '👑 Propriétaire' : role === 'docteur' ? '⚕️ Docteur' : '👩‍💼 Vendeuse'}
-          </span>
-        </div>
       </div>
 
       {loading && progress > 0 && (

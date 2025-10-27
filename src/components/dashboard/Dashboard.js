@@ -1,4 +1,4 @@
-// src/components/dashboard/Dashboard.js - DASHBOARD FUSION S1/S2 (uniquement affichage)
+// src/components/dashboard/Dashboard.js - DASHBOARD FUSION S1/S2 avec intégration charges
 import React, { useState, useEffect, useMemo, useCallback, memo } from "react";
 import { db } from "../../firebase/config";
 import {
@@ -212,7 +212,8 @@ function isSupplierPayment(p) {
   return [
     "achat","achats","fournisseur","fournisseurs",
     "supplier","suppliers","purchase","purchases",
-    "reglementfournisseur","reglement_fournisseur"
+    "reglementfournisseur","reglement_fournisseur",
+    "chargepersonnel","chargediverse"
   ].includes(t);
 }
 
@@ -515,7 +516,7 @@ export default function Dashboard() {
     const caisseDecaissements = pSupplierCash.reduce((s, p) => s + (Number(p?.montant) || 0), 0);
     const caisseSolde = caisseEncaissements - caisseDecaissements;
 
-    // Ruptures & péremptions (on laisse les lots distincts, mais on nettoie -S2 pour lisibilité)
+    // Ruptures & péremptions
     let rows = [];
     (Array.isArray(stock) ? stock : []).forEach((item) => {
       const q = Number(item.quantite) || 0;
@@ -689,7 +690,7 @@ export default function Dashboard() {
         <div style={styles.content}>
           <div style={styles.grid}>
             <KPICard
-              badge={showAllVentes ? "TOUS" : "S1"}
+              badge={showAllVentes ? "2" : "1"}  /* 1 = S1, 2 = Tous */
               emoji="💰"
               value={{ 
                 text: formatDH(stats.totalVentes),
@@ -698,12 +699,12 @@ export default function Dashboard() {
               label={`Ventes (${periode})`}
               onDoubleClick={() => setShowAllVentes(v => !v)}
               style={styles.kpiCard}
-              title="Double-clic: basculer S1 / S1+S2"
+              title="Double-clic: basculer 1 (S1) / 2 (Tous)"
               isMobile={isMobile}
             />
 
             <KPICard
-              badge={showAllAchats ? "TOUS" : "S1"}
+              badge={showAllAchats ? "2" : "1"}  /* 1 = S1, 2 = Tous */
               emoji="🛒"
               value={{ 
                 text: formatDH(stats.totalAchats),
@@ -712,7 +713,7 @@ export default function Dashboard() {
               label={`Achats (${periode})`}
               onDoubleClick={() => setShowAllAchats(v => !v)}
               style={styles.kpiCard}
-              title="Double-clic: basculer S1 / S1+S2"
+              title="Double-clic: basculer 1 (S1) / 2 (Tous)"
               isMobile={isMobile}
             />
 
