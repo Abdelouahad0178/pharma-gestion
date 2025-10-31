@@ -43,7 +43,6 @@ async function ensureMembership(user, societeId) {
           ...base,
           createdAt: Timestamp.now(),
           societeId,
-          // rôle par défaut si inexistant côté backend
           role: "vendeuse",
         },
         { merge: true }
@@ -63,7 +62,6 @@ async function ensureMembership(user, societeId) {
       );
     }
   } catch (e) {
-    // on ne bloque pas l’UI, mais on logge
     console.warn("[ensureMembership] ", e?.message || e);
   }
 }
@@ -285,9 +283,26 @@ function CameraBarcodeInlineModal({ open, onClose, onDetected }) {
 }
 
 /* ======================================================
-   Composant principal
+   Composant principal (avec Lazy On/Off)
 ====================================================== */
 export default function Ventes() {
+  /* ===== Lazy: activation manuelle ===== */
+  const [active, setActive] = useState(() => {
+    try {
+      const saved = localStorage.getItem("ventes_active");
+      return saved === "1" ? true : false;
+    } catch {
+      return false;
+    }
+  });
+  const toggleActive = useCallback(() => {
+    setActive((v) => {
+      const next = !v;
+      try { localStorage.setItem("ventes_active", next ? "1" : "0"); } catch {}
+      return next;
+    });
+  }, []);
+
   /* ===== Audio (bip) ===== */
   const audioCtxRef = useRef(null);
   const getAudioCtx = useCallback(() => {
@@ -301,6 +316,7 @@ export default function Ventes() {
   }, []);
   const playBeep = useCallback((freq = 880, dur = 120, type = "sine", volume = 0.15) => {
     try {
+      if (!active) return;
       const ctx = getAudioCtx();
       if (!ctx) return;
       if (ctx.state === "suspended") ctx.resume?.();
@@ -315,11 +331,12 @@ export default function Ventes() {
         try { osc.stop(); osc.disconnect(); gain.disconnect(); } catch {}
       }, dur);
     } catch {}
-  }, [getAudioCtx]);
+  }, [getAudioCtx, active]);
   const beepSuccess = useCallback(() => { playBeep(1175, 90); setTimeout(()=>playBeep(1568,110), 100); }, [playBeep]);
   const beepError   = useCallback(() => playBeep(220, 220, "square", 0.2), [playBeep]);
 
   useEffect(() => {
+    if (!active) return; // n’arme le déverrouillage audio que si actif
     const unlock = () => { try { getAudioCtx()?.resume?.(); } catch {} };
     window.addEventListener("click", unlock, { once: true });
     window.addEventListener("keydown", unlock, { once: true });
@@ -327,7 +344,7 @@ export default function Ventes() {
       window.removeEventListener("click", unlock);
       window.removeEventListener("keydown", unlock);
     };
-  }, [getAudioCtx]);
+  }, [getAudioCtx, active]);
 
   /* ===== Contexte utilisateur ===== */
   const { user, societeId, loading } = useUserRole();
@@ -383,91 +400,95 @@ export default function Ventes() {
   const [lastRealtimeBeat, setLastRealtimeBeat] = useState(null);
   const lastAddTsRef = useRef(0);
 
-  /* ===== CHARGEMENT ===== */
-  useEffect(() => { setWaiting(loading || !societeId || !user); }, [loading, societeId, user]);
-
-  // ✅ s’assurer au montage (et à chaque changement user/societe) que l’utilisateur est rattaché
-  useEffect(() => { if (user && societeId) { ensureMembership(user, societeId); } }, [user, societeId]);
-
-  /* ===== LOGGING ACTIVITÉ ===== */
-  const logActivity = useCallback(async (type, details) => {
-    if (!societeId || !user) return;
-    try {
-      await ensureMembership(user, societeId);
-      await addDoc(collection(db, "societe", societeId, "activities"), {
-        type,
-        userId: user.uid,
-        userEmail: user.email,
-        timestamp: Timestamp.now(),
-        details: {
-          ...details,
-          action: type,
-        },
-      });
-      console.log(`✅ Activité enregistrée: ${type}`);
-    } catch (e) {
-      console.error("Erreur logging activity:", e);
-    }
-  }, [societeId, user]);
-
-  /* ===== DATA (temps réel) ===== */
+  /* ===== CHARGEMENT (lié à active) ===== */
   useEffect(() => {
-    if (!societeId) return;
+    setWaiting(loading || !societeId || !user);
+  }, [loading, societeId, user]);
 
+  // S’assurer de l’appartenance seulement si actif
+  useEffect(() => {
+    if (!active) return;
+    if (user && societeId) { ensureMembership(user, societeId); }
+  }, [user, societeId, active]);
+
+  /* ===== DATA (temps réel) — ACTIVÉS SEULEMENT SI active === true ===== */
+  useEffect(() => {
+    if (!active || !societeId) return;
+
+    const unsubs = [];
+
+    // Paramètres
     const paramRef = doc(db, "societe", societeId, "parametres", "documents");
-    const unsubParam = onSnapshot(paramRef, (snap) => {
-      if (snap.exists()) setParametres(snap.data() || {});
-    }, (e)=>console.error("fetchParametres error:", e));
+    unsubs.push(
+      onSnapshot(paramRef, (snap) => {
+        if (snap.exists()) setParametres(snap.data() || {});
+      }, (e)=>console.error("fetchParametres error:", e))
+    );
 
+    // Ventes
     const qVentes = query(collection(db, "societe", societeId, "ventes"), orderBy("date", "desc"), limit(300));
-    const unsubVentes = onSnapshot(qVentes, (snap) => {
-      const arr = [];
-      snap.forEach((d) => arr.push({ id: d.id, ...d.data() }));
-      setVentes(arr);
-      setClients([...new Set(arr.map((v) => v.client).filter(Boolean))]);
-      setLastRealtimeBeat(new Date());
-    }, (e)=>{ console.error("Erreur chargement ventes:", e); setError("Erreur lors du chargement des ventes"); });
+    unsubs.push(
+      onSnapshot(qVentes, (snap) => {
+        const arr = [];
+        snap.forEach((d) => arr.push({ id: d.id, ...d.data() }));
+        setVentes(arr);
+        setClients([...new Set(arr.map((v) => v.client).filter(Boolean))]);
+        setLastRealtimeBeat(new Date());
+      }, (e)=>{ console.error("Erreur chargement ventes:", e); setError("Erreur lors du chargement des ventes"); })
+    );
 
+    // Lots
     const qStockEntries = collection(db, "societe", societeId, "stock_entries");
-    const unsubStockEntries = onSnapshot(qStockEntries, (snap) => {
-      const arr = [];
-      snap.forEach((d) => arr.push({ id: d.id, ...d.data() }));
-      arr.sort((a,b)=> {
-        const nameA = String(a.nom||a.name||"");
-        const nameB = String(b.nom||b.name||"");
-        if (nameA !== nameB) return nameA.localeCompare(nameB);
-        const da = safeParseDate(a.datePeremption);
-        const dbb = safeParseDate(b.datePeremption);
-        if (da && dbb) return da - dbb;
-        if (da && !dbb) return -1;
-        if (!da && dbb) return 1;
-        return 0;
-      });
-      setStockEntries(arr);
-      setLastRealtimeBeat(new Date());
-    },(e)=>{ console.error("fetchStockEntries error:", e); setStockEntries([]); });
+    unsubs.push(
+      onSnapshot(qStockEntries, (snap) => {
+        const arr = [];
+        snap.forEach((d) => arr.push({ id: d.id, ...d.data() }));
+        arr.sort((a,b)=> {
+          const nameA = String(a.nom||a.name||"");
+          const nameB = String(b.nom||b.name||"");
+          if (nameA !== nameB) return nameA.localeCompare(nameB);
+          const da = safeParseDate(a.datePeremption);
+          const dbb = safeParseDate(b.datePeremption);
+          if (da && dbb) return da - dbb;
+          if (da && !dbb) return -1;
+          if (!da && dbb) return 1;
+          return 0;
+        });
+        setStockEntries(arr);
+        setLastRealtimeBeat(new Date());
+      },(e)=>{ console.error("fetchStockEntries error:", e); setStockEntries([]); })
+    );
 
+    // Médicaments (catalogue)
     const qMedic = collection(db, "societe", societeId, "stock");
-    const unsubMedic = onSnapshot(qMedic, (snap)=> {
-      const arr = [];
-      snap.forEach((d)=> arr.push({ id:d.id, ...d.data() }));
-      setMedicaments(arr);
-    }, (e)=> console.error("Erreur chargement médicaments:", e));
+    unsubs.push(
+      onSnapshot(qMedic, (snap)=> {
+        const arr = [];
+        snap.forEach((d)=> arr.push({ id:d.id, ...d.data() }));
+        setMedicaments(arr);
+      }, (e)=> console.error("Erreur chargement médicaments:", e))
+    );
 
-    const unsubApplied = onSnapshot(collection(db, "societe", societeId, APPLIED_SALES_COLL), (snap)=> {
-      const s = new Set();
-      snap.forEach((d)=> { const data = d.data(); if (data?.applied) s.add(d.id); });
-      setAppliedSet(s);
-    }, (e)=> console.error("Erreur listener applied:", e));
+    // Flags applied
+    unsubs.push(
+      onSnapshot(collection(db, "societe", societeId, APPLIED_SALES_COLL), (snap)=> {
+        const s = new Set();
+        snap.forEach((d)=> { const data = d.data(); if (data?.applied) s.add(d.id); });
+        setAppliedSet(s);
+      }, (e)=> console.error("Erreur listener applied:", e))
+    );
 
-    const unsubDismissed = onSnapshot(collection(db, "societe", societeId, DISMISSED_COLL), (snap)=> {
-      const s = new Set();
-      snap.forEach((d)=> { const data = d.data(); if (data?.dismissed) s.add(d.id); });
-      setDismissedSet(s);
-    }, (e)=> console.error("Erreur listener dismissed:", e));
+    // Flags dismissed
+    unsubs.push(
+      onSnapshot(collection(db, "societe", societeId, DISMISSED_COLL), (snap)=> {
+        const s = new Set();
+        snap.forEach((d)=> { const data = d.data(); if (data?.dismissed) s.add(d.id); });
+        setDismissedSet(s);
+      }, (e)=> console.error("Erreur listener dismissed:", e))
+    );
 
-    return () => { unsubParam(); unsubVentes(); unsubStockEntries(); unsubMedic(); unsubApplied(); unsubDismissed(); };
-  }, [societeId]);
+    return () => { unsubs.forEach((u) => { try { u(); } catch {} }); };
+  }, [societeId, active]);
 
   /* ===== Agrégation catalogue ===== */
   const getAllAvailableMedicaments = useMemo(() => {
@@ -516,6 +537,7 @@ export default function Ventes() {
   const distinctPanierCount = useMemo(() => distinctCountByProduit(articles), [articles]);
 
   const ventesFiltrees = useMemo(() => {
+    if (!active) return []; // rien à afficher si inactif
     return ventes.filter((v) => {
       let keep = true;
       if (filterStatut && v.statutPaiement !== filterStatut) keep = false;
@@ -531,7 +553,7 @@ export default function Ventes() {
       }
       return keep;
     });
-  }, [ventes, filterStatut, searchTerm]);
+  }, [ventes, filterStatut, searchTerm, active]);
 
   /* ===================== Formulaire ===================== */
   const handleProduitChange = useCallback((value) => {
@@ -576,6 +598,7 @@ export default function Ventes() {
   /* ===================== Ajouter article ===================== */
   const handleAddArticle = useCallback((e) => {
     e?.preventDefault?.();
+    if (!active) return;
 
     const now = Date.now();
     if (now - lastAddTsRef.current < 400) return;
@@ -654,14 +677,39 @@ export default function Ventes() {
     setTimeout(() => setSuccess(""), 2000);
   }, [
     produit, quantite, prixUnitaire, remiseArticle, selectedLot, availableLots,
-    getAllAvailableMedicaments, medicaments, numeroArticle, beepError, beepSuccess
+    getAllAvailableMedicaments, medicaments, numeroArticle, beepError, beepSuccess, active
   ]);
 
-  const handleRemoveArticle = useCallback((idx) => setArticles((prev) => prev.filter((_, i) => i !== idx)), []);
+  const handleRemoveArticle = useCallback((idx) => {
+    if (!active) return;
+    setArticles((prev) => prev.filter((_, i) => i !== idx));
+  }, [active]);
 
   /* ===================== Enregistrement vente ===================== */
+  const logActivity = useCallback(async (type, details) => {
+    if (!active || !societeId || !user) return;
+    try {
+      await ensureMembership(user, societeId);
+      await addDoc(collection(db, "societe", societeId, "activities"), {
+        type,
+        userId: user.uid,
+        userEmail: user.email,
+        timestamp: Timestamp.now(),
+        details: {
+          ...details,
+          action: type,
+        },
+      });
+      console.log(`✅ Activité enregistrée: ${type}`);
+    } catch (e) {
+      console.error("Erreur logging activity:", e);
+    }
+  }, [societeId, user, active]);
+
   const handleAddVente = useCallback(async (e) => {
     e.preventDefault();
+    if (!active) return;
+
     if (!user || !societeId || !client || !dateVente || articles.length === 0) {
       setError("Veuillez remplir tous les champs et ajouter au moins un article");
       return;
@@ -839,9 +887,10 @@ export default function Ventes() {
     } finally {
       setIsSaving(false);
     }
-  }, [user, societeId, client, dateVente, articles, isEditing, editId, statutPaiement, modePaiement, notesVente, logActivity]);
+  }, [user, societeId, client, dateVente, articles, isEditing, editId, statutPaiement, modePaiement, notesVente, logActivity, active]);
 
   const handleEditVente = useCallback((vente) => {
+    if (!active) return;
     setEditId(vente.id);
     setIsEditing(true);
     setClient(vente.client || "(passant)");
@@ -852,10 +901,11 @@ export default function Ventes() {
     setArticles(vente.articles || []);
     setShowForm(true);
     setShowFinalizationSection(true);
-  }, []);
+  }, [active]);
 
   /* ===================== Suppression ===================== */
   const handleDeleteVente = useCallback(async (vente) => {
+    if (!active) return;
     if (!window.confirm(`Supprimer la vente de ${vente.client} ?\n\nLe stock sera automatiquement restauré pour tous les articles de cette vente.`)) return;
 
     setIsSaving(true);
@@ -919,7 +969,6 @@ export default function Ventes() {
         } catch (e) { console.warn("Suppression paiement liée: ", e); }
       });
 
-      // LOG ACTIVITÉ
       await logActivity("vente_supprimee", {
         client: vente.client,
         montant: vente.montantTotal,
@@ -936,12 +985,16 @@ export default function Ventes() {
     } finally {
       setIsSaving(false);
     }
-  }, [societeId, beepSuccess, beepError, user, logActivity]);
+  }, [societeId, beepSuccess, beepError, user, logActivity, active]);
 
-  const handleViewDetails = useCallback((vente) => { setSelectedVente(vente); setShowDetails(true); }, []);
+  const handleViewDetails = useCallback((vente) => {
+    if (!active) return;
+    setSelectedVente(vente); setShowDetails(true);
+  }, [active]);
 
   /* ===================== Dismiss / Undismiss ===================== */
   const toggleDismissLine = useCallback(async (venteId, lineIndex, dismiss) => {
+    if (!active) return;
     if (!societeId || !venteId) return;
     const opId = `${venteId}#${lineIndex}`;
     const ref = doc(db, "societe", societeId, DISMISSED_COLL, opId);
@@ -959,7 +1012,7 @@ export default function Ventes() {
       console.error(e);
       setError("Impossible de modifier le statut de sync de la ligne.");
     }
-  }, [societeId, user]);
+  }, [societeId, user, active]);
 
   /* ===================== Impression ===================== */
   const generateCachetHtml = useCallback(() => {
@@ -972,6 +1025,7 @@ export default function Ventes() {
   }, [parametres]);
 
   const handlePrintVente = useCallback((vente) => {
+    if (!active) return;
     const articlesV = Array.isArray(vente.articles) ? vente.articles : [];
     const total =
       vente.montantTotal ||
@@ -1021,7 +1075,7 @@ export default function Ventes() {
     <div class="footer"><p>${parametres.pied}</p><p style="font-size:12px;color:#6b7280;margin-top:10px;">Document imprimé le ${new Date().toLocaleString("fr-FR")} par ${user?.email || "Utilisateur"}</p></div>
     </body></html>`);
     w.document.close(); w.print();
-  }, [generateCachetHtml, parametres.entete, parametres.pied, user?.email]);
+  }, [generateCachetHtml, parametres.entete, parametres.pied, user?.email, active]);
 
   /* ===================== Utils ===================== */
   const resetForm = useCallback(() => {
@@ -1044,8 +1098,9 @@ export default function Ventes() {
     setShowFinalizationSection(false);
   }, []);
 
-  /* ===================== Scan ===================== */
+  /* ===================== Scan (douchette) seulement si actif ===================== */
   const onBarcodeDetected = useCallback((barcode) => {
+    if (!active) return;
     try {
       const isMatch = (obj) => BARCODE_FIELDS.some((f) => String(obj?.[f] || "") === String(barcode));
       setNumeroArticle(String(barcode || ""));
@@ -1081,9 +1136,10 @@ export default function Ventes() {
     } catch (e) {
       console.error(e); beepError(); setError("Erreur détecteur code-barres");
     }
-  }, [stockEntries, medicaments, handleAddArticle, beepSuccess, beepError]);
+  }, [stockEntries, medicaments, handleAddArticle, beepSuccess, beepError, active]);
 
   useEffect(() => {
+    if (!active) return;
     const opts = { minChars: 6, endKey: "Enter", timeoutMs: 250 };
     const state = { buf: "", timer: null };
 
@@ -1105,7 +1161,7 @@ export default function Ventes() {
 
     window.addEventListener("keydown", onKeyDown);
     return () => { window.removeEventListener("keydown", onKeyDown); clearTimeout(state.timer); };
-  }, [onBarcodeDetected]);
+  }, [onBarcodeDetected, active]);
 
   /* ===================== Rendu ===================== */
   if (waiting) {
@@ -1131,6 +1187,48 @@ export default function Ventes() {
     );
   }
 
+  /* ====== Vue “Veille” quand inactive ====== */
+  if (!active) {
+    return (
+      <div style={{minHeight:"100vh",background:"linear-gradient(135deg,#fafafa 0%,#f1f5f9 100%)",padding:20,fontFamily:'"Inter",-apple-system,BlinkMacSystemFont,sans-serif'}}>
+        <div style={{background:"white",borderRadius:24,padding:24,margin:"40px auto",maxWidth:900,boxShadow:"0 20px 40px rgba(0,0,0,0.06)",border:"1px solid #e5e7eb"}}>
+          <div style={{display:"flex",alignItems:"center",gap:14,marginBottom:12}}>
+            <div style={{width:44,height:44,borderRadius:12,display:"grid",placeItems:"center",background:"linear-gradient(135deg,#667eea,#764ba2)",color:"#fff",fontSize:22}}>🛍️</div>
+            <div>
+              <h1 style={{margin:0,fontSize:26,fontWeight:800,letterSpacing:.2,color:"#111827"}}>Ventes — Mode veille</h1>
+              <p style={{margin:"6px 0 0",color:"#6b7280"}}>
+                Cette page est en pause pour économiser les ressources. Activez-la pour afficher le tableau des ventes,
+                le panier et la synchronisation temps réel.
+              </p>
+            </div>
+            <button
+              onClick={toggleActive}
+              style={{marginLeft:"auto",background:"linear-gradient(135deg,#10b981,#059669)",color:"#fff",border:"none",padding:"12px 20px",borderRadius:12,fontWeight:800,cursor:"pointer",boxShadow:"0 8px 24px rgba(16,185,129,0.35)"}}
+            >
+              Activer la page Ventes
+            </button>
+          </div>
+
+          <div style={{marginTop:16,display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(220px,1fr))",gap:12}}>
+            <div style={{padding:16,borderRadius:16,background:"#f8fafc",border:"1px dashed #cbd5e1"}}>
+              <div style={{fontWeight:700,color:"#0f172a"}}>Listeners Firestore</div>
+              <div style={{fontSize:13,color:"#64748b"}}>Non démarrés</div>
+            </div>
+            <div style={{padding:16,borderRadius:16,background:"#f8fafc",border:"1px dashed #cbd5e1"}}>
+              <div style={{fontWeight:700,color:"#0f172a"}}>Scanner / Douchette</div>
+              <div style={{fontSize:13,color:"#64748b"}}>Désactivé</div>
+            </div>
+            <div style={{padding:16,borderRadius:16,background:"#f8fafc",border:"1px dashed #cbd5e1"}}>
+              <div style={{fontWeight:700,color:"#0f172a"}}>Consommation mémoire</div>
+              <div style={{fontSize:13,color:"#64748b"}}>Minimale</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  /* ====== Vue ACTIVE ====== */
   return (
     <div style={{minHeight:"100vh",background:"linear-gradient(135deg,#667eea 0%,#764ba2 100%)",padding:20,fontFamily:'"Inter",-apple-system,BlinkMacSystemFont,sans-serif'}}>
       {/* Header */}
@@ -1142,12 +1240,21 @@ export default function Ventes() {
             <div style={{marginTop:6}}><RealtimeBeat lastRealtimeBeat={lastRealtimeBeat} /></div>
           </div>
 
-          <button
-            onClick={() => { setShowForm((v) => !v); if (!showForm) resetForm(); }}
-            style={{background:showForm?"linear-gradient(135deg,#ef4444,#dc2626)":"linear-gradient(135deg,#3b82f6,#2563eb)",color:"white",border:"none",padding:"14px 28px",borderRadius:16,fontSize:16,fontWeight:600,cursor:"pointer",transition:"all 0.3s ease",boxShadow:"0 8px 25px rgba(59,130,246,0.3)"}}
-          >
-            {showForm ? "✕ Fermer" : "+ Nouvelle Vente"}
-          </button>
+          <div style={{display:"flex",gap:8}}>
+            <button
+              onClick={() => { setShowForm((v) => !v); if (!showForm) resetForm(); }}
+              style={{background:showForm?"linear-gradient(135deg,#ef4444,#dc2626)":"linear-gradient(135deg,#3b82f6,#2563eb)",color:"white",border:"none",padding:"14px 28px",borderRadius:16,fontSize:16,fontWeight:600,cursor:"pointer",transition:"all 0.3s ease",boxShadow:"0 8px 25px rgba(59,130,246,0.3)"}}
+            >
+              {showForm ? "✕ Fermer" : "+ Nouvelle Vente"}
+            </button>
+            <button
+              onClick={toggleActive}
+              title="Mettre la page en veille (arrête les flux temps réel)"
+              style={{background:"linear-gradient(135deg,#6b7280,#4b5563)",color:"#fff",border:"none",padding:"14px 18px",borderRadius:16,fontSize:14,fontWeight:700,cursor:"pointer"}}
+            >
+              Mettre en veille
+            </button>
+          </div>
         </div>
       </div>
 
@@ -1204,7 +1311,7 @@ export default function Ventes() {
             <span style={{ color: "#6b7280", fontSize: 12 }}>(Ou scannez avec votre douchette : validation via <b>Entrée</b>)</span>
           </div>
 
-          {/* ÉTAPE 1: Ajout d'articles */}
+          {/* Étape 1 */}
           <div style={{background:"linear-gradient(135deg,#f0f9ff,#e0f2fe)",borderRadius:16,padding:16,marginBottom:12,border:"2px solid #0ea5e9"}}>
             <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}}>
               <h3 style={{margin:0,color:"#0c4a6e",fontSize:18,fontWeight:700}}>
@@ -1316,7 +1423,7 @@ export default function Ventes() {
             </form>
           </div>
 
-          {/* Liste des articles (Panier) */}
+          {/* Panier */}
           {articles.length > 0 && (
             <div style={{background:"linear-gradient(135deg,#fff7ed,#fed7aa)",borderRadius:16,padding:16,marginBottom:12,border:"2px solid #f97316"}}>
               <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
@@ -1398,7 +1505,7 @@ export default function Ventes() {
             </div>
           )}
 
-          {/* ÉTAPE 2: Finalisation */}
+          {/* Étape 2 */}
           {showFinalizationSection && articles.length > 0 && (
             <div style={{background:"linear-gradient(135deg,#f3e8ff,#e9d5ff)",borderRadius:16,padding:16,border:"2px solid #8b5cf6"}}>
               <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}}>

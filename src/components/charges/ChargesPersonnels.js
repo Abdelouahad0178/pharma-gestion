@@ -1,16 +1,10 @@
-// src/components/charges/ChargesPersonnels.js - Version Responsive avec intégration Caisse
-import React, { useState, useEffect } from 'react';
+// src/components/charges/ChargesPersonnels.js
+// Design moderne aligné avec le reste du site + Responsive + TEMPS RÉEL
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   Box,
-  Paper,
   Typography,
   Button,
-  Table,
-  TableBody,
-  TableCell,
-  TableContainer,
-  TableHead,
-  TableRow,
   TextField,
   Dialog,
   DialogTitle,
@@ -27,16 +21,11 @@ import {
   Tabs,
   Tab,
   Alert,
-  Accordion,
-  AccordionSummary,
-  AccordionDetails,
-  Card,
-  CardContent,
-  CardActions,
   Stack,
   useMediaQuery,
-  useTheme,
-  Drawer,
+  Autocomplete,
+  Collapse,
+  Tooltip,
   Badge
 } from '@mui/material';
 import {
@@ -49,11 +38,10 @@ import {
   Search as SearchIcon,
   FilterList as FilterListIcon,
   Clear as ClearIcon,
-  ExpandMore as ExpandMoreIcon,
   AttachMoney as MoneyIcon,
   Close as CloseIcon,
-  Work as WorkIcon,
-  Phone as PhoneIcon
+  Inventory2 as Inventory2Icon,
+  ReceiptLong as ReceiptLongIcon
 } from '@mui/icons-material';
 import { db } from '../../firebase/config';
 import {
@@ -67,28 +55,73 @@ import {
   orderBy,
   where,
   Timestamp,
-  writeBatch
+  writeBatch,
+  limit,
+  onSnapshot
 } from 'firebase/firestore';
 import { useUserRole } from '../../contexts/UserRoleContext';
 
+/* ====================== Utils ====================== */
+const tryGetCollection = async (societeId, names, orderField = 'createdAt', orderDir = 'desc', max = 200) => {
+  for (const name of names) {
+    try {
+      const q = query(
+        collection(db, 'societe', societeId, name),
+        orderBy(orderField, orderDir),
+        limit(max)
+      );
+      const snap = await getDocs(q);
+      if (!snap.empty) {
+        return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      }
+    } catch (_e) {
+      // On essaie le prochain alias
+    }
+  }
+  return [];
+};
+
+const toFloat = (v) => {
+  const n = parseFloat(v);
+  return Number.isFinite(n) ? n : 0;
+};
+
+// Extrait l'URL "Create index" depuis un message d'erreur Firestore
+function extractIndexUrlFromError(err) {
+  const msg = String(err?.message || '');
+  const m = msg.match(/https?:\/\/[^\s)]+/i);
+  return m ? m[0] : '';
+}
+
 export default function ChargesPersonnels() {
   const { user, societeId } = useUserRole();
-  const theme = useTheme();
-  const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
-  const isTablet = useMediaQuery(theme.breakpoints.between('sm', 'md'));
-  const isDesktop = useMediaQuery(theme.breakpoints.up('md'));
+  
+  // Détection responsive
+  const isMobile = useMediaQuery('(max-width:768px)');
+  const isTablet = useMediaQuery('(min-width:769px) and (max-width:1024px)');
+  const isDesktop = useMediaQuery('(min-width:1025px)');
 
   const [charges, setCharges] = useState([]);
   const [filteredCharges, setFilteredCharges] = useState([]);
   const [loading, setLoading] = useState(true);
+
+  // Lien "Create index" si manquant
+  const [missingIndexUrl, setMissingIndexUrl] = useState('');
+
+  // Employés
+  const [employes, setEmployes] = useState([]);
+  const [loadingEmployes, setLoadingEmployes] = useState(false);
+
+  // Dialogues
   const [dialogOpen, setDialogOpen] = useState(false);
   const [detailsDialogOpen, setDetailsDialogOpen] = useState(false);
+
   const [editingCharge, setEditingCharge] = useState(null);
   const [selectedCharge, setSelectedCharge] = useState(null);
   const [currentTab, setCurrentTab] = useState(0);
-  const [filterDrawerOpen, setFilterDrawerOpen] = useState(false);
-  
+
   // Filtres
+  const [filtersOpen, setFiltersOpen] = useState(false);
   const [filters, setFilters] = useState({
     searchText: '',
     dateDebut: '',
@@ -97,9 +130,11 @@ export default function ChargesPersonnels() {
     typeDocument: ''
   });
 
-  // Formulaire
+  // Form CHARGE
+  const today = new Date().toISOString().split('T')[0];
   const [formData, setFormData] = useState({
     employe: '',
+    employeId: '',
     cin: '',
     telephone: '',
     adresse: '',
@@ -111,15 +146,27 @@ export default function ChargesPersonnels() {
     heuresSupplementaires: '',
     tauxHoraire: '',
     indemnites: '',
-    date: new Date().toISOString().split('T')[0],
+    date: today,
     typeDocument: '',
     numeroDocument: '',
-    dateDocument: new Date().toISOString().split('T')[0],
+    dateDocument: today,
     pieceJointe: '',
     description: '',
     notes: '',
     modePaiement: '',
     referenceVirement: ''
+  });
+
+  // Mode création rapide employé
+  const [newEmployeeMode, setNewEmployeeMode] = useState(false);
+  const [newEmployee, setNewEmployee] = useState({
+    nom: '',
+    cin: '',
+    telephone: '',
+    adresse: '',
+    numeroSecuriteSociale: '',
+    poste: '',
+    dateEmbauche: ''
   });
 
   const typesDocuments = [
@@ -153,71 +200,135 @@ export default function ChargesPersonnels() {
     'Autre'
   ];
 
-  // Charger les charges
+  /* =================== Charges en TEMPS RÉEL =================== */
   useEffect(() => {
     if (!user || !societeId) return;
-    
-    const fetchCharges = async () => {
-      try {
-        const q = query(
-          collection(db, 'societe', societeId, 'chargesPersonnels'),
-          orderBy('date', 'desc')
-        );
-        const snapshot = await getDocs(q);
-        const data = snapshot.docs.map(doc => ({
-          id: doc.id,
-          ...doc.data()
-        }));
+    setLoading(true);
+
+    const qCharges = query(
+      collection(db, 'societe', societeId, 'chargesPersonnels'),
+      orderBy('date', 'desc')
+    );
+
+    const unsub = onSnapshot(
+      qCharges,
+      (snap) => {
+        const data = snap.docs.map(d => ({ id: d.id, ...d.data() }));
         setCharges(data);
-        setFilteredCharges(data);
-      } catch (error) {
-        console.error('Erreur chargement charges:', error);
-      } finally {
+        setLoading(false);
+      },
+      (err) => {
+        console.error('Erreur listener charges:', err);
         setLoading(false);
       }
-    };
+    );
 
-    fetchCharges();
+    return () => unsub();
   }, [user, societeId]);
 
-  // Appliquer les filtres
+  /* =================== Employés (chargement ponctuel) =================== */
+  const loadEmployes = async () => {
+    if (!societeId) return;
+    setLoadingEmployes(true);
+    try {
+      const rows = await tryGetCollection(
+        societeId,
+        ['employes', 'Employes', 'salaries', 'Salaries', 'personnels'],
+        'createdAt',
+        'desc',
+        500
+      );
+      const normalized = rows.map(r => ({
+        id: r.id,
+        nom: r.nom || r.name || r.employe || '',
+        cin: r.cin || '',
+        telephone: r.telephone || r.tel || '',
+        adresse: r.adresse || r.address || '',
+        numeroSecuriteSociale: r.numeroSecuriteSociale || r.nss || '',
+        poste: r.poste || '',
+        dateEmbauche: r.dateEmbauche || '',
+        createdAt: r.createdAt || null,
+      }));
+      setEmployes(normalized);
+    } catch (e) {
+      console.error('Erreur chargement employes:', e);
+      setEmployes([]);
+    } finally {
+      setLoadingEmployes(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!societeId) return;
+    loadEmployes();
+  }, [societeId]);
+
+  /* =================== Préchargement dernière charge d'un salarié =================== */
+  const preloadLastCharge = async (employeId) => {
+    try {
+      const qLast = query(
+        collection(db, 'societe', societeId, 'chargesPersonnels'),
+        where('employeId', '==', employeId),
+        orderBy('date', 'desc'),
+        limit(1)
+      );
+      const snap = await getDocs(qLast);
+      if (snap.empty) return;
+
+      const last = { id: snap.docs[0].id, ...snap.docs[0].data() };
+
+      setFormData(prev => ({
+        ...prev,
+        salaire: last.salaire ?? prev.salaire ?? '',
+        prime: last.prime ?? prev.prime ?? '',
+        heuresSupplementaires: last.heuresSupplementaires ?? prev.heuresSupplementaires ?? '',
+        tauxHoraire: last.tauxHoraire ?? prev.tauxHoraire ?? '',
+        indemnites: last.indemnites ?? prev.indemnites ?? '',
+        typeDocument: last.typeDocument ?? prev.typeDocument ?? '',
+        numeroDocument: last.numeroDocument ?? prev.numeroDocument ?? '',
+        dateDocument: last.dateDocument || prev.dateDocument || today,
+        pieceJointe: last.pieceJointe ?? prev.pieceJointe ?? '',
+        description: last.description ?? prev.description ?? '',
+        notes: last.notes ?? prev.notes ?? '',
+        modePaiement: last.modePaiement ?? prev.modePaiement ?? '',
+        referenceVirement: last.referenceVirement ?? prev.referenceVirement ?? ''
+      }));
+      if (missingIndexUrl) setMissingIndexUrl('');
+    } catch (e) {
+      console.error('Erreur preload dernière charge:', e);
+      const url = extractIndexUrlFromError(e);
+      if (url) setMissingIndexUrl(url);
+    }
+  };
+
+  /* =================== Filtres =================== */
   useEffect(() => {
     let result = [...charges];
 
     if (filters.searchText) {
-      const searchLower = filters.searchText.toLowerCase();
+      const s = filters.searchText.toLowerCase();
       result = result.filter(charge =>
-        (charge.employe?.toLowerCase().includes(searchLower)) ||
-        (charge.cin?.toLowerCase().includes(searchLower)) ||
-        (charge.poste?.toLowerCase().includes(searchLower)) ||
-        (charge.description?.toLowerCase().includes(searchLower)) ||
-        (charge.numeroDocument?.toLowerCase().includes(searchLower))
+        (String(charge.employe || '').toLowerCase().includes(s)) ||
+        (String(charge.employeName || '').toLowerCase().includes(s)) ||
+        (String(charge.cin || '').toLowerCase().includes(s)) ||
+        (String(charge.poste || '').toLowerCase().includes(s)) ||
+        (String(charge.description || '').toLowerCase().includes(s)) ||
+        (String(charge.numeroDocument || '').toLowerCase().includes(s))
       );
     }
-
-    if (filters.dateDebut) {
-      result = result.filter(charge => charge.date >= filters.dateDebut);
-    }
-
-    if (filters.dateFin) {
-      result = result.filter(charge => charge.date <= filters.dateFin);
-    }
-
-    if (filters.poste) {
-      result = result.filter(charge => charge.poste === filters.poste);
-    }
-
-    if (filters.typeDocument) {
-      result = result.filter(charge => charge.typeDocument === filters.typeDocument);
-    }
+    if (filters.dateDebut) result = result.filter(c => (c.date || '') >= filters.dateDebut);
+    if (filters.dateFin)   result = result.filter(c => (c.date || '') <= filters.dateFin);
+    if (filters.poste)     result = result.filter(c => (c.poste || '') === filters.poste);
+    if (filters.typeDocument) result = result.filter(c => (c.typeDocument || '') === filters.typeDocument);
 
     setFilteredCharges(result);
   }, [filters, charges]);
 
-  // Compter les filtres actifs
-  const activeFiltersCount = Object.values(filters).filter(v => v !== '').length;
+  const activeFiltersCount = useMemo(
+    () => Object.values(filters).filter(v => v !== '').length,
+    [filters]
+  );
 
-  // Réinitialiser les filtres
   const handleResetFilters = () => {
     setFilters({
       searchText: '',
@@ -228,10 +339,10 @@ export default function ChargesPersonnels() {
     });
   };
 
-  // Réinitialiser le formulaire
   const resetForm = () => {
     setFormData({
       employe: '',
+      employeId: '',
       cin: '',
       telephone: '',
       adresse: '',
@@ -243,10 +354,10 @@ export default function ChargesPersonnels() {
       heuresSupplementaires: '',
       tauxHoraire: '',
       indemnites: '',
-      date: new Date().toISOString().split('T')[0],
+      date: today,
       typeDocument: '',
       numeroDocument: '',
-      dateDocument: new Date().toISOString().split('T')[0],
+      dateDocument: today,
       pieceJointe: '',
       description: '',
       notes: '',
@@ -255,80 +366,165 @@ export default function ChargesPersonnels() {
     });
     setEditingCharge(null);
     setCurrentTab(0);
+    setNewEmployeeMode(false);
+    setNewEmployee({
+      nom: '',
+      cin: '',
+      telephone: '',
+      adresse: '',
+      numeroSecuriteSociale: '',
+      poste: '',
+      dateEmbauche: ''
+    });
   };
 
-  // Calculer le montant total
+  /* ============== Auto-fill employé sélectionné ============== */
+  const applyEmployeeToForm = (emp) => {
+    if (!emp) return;
+    setFormData(prev => ({
+      ...prev,
+      employe: emp.nom || '',
+      employeId: emp.id || '',
+      cin: emp.cin || '',
+      telephone: emp.telephone || '',
+      adresse: emp.adresse || '',
+      numeroSecuriteSociale: emp.numeroSecuriteSociale || '',
+      poste: emp.poste || '',
+      dateEmbauche: emp.dateEmbauche || ''
+    }));
+  };
+
   const calculerTotal = (data = formData) => {
-    const salaire = parseFloat(data.salaire) || 0;
-    const prime = parseFloat(data.prime) || 0;
-    const heuresSupp = parseFloat(data.heuresSupplementaires) || 0;
-    const tauxHoraire = parseFloat(data.tauxHoraire) || 0;
-    const indemnites = parseFloat(data.indemnites) || 0;
-    const montantHS = heuresSupp * tauxHoraire;
-    return salaire + prime + montantHS + indemnites;
+    const salaire = toFloat(data.salaire);
+    const prime = toFloat(data.prime);
+    const hs = toFloat(data.heuresSupplementaires) * toFloat(data.tauxHoraire);
+    const indemnites = toFloat(data.indemnites);
+    return salaire + prime + hs + indemnites;
   };
 
-  // Ouvrir le dialogue
   const handleOpenDialog = (charge = null) => {
     if (charge) {
       setEditingCharge(charge);
-      setFormData({ ...charge });
+      setFormData({
+        employe: charge.employe || charge.employeName || '',
+        employeId: charge.employeId || '',
+        cin: charge.cin || '',
+        telephone: charge.telephone || '',
+        adresse: charge.adresse || '',
+        numeroSecuriteSociale: charge.numeroSecuriteSociale || '',
+        poste: charge.poste || '',
+        dateEmbauche: charge.dateEmbauche || '',
+        salaire: charge.salaire ?? '',
+        prime: charge.prime ?? '',
+        heuresSupplementaires: charge.heuresSupplementaires ?? '',
+        tauxHoraire: charge.tauxHoraire ?? '',
+        indemnites: charge.indemnites ?? '',
+        date: charge.date || today,
+        typeDocument: charge.typeDocument || '',
+        numeroDocument: charge.numeroDocument || '',
+        dateDocument: charge.dateDocument || today,
+        pieceJointe: charge.pieceJointe || '',
+        description: charge.description || '',
+        notes: charge.notes || '',
+        modePaiement: charge.modePaiement || '',
+        referenceVirement: charge.referenceVirement || ''
+      });
+      setNewEmployeeMode(false);
     } else {
       resetForm();
     }
     setDialogOpen(true);
   };
 
-  // Fermer le dialogue
   const handleCloseDialog = () => {
     setDialogOpen(false);
     resetForm();
   };
 
-  // Voir les détails
   const handleViewDetails = (charge) => {
     setSelectedCharge(charge);
     setDetailsDialogOpen(true);
   };
 
-  // ========== FONCTION MODIFIÉE POUR INTÉGRATION CAISSE ==========
+  /* =================== Save =================== */
   const handleSave = async () => {
     try {
+      let employeId = formData.employeId || '';
+      let employeName = formData.employe || '';
+
+      if (newEmployeeMode) {
+        if (!newEmployee.nom.trim()) {
+          alert("Veuillez saisir le nom du nouveau salarié.");
+          return;
+        }
+        const empDoc = await addDoc(collection(db, 'societe', societeId, 'employes'), {
+          nom: newEmployee.nom.trim(),
+          cin: (newEmployee.cin || '').trim(),
+          telephone: (newEmployee.telephone || '').trim(),
+          adresse: (newEmployee.adresse || '').trim(),
+          numeroSecuriteSociale: (newEmployee.numeroSecuriteSociale || '').trim(),
+          poste: (newEmployee.poste || '').trim(),
+          dateEmbauche: (newEmployee.dateEmbauche || '').trim(),
+          createdAt: Timestamp.now(),
+          createdBy: user.uid
+        });
+        employeId = empDoc.id;
+        employeName = newEmployee.nom.trim();
+        await loadEmployes();
+      } else {
+        const exists = employes.find(e => e.id === employeId);
+        if (!exists && !employeName) {
+          alert("Veuillez sélectionner un salarié existant ou créer un nouveau.");
+          return;
+        }
+      }
+
       const total = calculerTotal();
-      const montantHS = (parseFloat(formData.heuresSupplementaires) || 0) * (parseFloat(formData.tauxHoraire) || 0);
+      const montantHS = toFloat(formData.heuresSupplementaires) * toFloat(formData.tauxHoraire);
 
       const chargeData = {
-        ...formData,
-        salaire: parseFloat(formData.salaire) || 0,
-        prime: parseFloat(formData.prime) || 0,
-        heuresSupplementaires: parseFloat(formData.heuresSupplementaires) || 0,
-        tauxHoraire: parseFloat(formData.tauxHoraire) || 0,
-        indemnites: parseFloat(formData.indemnites) || 0,
+        employe: employeName,
+        employeName,
+        employeId: employeId || '',
+        cin: (newEmployeeMode ? newEmployee.cin : formData.cin) || '',
+        telephone: (newEmployeeMode ? newEmployee.telephone : formData.telephone) || '',
+        adresse: (newEmployeeMode ? newEmployee.adresse : formData.adresse) || '',
+        numeroSecuriteSociale: (newEmployeeMode ? newEmployee.numeroSecuriteSociale : formData.numeroSecuriteSociale) || '',
+        poste: (newEmployeeMode ? newEmployee.poste : formData.poste) || '',
+        dateEmbauche: (newEmployeeMode ? newEmployee.dateEmbauche : formData.dateEmbauche) || '',
+        salaire: toFloat(formData.salaire),
+        prime: toFloat(formData.prime),
+        heuresSupplementaires: toFloat(formData.heuresSupplementaires),
+        tauxHoraire: toFloat(formData.tauxHoraire),
+        indemnites: toFloat(formData.indemnites),
         montantHS,
         total,
+        date: formData.date,
+        typeDocument: formData.typeDocument || '',
+        numeroDocument: formData.numeroDocument || '',
+        dateDocument: formData.dateDocument || '',
+        pieceJointe: formData.pieceJointe || '',
+        description: formData.description || '',
+        notes: formData.notes || '',
+        modePaiement: formData.modePaiement || '',
+        referenceVirement: formData.referenceVirement || '',
         updatedAt: Timestamp.now(),
         updatedBy: user.uid
       };
 
       let chargeId;
-      
       if (editingCharge) {
-        // Mise à jour d'une charge existante
         await updateDoc(doc(db, 'societe', societeId, 'chargesPersonnels', editingCharge.id), chargeData);
         chargeId = editingCharge.id;
       } else {
-        // Création d'une nouvelle charge
-        chargeData.createdAt = Timestamp.now();
-        chargeData.createdBy = user.uid;
-        const docRef = await addDoc(collection(db, 'societe', societeId, 'chargesPersonnels'), chargeData);
-        chargeId = docRef.id;
+        const payload = { ...chargeData, createdAt: Timestamp.now(), createdBy: user.uid };
+        const ref = await addDoc(collection(db, 'societe', societeId, 'chargesPersonnels'), payload);
+        chargeId = ref.id;
       }
 
-      // ========== CRÉATION AUTOMATIQUE DU PAIEMENT POUR LA CAISSE ==========
-      // Si un mode de paiement est spécifié, créer un enregistrement dans la collection "paiements"
-      if (formData.modePaiement && formData.modePaiement !== '' && total > 0) {
+      if (formData.modePaiement && total > 0) {
         const paiementData = {
-          type: 'chargePersonnel',  // Identifiant pour le Dashboard
+          type: 'chargePersonnel',
           category: 'chargePersonnel',
           relatedTo: 'chargePersonnel',
           montant: total,
@@ -338,88 +534,51 @@ export default function ChargesPersonnels() {
           typePaiement: formData.modePaiement,
           date: formData.date,
           timestamp: Timestamp.now(),
-          description: `Charge personnel: ${formData.employe} - ${formData.poste || 'N/A'}`,
+          description: `Charge personnel: ${employeName} - ${(newEmployeeMode ? newEmployee.poste : formData.poste) || 'N/A'}`,
           reference: formData.referenceVirement || '',
           chargePersonnelId: chargeId,
-          employe: formData.employe,
-          poste: formData.poste || '',
+          employe: employeName,
+          poste: (newEmployeeMode ? newEmployee.poste : formData.poste) || '',
           createdAt: Timestamp.now(),
           createdBy: user.uid
         };
-
-        // Créer le document de paiement
         await addDoc(collection(db, 'societe', societeId, 'paiements'), paiementData);
       }
-
-      // Recharger les charges
-      const q = query(
-        collection(db, 'societe', societeId, 'chargesPersonnels'),
-        orderBy('date', 'desc')
-      );
-      const snapshot = await getDocs(q);
-      const data = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      }));
-      setCharges(data);
-      setFilteredCharges(data);
 
       handleCloseDialog();
     } catch (error) {
       console.error('Erreur enregistrement:', error);
-      alert('Erreur lors de l\'enregistrement');
+      alert("Erreur lors de l'enregistrement");
     }
   };
 
-  // Supprimer
   const handleDelete = async (charge) => {
-    if (!window.confirm(`Êtes-vous sûr de vouloir supprimer la charge de ${charge.employe} ?`)) return;
-
+    if (!window.confirm(`Supprimer la charge de ${charge.employe || charge.employeName} ?`)) return;
     try {
-      // Supprimer aussi les paiements liés
       const qPaiements = query(
         collection(db, 'societe', societeId, 'paiements'),
         where('chargePersonnelId', '==', charge.id)
       );
-      const paiementsSnapshot = await getDocs(qPaiements);
-      
-      const batch = writeBatch(db);
-      paiementsSnapshot.docs.forEach(doc => {
-        batch.delete(doc.ref);
-      });
-      
-      // Supprimer la charge
-      batch.delete(doc(db, 'societe', societeId, 'chargesPersonnels', charge.id));
-      
-      await batch.commit();
+      const snapP = await getDocs(qPaiements);
 
-      // Recharger les charges
-      const q = query(
-        collection(db, 'societe', societeId, 'chargesPersonnels'),
-        orderBy('date', 'desc')
-      );
-      const snapshot = await getDocs(q);
-      const data = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      }));
-      setCharges(data);
-      setFilteredCharges(data);
-    } catch (error) {
-      console.error('Erreur suppression:', error);
+      const batch = writeBatch(db);
+      snapP.docs.forEach(d => batch.delete(d.ref));
+      batch.delete(doc(db, 'societe', societeId, 'chargesPersonnels', charge.id));
+      await batch.commit();
+    } catch (e) {
+      console.error('Erreur suppression:', e);
       alert('Erreur lors de la suppression');
     }
   };
 
-  // Statistiques
+  /* =================== UI helpers =================== */
   const stats = {
-    total: filteredCharges.reduce((sum, c) => sum + (c.total || 0), 0),
+    total: filteredCharges.reduce((s, c) => s + (c.total || 0), 0),
     count: filteredCharges.length,
-    salaires: filteredCharges.reduce((sum, c) => sum + (c.salaire || 0), 0),
-    primes: filteredCharges.reduce((sum, c) => sum + (c.prime || 0), 0)
+    salaires: filteredCharges.reduce((s, c) => s + (c.salaire || 0), 0),
+    primes: filteredCharges.reduce((s, c) => s + (c.prime || 0), 0)
   };
 
-  // Couleur par poste
   const getPosteColor = (poste) => {
     const colors = {
       'Pharmacien': '#8b5cf6',
@@ -434,652 +593,990 @@ export default function ChargesPersonnels() {
     return colors[poste] || '#64748b';
   };
 
-  // Composant de filtres
-  const FiltersContent = () => (
-    <Box sx={{ p: isMobile ? 2 : 0 }}>
-      {isMobile && (
-        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
-          <Typography variant="h6" sx={{ fontWeight: 700 }}>Filtres</Typography>
-          <IconButton onClick={() => setFilterDrawerOpen(false)}>
-            <CloseIcon />
-          </IconButton>
-        </Box>
-      )}
+  // Styles modernes alignés avec le site
+  const styles = {
+    container: {
+      minHeight: '100vh',
+      background: 'linear-gradient(135deg, #EEF2FF 0%, #FDF2F8 100%)',
+      padding: isMobile ? '10px' : isTablet ? '20px' : '30px',
+      fontFamily: 'Inter, Arial, sans-serif'
+    },
+    mainCard: {
+      background: 'white',
+      borderRadius: isMobile ? '15px' : isTablet ? '20px' : '25px',
+      boxShadow: '0 30px 60px rgba(0,0,0,0.15)',
+      overflow: 'hidden',
+      margin: '0 auto',
+      maxWidth: isDesktop ? '1400px' : '100%'
+    },
+    header: {
+      background: 'linear-gradient(135deg, #4a5568 0%, #2d3748 100%)',
+      padding: isMobile ? '20px 15px' : isTablet ? '30px 20px' : '40px',
+      textAlign: 'center',
+      color: 'white'
+    },
+    title: {
+      fontSize: isMobile ? '1.8em' : isTablet ? '2.2em' : '2.5em',
+      fontWeight: 800,
+      margin: 0
+    },
+    subtitle: {
+      marginTop: '10px',
+      opacity: 0.9,
+      fontSize: isMobile ? '0.9em' : '1em'
+    },
+    content: {
+      padding: isMobile ? '15px' : isTablet ? '25px' : '40px'
+    },
+    statsGrid: {
+      display: 'grid',
+      gridTemplateColumns: isMobile ? '1fr' : isTablet ? 'repeat(2, 1fr)' : 'repeat(4, 1fr)',
+      gap: isMobile ? '15px' : '20px',
+      marginBottom: isMobile ? '20px' : '30px'
+    },
+    statCard: {
+      background: 'linear-gradient(135deg, #f8fafc 0%, #edf2f7 100%)',
+      padding: isMobile ? '15px' : '20px',
+      borderRadius: isMobile ? '10px' : '15px',
+      border: '2px solid #e2e8f0',
+      textAlign: 'center'
+    },
+    statIcon: {
+      fontSize: isMobile ? '2em' : '2.5em',
+      marginBottom: '10px'
+    },
+    statLabel: {
+      color: '#64748b',
+      fontSize: isMobile ? '0.8em' : '0.9em',
+      fontWeight: 600,
+      textTransform: 'uppercase',
+      letterSpacing: '0.5px',
+      marginBottom: '5px'
+    },
+    statValue: {
+      color: '#2d3748',
+      fontSize: isMobile ? '1.5em' : '1.8em',
+      fontWeight: 800
+    },
+    actionBar: {
+      display: 'flex',
+      flexDirection: isMobile ? 'column' : 'row',
+      justifyContent: 'space-between',
+      alignItems: isMobile ? 'stretch' : 'center',
+      gap: isMobile ? '10px' : '15px',
+      marginBottom: isMobile ? '20px' : '25px'
+    },
+    button: {
+      background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+      border: 'none',
+      borderRadius: isMobile ? '8px' : '10px',
+      padding: isMobile ? '12px 16px' : '12px 20px',
+      color: 'white',
+      fontWeight: 700,
+      cursor: 'pointer',
+      fontSize: isMobile ? '0.9em' : '1em',
+      transition: 'all 0.3s ease',
+      minHeight: isMobile ? '44px' : 'auto',
+      width: isMobile ? '100%' : 'auto'
+    },
+    filterButton: {
+      background: '#f8fafc',
+      border: '2px solid #e2e8f0',
+      borderRadius: isMobile ? '8px' : '10px',
+      padding: isMobile ? '12px 16px' : '12px 20px',
+      color: '#2d3748',
+      fontWeight: 700,
+      cursor: 'pointer',
+      fontSize: isMobile ? '0.9em' : '1em',
+      transition: 'all 0.3s ease',
+      minHeight: isMobile ? '44px' : 'auto'
+    },
+    chargesGrid: {
+      display: 'grid',
+      gap: isMobile ? '15px' : '20px'
+    },
+    chargeCard: {
+      background: 'linear-gradient(135deg, #f8fafc 0%, #ffffff 100%)',
+      padding: isMobile ? '15px' : '20px',
+      borderRadius: isMobile ? '10px' : '15px',
+      border: '2px solid #e2e8f0',
+      transition: 'all 0.3s ease',
+      cursor: 'pointer'
+    }
+  };
 
-      <Stack spacing={2}>
-        <TextField
-          label="Rechercher"
-          value={filters.searchText}
-          onChange={(e) => setFilters({ ...filters, searchText: e.target.value })}
-          fullWidth
-          InputProps={{
-            endAdornment: <SearchIcon />
-          }}
-          placeholder="Nom, CIN, poste..."
-        />
-        
-        <TextField
-          label="Date début"
-          type="date"
-          value={filters.dateDebut}
-          onChange={(e) => setFilters({ ...filters, dateDebut: e.target.value })}
-          fullWidth
-          InputLabelProps={{ shrink: true }}
-        />
-        
-        <TextField
-          label="Date fin"
-          type="date"
-          value={filters.dateFin}
-          onChange={(e) => setFilters({ ...filters, dateFin: e.target.value })}
-          fullWidth
-          InputLabelProps={{ shrink: true }}
-        />
-        
-        <FormControl fullWidth>
-          <InputLabel>Poste</InputLabel>
-          <Select
-            value={filters.poste}
-            onChange={(e) => setFilters({ ...filters, poste: e.target.value })}
-            label="Poste"
-          >
-            <MenuItem value="">Tous</MenuItem>
-            {typesPostes.map(poste => (
-              <MenuItem key={poste} value={poste}>{poste}</MenuItem>
-            ))}
-          </Select>
-        </FormControl>
-        
-        <FormControl fullWidth>
-          <InputLabel>Type de document</InputLabel>
-          <Select
-            value={filters.typeDocument}
-            onChange={(e) => setFilters({ ...filters, typeDocument: e.target.value })}
-            label="Type de document"
-          >
-            <MenuItem value="">Tous</MenuItem>
-            {typesDocuments.map(type => (
-              <MenuItem key={type} value={type}>{type}</MenuItem>
-            ))}
-          </Select>
-        </FormControl>
-
-        {activeFiltersCount > 0 && (
-          <Button
-            variant="outlined"
-            startIcon={<ClearIcon />}
-            onClick={handleResetFilters}
-            fullWidth
-          >
-            Réinitialiser ({activeFiltersCount})
-          </Button>
-        )}
-      </Stack>
-    </Box>
-  );
-
+  /* =================== Render =================== */
   if (loading) {
     return (
-      <Box sx={{ p: 3 }}>
-        <Typography>Chargement...</Typography>
-      </Box>
+      <div style={styles.container}>
+        <div style={{...styles.mainCard, padding: '40px', textAlign: 'center'}}>
+          <div style={{ fontSize: '3em', marginBottom: '20px' }}>⏳</div>
+          <div style={{ fontSize: '1.2em', color: '#64748b', fontWeight: 600 }}>
+            Chargement des charges du personnel...
+          </div>
+        </div>
+      </div>
     );
   }
 
   return (
-    <Box sx={{ 
-      minHeight: '100vh',
-      background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-      p: { xs: 1, sm: 2, md: 3 }
-    }}>
-      <Paper sx={{ 
-        maxWidth: 1400, 
-        margin: '0 auto',
-        borderRadius: { xs: 2, sm: 3 },
-        overflow: 'hidden'
-      }}>
-        {/* En-tête */}
-        <Box sx={{ 
-          background: 'linear-gradient(135deg, #4a5568 0%, #2d3748 100%)',
-          color: 'white',
-          p: { xs: 2, sm: 3 }
-        }}>
-          <Typography variant={isMobile ? "h5" : "h4"} sx={{ fontWeight: 700, mb: 1 }}>
-            💼 Charges du Personnel
-          </Typography>
-          <Typography variant="body2" sx={{ opacity: 0.9 }}>
-            Gestion des salaires et charges sociales
-          </Typography>
-        </Box>
+    <div style={styles.container}>
+      <div style={styles.mainCard}>
+        {/* Header */}
+        <div style={styles.header}>
+          <h1 style={styles.title}>💼 Charges du Personnel</h1>
+          <p style={styles.subtitle}>
+            Gestion complète de la paie et des charges sociales
+          </p>
+        </div>
 
-        {/* Statistiques */}
-        <Box sx={{ p: { xs: 2, sm: 3 }, borderBottom: '2px solid #e2e8f0' }}>
-          <Grid container spacing={2}>
-            <Grid item xs={12} sm={6} md={3}>
-              <Card sx={{ background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', color: 'white' }}>
-                <CardContent sx={{ p: { xs: 2, sm: 2.5 } }}>
-                  <Typography variant="body2" sx={{ opacity: 0.9, mb: 0.5 }}>Total Charges</Typography>
-                  <Typography variant={isMobile ? "h5" : "h4"} sx={{ fontWeight: 800 }}>
-                    {stats.total.toFixed(2)} MAD
-                  </Typography>
-                </CardContent>
-              </Card>
-            </Grid>
-            <Grid item xs={12} sm={6} md={3}>
-              <Card sx={{ bgcolor: '#f8fafc' }}>
-                <CardContent sx={{ p: { xs: 2, sm: 2.5 } }}>
-                  <Typography variant="body2" color="text.secondary" sx={{ mb: 0.5 }}>Nombre d'employés</Typography>
-                  <Typography variant={isMobile ? "h5" : "h4"} sx={{ fontWeight: 700, color: '#06b6d4' }}>
-                    {stats.count}
-                  </Typography>
-                </CardContent>
-              </Card>
-            </Grid>
-            <Grid item xs={12} sm={6} md={3}>
-              <Card sx={{ bgcolor: '#f8fafc' }}>
-                <CardContent sx={{ p: { xs: 2, sm: 2.5 } }}>
-                  <Typography variant="body2" color="text.secondary" sx={{ mb: 0.5 }}>Total Salaires</Typography>
-                  <Typography variant={isMobile ? "h5" : "h4"} sx={{ fontWeight: 700, color: '#10b981' }}>
-                    {stats.salaires.toFixed(2)} MAD
-                  </Typography>
-                </CardContent>
-              </Card>
-            </Grid>
-            <Grid item xs={12} sm={6} md={3}>
-              <Card sx={{ bgcolor: '#f8fafc' }}>
-                <CardContent sx={{ p: { xs: 2, sm: 2.5 } }}>
-                  <Typography variant="body2" color="text.secondary" sx={{ mb: 0.5 }}>Total Primes</Typography>
-                  <Typography variant={isMobile ? "h5" : "h4"} sx={{ fontWeight: 700, color: '#f59e0b' }}>
-                    {stats.primes.toFixed(2)} MAD
-                  </Typography>
-                </CardContent>
-              </Card>
-            </Grid>
-          </Grid>
-        </Box>
-
-        {/* Actions et filtres */}
-        <Box sx={{ 
-          p: { xs: 2, sm: 3 },
-          display: 'flex',
-          flexDirection: { xs: 'column', sm: 'row' },
-          gap: 2,
-          alignItems: { xs: 'stretch', sm: 'center' },
-          justifyContent: 'space-between'
-        }}>
-          <Button
-            variant="contained"
-            startIcon={<AddIcon />}
-            onClick={() => handleOpenDialog()}
-            sx={{ 
-              background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-              fontWeight: 700
-            }}
-            fullWidth={isMobile}
-          >
-            Nouvelle Charge
-          </Button>
-
-          {isMobile ? (
-            <Badge badgeContent={activeFiltersCount} color="error">
-              <Button
-                variant="outlined"
-                startIcon={<FilterListIcon />}
-                onClick={() => setFilterDrawerOpen(true)}
-                fullWidth
+        <div style={styles.content}>
+          {/* Alerte index manquant */}
+          {missingIndexUrl && (
+            <div style={{
+              background: 'linear-gradient(135deg, #fef3c7 0%, #fde68a 100%)',
+              padding: '15px',
+              borderRadius: '10px',
+              marginBottom: '20px',
+              border: '2px solid #fbbf24',
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              flexWrap: 'wrap',
+              gap: '10px'
+            }}>
+              <span style={{ color: '#92400e', fontWeight: 600 }}>
+                ⚠️ Cette page nécessite un index Firestore pour charger les données
+              </span>
+              <button
+                style={{
+                  ...styles.button,
+                  background: 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)',
+                  padding: '8px 16px',
+                  fontSize: '0.9em',
+                  width: 'auto'
+                }}
+                onClick={() => window.open(missingIndexUrl, '_blank', 'noopener')}
               >
-                Filtres
-              </Button>
-            </Badge>
-          ) : (
-            <Box sx={{ minWidth: 300 }}>
-              {FiltersContent()}
-            </Box>
+                Créer l'index maintenant
+              </button>
+            </div>
           )}
-        </Box>
 
-        {/* Table responsive */}
-        {isDesktop ? (
-          <TableContainer>
-            <Table>
-              <TableHead>
-                <TableRow sx={{ bgcolor: '#f8fafc' }}>
-                  <TableCell sx={{ fontWeight: 700 }}>Employé</TableCell>
-                  <TableCell sx={{ fontWeight: 700 }}>Poste</TableCell>
-                  <TableCell sx={{ fontWeight: 700 }}>Date</TableCell>
-                  <TableCell sx={{ fontWeight: 700 }} align="right">Salaire</TableCell>
-                  <TableCell sx={{ fontWeight: 700 }} align="right">Prime</TableCell>
-                  <TableCell sx={{ fontWeight: 700 }} align="right">Total</TableCell>
-                  <TableCell sx={{ fontWeight: 700 }}>Mode paiement</TableCell>
-                  <TableCell sx={{ fontWeight: 700 }} align="center">Actions</TableCell>
-                </TableRow>
-              </TableHead>
-              <TableBody>
-                {filteredCharges.length === 0 ? (
-                  <TableRow>
-                    <TableCell colSpan={8} align="center" sx={{ py: 4 }}>
-                      <Typography color="text.secondary">Aucune charge trouvée</Typography>
-                    </TableCell>
-                  </TableRow>
-                ) : (
-                  filteredCharges.map((charge) => (
-                    <TableRow key={charge.id} hover>
-                      <TableCell>
-                        <Box>
-                          <Typography sx={{ fontWeight: 600 }}>{charge.employe}</Typography>
-                          {charge.cin && (
-                            <Typography variant="caption" color="text.secondary">
-                              CIN: {charge.cin}
-                            </Typography>
-                          )}
-                        </Box>
-                      </TableCell>
-                      <TableCell>
-                        <Chip
-                          label={charge.poste || 'N/A'}
-                          size="small"
-                          sx={{
-                            bgcolor: getPosteColor(charge.poste) + '20',
-                            color: getPosteColor(charge.poste),
-                            fontWeight: 600
-                          }}
-                        />
-                      </TableCell>
-                      <TableCell>{charge.date}</TableCell>
-                      <TableCell align="right">{charge.salaire?.toFixed(2)} MAD</TableCell>
-                      <TableCell align="right">{charge.prime?.toFixed(2)} MAD</TableCell>
-                      <TableCell align="right">
-                        <Typography sx={{ fontWeight: 700, color: '#667eea' }}>
-                          {charge.total?.toFixed(2)} MAD
-                        </Typography>
-                      </TableCell>
-                      <TableCell>
-                        {charge.modePaiement ? (
-                          <Chip 
-                            label={charge.modePaiement} 
-                            size="small"
-                            color={charge.modePaiement === 'Espèces' ? 'success' : 'default'}
-                          />
-                        ) : (
-                          <Typography variant="caption" color="text.secondary">N/A</Typography>
-                        )}
-                      </TableCell>
-                      <TableCell align="center">
-                        <IconButton onClick={() => handleViewDetails(charge)} size="small">
-                          <VisibilityIcon />
-                        </IconButton>
-                        <IconButton onClick={() => handleOpenDialog(charge)} size="small">
-                          <EditIcon />
-                        </IconButton>
-                        <IconButton onClick={() => handleDelete(charge)} size="small" color="error">
-                          <DeleteIcon />
-                        </IconButton>
-                      </TableCell>
-                    </TableRow>
-                  ))
-                )}
-              </TableBody>
-            </Table>
-          </TableContainer>
-        ) : (
-          <Box sx={{ p: { xs: 1, sm: 2 } }}>
+          {/* Stats Cards */}
+          <div style={styles.statsGrid}>
+            <div style={styles.statCard}>
+              <div style={{...styles.statIcon, color: '#667eea'}}>💰</div>
+              <div style={styles.statLabel}>Total Charges</div>
+              <div style={{...styles.statValue, color: '#667eea'}}>
+                {stats.total.toFixed(2)} MAD
+              </div>
+            </div>
+            <div style={styles.statCard}>
+              <div style={{...styles.statIcon, color: '#10b981'}}>📊</div>
+              <div style={styles.statLabel}>Entrées</div>
+              <div style={{...styles.statValue, color: '#10b981'}}>
+                {stats.count}
+              </div>
+            </div>
+            <div style={styles.statCard}>
+              <div style={{...styles.statIcon, color: '#3b82f6'}}>💵</div>
+              <div style={styles.statLabel}>Total Salaires</div>
+              <div style={{...styles.statValue, color: '#3b82f6'}}>
+                {stats.salaires.toFixed(2)} MAD
+              </div>
+            </div>
+            <div style={styles.statCard}>
+              <div style={{...styles.statIcon, color: '#f59e0b'}}>🎁</div>
+              <div style={styles.statLabel}>Total Primes</div>
+              <div style={{...styles.statValue, color: '#f59e0b'}}>
+                {stats.primes.toFixed(2)} MAD
+              </div>
+            </div>
+          </div>
+
+          {/* Action Bar */}
+          <div style={styles.actionBar}>
+            <button
+              style={styles.filterButton}
+              onClick={() => setFiltersOpen(v => !v)}
+            >
+              <Badge badgeContent={activeFiltersCount} color="error">
+                <FilterListIcon /> Filtres
+              </Badge>
+            </button>
+            <button
+              style={styles.button}
+              onClick={() => handleOpenDialog()}
+            >
+              <AddIcon /> Nouvelle charge
+            </button>
+          </div>
+
+          {/* Filtres */}
+          <Collapse in={filtersOpen} unmountOnExit>
+            <div style={{
+              background: 'linear-gradient(135deg, #f8fafc 0%, #edf2f7 100%)',
+              padding: isMobile ? '15px' : '20px',
+              borderRadius: '10px',
+              marginBottom: '20px',
+              border: '2px solid #e2e8f0'
+            }}>
+              <Grid container spacing={2}>
+                <Grid item xs={12} md={3}>
+                  <TextField
+                    label="Rechercher"
+                    value={filters.searchText}
+                    onChange={(e) => setFilters({ ...filters, searchText: e.target.value })}
+                    fullWidth
+                    size="small"
+                    placeholder="Nom, CIN, poste..."
+                    InputProps={{
+                      endAdornment: <SearchIcon fontSize="small" />,
+                      style: { background: 'white' }
+                    }}
+                  />
+                </Grid>
+                <Grid item xs={6} md={2}>
+                  <TextField
+                    label="Date début"
+                    type="date"
+                    value={filters.dateDebut}
+                    onChange={(e) => setFilters({ ...filters, dateDebut: e.target.value })}
+                    fullWidth
+                    size="small"
+                    InputLabelProps={{ shrink: true }}
+                    InputProps={{ style: { background: 'white' } }}
+                  />
+                </Grid>
+                <Grid item xs={6} md={2}>
+                  <TextField
+                    label="Date fin"
+                    type="date"
+                    value={filters.dateFin}
+                    onChange={(e) => setFilters({ ...filters, dateFin: e.target.value })}
+                    fullWidth
+                    size="small"
+                    InputLabelProps={{ shrink: true }}
+                    InputProps={{ style: { background: 'white' } }}
+                  />
+                </Grid>
+                <Grid item xs={6} md={2}>
+                  <FormControl fullWidth size="small">
+                    <InputLabel>Poste</InputLabel>
+                    <Select
+                      value={filters.poste}
+                      onChange={(e) => setFilters({ ...filters, poste: e.target.value })}
+                      label="Poste"
+                      style={{ background: 'white' }}
+                    >
+                      <MenuItem value="">Tous</MenuItem>
+                      {typesPostes.map(poste => (
+                        <MenuItem key={poste} value={poste}>{poste}</MenuItem>
+                      ))}
+                    </Select>
+                  </FormControl>
+                </Grid>
+                <Grid item xs={6} md={2}>
+                  <FormControl fullWidth size="small">
+                    <InputLabel>Type document</InputLabel>
+                    <Select
+                      value={filters.typeDocument}
+                      onChange={(e) => setFilters({ ...filters, typeDocument: e.target.value })}
+                      label="Type document"
+                      style={{ background: 'white' }}
+                    >
+                      <MenuItem value="">Tous</MenuItem>
+                      {typesDocuments.map(type => (
+                        <MenuItem key={type} value={type}>{type}</MenuItem>
+                      ))}
+                    </Select>
+                  </FormControl>
+                </Grid>
+                <Grid item xs={12} md={1}>
+                  <button
+                    style={{
+                      ...styles.filterButton,
+                      width: '100%',
+                      minHeight: '40px',
+                      padding: '8px'
+                    }}
+                    onClick={handleResetFilters}
+                  >
+                    <ClearIcon /> {activeFiltersCount > 0 && `(${activeFiltersCount})`}
+                  </button>
+                </Grid>
+              </Grid>
+            </div>
+          </Collapse>
+
+          {/* Liste des charges */}
+          <div style={styles.chargesGrid}>
             {filteredCharges.length === 0 ? (
-              <Box sx={{ textAlign: 'center', py: 4 }}>
-                <Typography color="text.secondary">Aucune charge trouvée</Typography>
-              </Box>
+              <div style={{
+                textAlign: 'center',
+                padding: '60px 20px',
+                color: '#64748b'
+              }}>
+                <div style={{ fontSize: '4em', marginBottom: '20px' }}>📋</div>
+                <div style={{ fontSize: '1.2em', fontWeight: 600 }}>
+                  Aucune charge trouvée
+                </div>
+                <div style={{ marginTop: '10px', fontSize: '0.9em' }}>
+                  Commencez par ajouter une charge du personnel
+                </div>
+              </div>
             ) : (
               filteredCharges.map((charge) => (
-                <Card key={charge.id} sx={{ mb: 2 }}>
-                  <CardContent>
-                    <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', mb: 1 }}>
-                      <Typography variant="h6" sx={{ fontWeight: 700 }}>
-                        {charge.employe}
-                      </Typography>
-                      <Chip
-                        label={charge.poste || 'N/A'}
-                        size="small"
-                        sx={{
-                          bgcolor: getPosteColor(charge.poste) + '20',
-                          color: getPosteColor(charge.poste),
-                          fontWeight: 600
+                <div
+                  key={charge.id}
+                  style={styles.chargeCard}
+                  onClick={() => handleViewDetails(charge)}
+                >
+                  <div style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'start',
+                    marginBottom: '15px',
+                    flexWrap: 'wrap',
+                    gap: '10px'
+                  }}>
+                    <div style={{ flex: 1, minWidth: '200px' }}>
+                      <div style={{
+                        fontSize: isMobile ? '1.1em' : '1.2em',
+                        fontWeight: 800,
+                        color: '#2d3748',
+                        marginBottom: '5px'
+                      }}>
+                        {charge.employe || charge.employeName}
+                      </div>
+                      <div style={{
+                        fontSize: '0.85em',
+                        color: '#64748b',
+                        fontWeight: 600
+                      }}>
+                        {charge.date} {charge.cin && `• CIN: ${charge.cin}`}
+                      </div>
+                    </div>
+                    <Chip
+                      label={charge.poste || 'N/A'}
+                      size="small"
+                      style={{
+                        background: getPosteColor(charge.poste) + '20',
+                        color: getPosteColor(charge.poste),
+                        fontWeight: 700,
+                        borderRadius: '20px',
+                        padding: '5px 12px'
+                      }}
+                    />
+                  </div>
+
+                  <div style={{
+                    display: 'grid',
+                    gridTemplateColumns: isMobile ? 'repeat(2, 1fr)' : 'repeat(4, 1fr)',
+                    gap: '15px',
+                    marginBottom: '15px',
+                    paddingTop: '15px',
+                    borderTop: '2px solid #e2e8f0'
+                  }}>
+                    <div>
+                      <div style={{
+                        fontSize: '0.75em',
+                        color: '#64748b',
+                        fontWeight: 600,
+                        textTransform: 'uppercase',
+                        marginBottom: '5px'
+                      }}>
+                        Salaire
+                      </div>
+                      <div style={{
+                        fontSize: '1em',
+                        fontWeight: 700,
+                        color: '#2d3748'
+                      }}>
+                        {(charge.salaire ?? 0).toFixed(2)} MAD
+                      </div>
+                    </div>
+                    <div>
+                      <div style={{
+                        fontSize: '0.75em',
+                        color: '#64748b',
+                        fontWeight: 600,
+                        textTransform: 'uppercase',
+                        marginBottom: '5px'
+                      }}>
+                        Prime
+                      </div>
+                      <div style={{
+                        fontSize: '1em',
+                        fontWeight: 700,
+                        color: '#2d3748'
+                      }}>
+                        {(charge.prime ?? 0).toFixed(2)} MAD
+                      </div>
+                    </div>
+                    <div>
+                      <div style={{
+                        fontSize: '0.75em',
+                        color: '#64748b',
+                        fontWeight: 600,
+                        textTransform: 'uppercase',
+                        marginBottom: '5px'
+                      }}>
+                        Total
+                      </div>
+                      <div style={{
+                        fontSize: '1.1em',
+                        fontWeight: 800,
+                        color: '#667eea'
+                      }}>
+                        {(charge.total ?? 0).toFixed(2)} MAD
+                      </div>
+                    </div>
+                    <div>
+                      <div style={{
+                        fontSize: '0.75em',
+                        color: '#64748b',
+                        fontWeight: 600,
+                        textTransform: 'uppercase',
+                        marginBottom: '5px'
+                      }}>
+                        Paiement
+                      </div>
+                      <div style={{
+                        fontSize: '0.85em',
+                        fontWeight: 700,
+                        color: '#2d3748'
+                      }}>
+                        {charge.modePaiement || 'N/A'}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div style={{
+                    display: 'flex',
+                    gap: '10px',
+                    justifyContent: 'flex-end',
+                    paddingTop: '10px',
+                    borderTop: '2px solid #e2e8f0'
+                  }}>
+                    <Tooltip title="Voir les détails">
+                      <IconButton
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleViewDetails(charge);
                         }}
-                      />
-                    </Box>
-                    
-                    <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-                      {charge.date} {charge.cin && `• CIN: ${charge.cin}`}
-                    </Typography>
-
-                    <Divider sx={{ my: 1 }} />
-
-                    <Grid container spacing={1}>
-                      <Grid item xs={6}>
-                        <Typography variant="caption" color="text.secondary">Salaire</Typography>
-                        <Typography variant="body2" sx={{ fontWeight: 600 }}>
-                          {charge.salaire?.toFixed(2)} MAD
-                        </Typography>
-                      </Grid>
-                      <Grid item xs={6}>
-                        <Typography variant="caption" color="text.secondary">Prime</Typography>
-                        <Typography variant="body2" sx={{ fontWeight: 600 }}>
-                          {charge.prime?.toFixed(2)} MAD
-                        </Typography>
-                      </Grid>
-                      <Grid item xs={6}>
-                        <Typography variant="caption" color="text.secondary">Total</Typography>
-                        <Typography variant="body1" sx={{ fontWeight: 700, color: '#667eea' }}>
-                          {charge.total?.toFixed(2)} MAD
-                        </Typography>
-                      </Grid>
-                      <Grid item xs={6}>
-                        <Typography variant="caption" color="text.secondary">Mode paiement</Typography>
-                        <Typography variant="body2" sx={{ fontWeight: 600 }}>
-                          {charge.modePaiement ? (
-                            <Chip 
-                              label={charge.modePaiement} 
-                              size="small"
-                              color={charge.modePaiement === 'Espèces' ? 'success' : 'default'}
-                            />
-                          ) : (
-                            'N/A'
-                          )}
-                        </Typography>
-                      </Grid>
-                    </Grid>
-                  </CardContent>
-                  <CardActions sx={{ justifyContent: 'flex-end', p: 1 }}>
-                    <IconButton onClick={() => handleViewDetails(charge)} size="small">
-                      <VisibilityIcon />
-                    </IconButton>
-                    <IconButton onClick={() => handleOpenDialog(charge)} size="small">
-                      <EditIcon />
-                    </IconButton>
-                    <IconButton onClick={() => handleDelete(charge)} size="small" color="error">
-                      <DeleteIcon />
-                    </IconButton>
-                  </CardActions>
-                </Card>
+                        size="small"
+                        style={{
+                          background: '#667eea',
+                          color: 'white',
+                          width: '36px',
+                          height: '36px'
+                        }}
+                      >
+                        <VisibilityIcon fontSize="small" />
+                      </IconButton>
+                    </Tooltip>
+                    <Tooltip title="Modifier">
+                      <IconButton
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleOpenDialog(charge);
+                        }}
+                        size="small"
+                        style={{
+                          background: '#10b981',
+                          color: 'white',
+                          width: '36px',
+                          height: '36px'
+                        }}
+                      >
+                        <EditIcon fontSize="small" />
+                      </IconButton>
+                    </Tooltip>
+                    <Tooltip title="Supprimer">
+                      <IconButton
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleDelete(charge);
+                        }}
+                        size="small"
+                        style={{
+                          background: '#ef4444',
+                          color: 'white',
+                          width: '36px',
+                          height: '36px'
+                        }}
+                      >
+                        <DeleteIcon fontSize="small" />
+                      </IconButton>
+                    </Tooltip>
+                  </div>
+                </div>
               ))
             )}
-          </Box>
-        )}
-      </Paper>
+          </div>
+        </div>
+      </div>
 
-      {/* Drawer pour les filtres sur mobile */}
-      <Drawer
-        anchor="bottom"
-        open={filterDrawerOpen}
-        onClose={() => setFilterDrawerOpen(false)}
-        PaperProps={{
-          sx: {
-            borderTopLeftRadius: 16,
-            borderTopRightRadius: 16,
-            maxHeight: '80vh'
-          }
-        }}
-      >
-        {FiltersContent()}
-      </Drawer>
-
-      {/* Dialog de formulaire avec tabs */}
-      <Dialog 
-        open={dialogOpen} 
+      {/* Dialog Formulaire - reste identique */}
+      <Dialog
+        open={dialogOpen}
         onClose={handleCloseDialog}
         fullScreen={isMobile}
-        maxWidth="md" 
+        maxWidth="md"
         fullWidth
         PaperProps={{
-          sx: {
-            borderRadius: isMobile ? 0 : 2
+          style: {
+            borderRadius: isMobile ? 0 : '15px',
+            boxShadow: '0 20px 60px rgba(0,0,0,0.3)'
           }
         }}
       >
-        <DialogTitle sx={{ 
-          fontWeight: 700,
-          color: '#1e293b',
+        <DialogTitle style={{
+          background: 'linear-gradient(135deg, #4a5568 0%, #2d3748 100%)',
+          color: 'white',
+          fontWeight: 800,
+          fontSize: isMobile ? '1.3em' : '1.5em',
+          padding: isMobile ? '15px' : '20px',
           display: 'flex',
           justifyContent: 'space-between',
-          alignItems: 'center',
-          p: { xs: 2, sm: 3 }
+          alignItems: 'center'
         }}>
-          <Typography variant={isMobile ? "h6" : "h5"} sx={{ fontWeight: 700 }}>
-            {editingCharge ? 'Modifier la charge' : 'Nouvelle charge'}
-          </Typography>
+          <span>{editingCharge ? 'Modifier la charge' : 'Nouvelle charge'}</span>
           {isMobile && (
-            <IconButton onClick={handleCloseDialog}>
+            <IconButton onClick={handleCloseDialog} style={{ color: 'white' }}>
               <CloseIcon />
             </IconButton>
           )}
         </DialogTitle>
-        
-        <DialogContent sx={{ p: { xs: 2, sm: 3 } }}>
-          <Tabs 
-            value={currentTab} 
+
+        <DialogContent style={{ padding: isMobile ? '15px' : '25px' }}>
+          <Tabs
+            value={currentTab}
             onChange={(e, v) => setCurrentTab(v)}
             variant={isMobile ? "scrollable" : "fullWidth"}
             scrollButtons={isMobile ? "auto" : false}
-            sx={{ borderBottom: 1, borderColor: 'divider', mb: 2 }}
+            sx={{
+              borderBottom: 2,
+              borderColor: 'divider',
+              mb: 3,
+              '& .MuiTab-root': {
+                textTransform: 'none',
+                fontWeight: 700,
+                fontSize: isMobile ? '0.85em' : '0.95em',
+                minHeight: isMobile ? '44px' : '48px'
+              },
+              '& .Mui-selected': {
+                color: '#667eea !important'
+              },
+              '& .MuiTabs-indicator': {
+                backgroundColor: '#667eea',
+                height: '3px'
+              }
+            }}
           >
-            <Tab icon={<PersonIcon />} label="Employé" />
-            <Tab icon={<MoneyIcon />} label="Rémunération" />
-            <Tab icon={<DescriptionIcon />} label="Document" />
-            <Tab icon={<MoneyIcon />} label="Paiement" />
+            <Tab icon={<PersonIcon />} iconPosition="start" label="Employé" />
+            <Tab icon={<MoneyIcon />} iconPosition="start" label="Rémunération" />
+            <Tab icon={<DescriptionIcon />} iconPosition="start" label="Document" />
+            <Tab icon={<MoneyIcon />} iconPosition="start" label="Paiement" />
           </Tabs>
 
-          {/* Tab 0: Informations employé */}
+          {/* EMPLOYÉ */}
           {currentTab === 0 && (
-            <Stack spacing={2} sx={{ mt: 2 }}>
-              <TextField
-                label="Nom de l'employé *"
-                value={formData.employe}
-                onChange={(e) => setFormData({ ...formData, employe: e.target.value })}
-                fullWidth
-                required
-              />
+            <Stack spacing={2} sx={{ mt: 1 }}>
+              <Alert
+                severity="info"
+                style={{
+                  background: 'linear-gradient(135deg, #dbeafe 0%, #bfdbfe 100%)',
+                  border: '2px solid #60a5fa',
+                  borderRadius: '10px'
+                }}
+              >
+                Sélectionnez un salarié existant : ses infos + la dernière rémunération seront chargées.
+              </Alert>
 
-              <Grid container spacing={2}>
-                <Grid item xs={12} sm={6}>
-                  <TextField
-                    label="CIN"
-                    value={formData.cin}
-                    onChange={(e) => setFormData({ ...formData, cin: e.target.value })}
-                    fullWidth
+              <Grid container spacing={2} alignItems="center">
+                <Grid item xs={12} md={8}>
+                  <Autocomplete
+                    options={employes}
+                    loading={loadingEmployes}
+                    getOptionLabel={(opt) => opt?.nom || ''}
+                    isOptionEqualToValue={(opt, val) => opt.id === val.id}
+                    value={
+                      formData.employeId
+                        ? (employes.find(e => e.id === formData.employeId) || null)
+                        : null
+                    }
+                    onChange={async (_e, value) => {
+                      if (value && value.id) {
+                        applyEmployeeToForm(value);
+                        setNewEmployeeMode(false);
+                        await preloadLastCharge(value.id);
+                      } else {
+                        setFormData(prev => ({ ...prev, employeId: '', employe: '' }));
+                      }
+                    }}
+                    renderInput={(params) => (
+                      <TextField
+                        {...params}
+                        label="Chercher salarié existant"
+                        placeholder="Tapez un nom..."
+                        size="small"
+                        disabled={newEmployeeMode}
+                      />
+                    )}
+                    noOptionsText="Aucun salarié"
                   />
                 </Grid>
-                <Grid item xs={12} sm={6}>
-                  <TextField
-                    label="Téléphone"
-                    value={formData.telephone}
-                    onChange={(e) => setFormData({ ...formData, telephone: e.target.value })}
-                    fullWidth
-                  />
+                <Grid item xs={12} md={4}>
+                  <button
+                    style={{
+                      ...styles.button,
+                      width: '100%',
+                      background: newEmployeeMode
+                        ? 'linear-gradient(135deg, #10b981 0%, #059669 100%)'
+                        : 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)'
+                    }}
+                    onClick={() => {
+                      setNewEmployeeMode((v) => !v);
+                      if (!newEmployeeMode) {
+                        setFormData(prev => ({ ...prev, employeId: '', employe: '' }));
+                      }
+                    }}
+                  >
+                    {newEmployeeMode ? 'Choisir salarié existant' : '➕ Créer nouveau salarié'}
+                  </button>
                 </Grid>
               </Grid>
 
-              <TextField
-                label="Adresse"
-                value={formData.adresse}
-                onChange={(e) => setFormData({ ...formData, adresse: e.target.value })}
-                fullWidth
-                multiline
-                rows={2}
-              />
-
-              <TextField
-                label="N° Sécurité Sociale"
-                value={formData.numeroSecuriteSociale}
-                onChange={(e) => setFormData({ ...formData, numeroSecuriteSociale: e.target.value })}
-                fullWidth
-              />
-
-              <FormControl fullWidth>
-                <InputLabel>Poste</InputLabel>
-                <Select
-                  value={formData.poste}
-                  onChange={(e) => setFormData({ ...formData, poste: e.target.value })}
-                  label="Poste"
-                >
-                  {typesPostes.map(poste => (
-                    <MenuItem key={poste} value={poste}>{poste}</MenuItem>
-                  ))}
-                </Select>
-              </FormControl>
-
-              <TextField
-                label="Date d'embauche"
-                type="date"
-                value={formData.dateEmbauche}
-                onChange={(e) => setFormData({ ...formData, dateEmbauche: e.target.value })}
-                fullWidth
-                InputLabelProps={{ shrink: true }}
-              />
+              {newEmployeeMode ? (
+                <div style={{
+                  background: 'linear-gradient(135deg, #f8fafc 0%, #edf2f7 100%)',
+                  padding: isMobile ? '15px' : '20px',
+                  borderRadius: '10px',
+                  border: '2px solid #e2e8f0'
+                }}>
+                  <Typography variant="subtitle1" style={{ fontWeight: 800, marginBottom: '15px', color: '#2d3748' }}>
+                    Nouveau salarié
+                  </Typography>
+                  <Grid container spacing={2}>
+                    <Grid item xs={12} md={6}>
+                      <TextField
+                        label="Nom *"
+                        value={newEmployee.nom}
+                        onChange={(e) => setNewEmployee({ ...newEmployee, nom: e.target.value })}
+                        fullWidth
+                        required
+                        size="small"
+                        style={{ background: 'white' }}
+                      />
+                    </Grid>
+                    <Grid item xs={12} md={6}>
+                      <TextField
+                        label="CIN"
+                        value={newEmployee.cin}
+                        onChange={(e) => setNewEmployee({ ...newEmployee, cin: e.target.value })}
+                        fullWidth
+                        size="small"
+                        style={{ background: 'white' }}
+                      />
+                    </Grid>
+                    <Grid item xs={12} md={6}>
+                      <TextField
+                        label="Téléphone"
+                        value={newEmployee.telephone}
+                        onChange={(e) => setNewEmployee({ ...newEmployee, telephone: e.target.value })}
+                        fullWidth
+                        size="small"
+                        style={{ background: 'white' }}
+                      />
+                    </Grid>
+                    <Grid item xs={12} md={6}>
+                      <FormControl fullWidth size="small">
+                        <InputLabel>Poste</InputLabel>
+                        <Select
+                          value={newEmployee.poste}
+                          onChange={(e) => setNewEmployee({ ...newEmployee, poste: e.target.value })}
+                          label="Poste"
+                          style={{ background: 'white' }}
+                        >
+                          {typesPostes.map(p => <MenuItem key={p} value={p}>{p}</MenuItem>)}
+                        </Select>
+                      </FormControl>
+                    </Grid>
+                    <Grid item xs={12}>
+                      <TextField
+                        label="Adresse"
+                        value={newEmployee.adresse}
+                        onChange={(e) => setNewEmployee({ ...newEmployee, adresse: e.target.value })}
+                        fullWidth
+                        size="small"
+                        style={{ background: 'white' }}
+                      />
+                    </Grid>
+                    <Grid item xs={12} md={6}>
+                      <TextField
+                        label="N° Sécurité Sociale"
+                        value={newEmployee.numeroSecuriteSociale}
+                        onChange={(e) => setNewEmployee({ ...newEmployee, numeroSecuriteSociale: e.target.value })}
+                        fullWidth
+                        size="small"
+                        style={{ background: 'white' }}
+                      />
+                    </Grid>
+                    <Grid item xs={12} md={6}>
+                      <TextField
+                        label="Date d'embauche"
+                        type="date"
+                        value={newEmployee.dateEmbauche}
+                        onChange={(e) => setNewEmployee({ ...newEmployee, dateEmbauche: e.target.value })}
+                        fullWidth
+                        size="small"
+                        InputLabelProps={{ shrink: true }}
+                        style={{ background: 'white' }}
+                      />
+                    </Grid>
+                  </Grid>
+                </div>
+              ) : (
+                <>
+                  <TextField
+                    label="Nom de l'employé *"
+                    value={formData.employe}
+                    onChange={(e) => setFormData({ ...formData, employe: e.target.value })}
+                    fullWidth
+                    required
+                    size="small"
+                  />
+                  <Grid container spacing={2}>
+                    <Grid item xs={12} md={6}>
+                      <TextField
+                        label="CIN"
+                        value={formData.cin}
+                        onChange={(e) => setFormData({ ...formData, cin: e.target.value })}
+                        fullWidth
+                        size="small"
+                      />
+                    </Grid>
+                    <Grid item xs={12} md={6}>
+                      <TextField
+                        label="Téléphone"
+                        value={formData.telephone}
+                        onChange={(e) => setFormData({ ...formData, telephone: e.target.value })}
+                        fullWidth
+                        size="small"
+                      />
+                    </Grid>
+                  </Grid>
+                  <TextField
+                    label="Adresse"
+                    value={formData.adresse}
+                    onChange={(e) => setFormData({ ...formData, adresse: e.target.value })}
+                    fullWidth
+                    multiline
+                    rows={2}
+                    size="small"
+                  />
+                  <Grid container spacing={2}>
+                    <Grid item xs={12} md={6}>
+                      <TextField
+                        label="N° Sécurité Sociale"
+                        value={formData.numeroSecuriteSociale}
+                        onChange={(e) => setFormData({ ...formData, numeroSecuriteSociale: e.target.value })}
+                        fullWidth
+                        size="small"
+                      />
+                    </Grid>
+                    <Grid item xs={12} md={6}>
+                      <FormControl fullWidth size="small">
+                        <InputLabel>Poste</InputLabel>
+                        <Select
+                          value={formData.poste}
+                          onChange={(e) => setFormData({ ...formData, poste: e.target.value })}
+                          label="Poste"
+                        >
+                          {typesPostes.map(poste => (
+                            <MenuItem key={poste} value={poste}>{poste}</MenuItem>
+                          ))}
+                        </Select>
+                      </FormControl>
+                    </Grid>
+                    <Grid item xs={12} md={6}>
+                      <TextField
+                        label="Date d'embauche"
+                        type="date"
+                        value={formData.dateEmbauche}
+                        onChange={(e) => setFormData({ ...formData, dateEmbauche: e.target.value })}
+                        fullWidth
+                        size="small"
+                        InputLabelProps={{ shrink: true }}
+                      />
+                    </Grid>
+                  </Grid>
+                </>
+              )}
             </Stack>
           )}
 
-          {/* Tab 1: Rémunération */}
+          {/* RÉMUNÉRATION */}
           {currentTab === 1 && (
-            <Stack spacing={2} sx={{ mt: 2 }}>
-              <Alert severity="info" icon={<MoneyIcon />}>
-                Tous les montants en MAD (Dirhams Marocains)
+            <Stack spacing={2} sx={{ mt: 1 }}>
+              <Alert severity="info" icon={<MoneyIcon />} style={{
+                background: 'linear-gradient(135deg, #dcfce7 0%, #bbf7d0 100%)',
+                border: '2px solid #22c55e',
+                borderRadius: '10px'
+              }}>
+                Tous les montants sont en MAD.
               </Alert>
-
-              <TextField
-                label="Salaire de base *"
-                type="number"
-                value={formData.salaire}
-                onChange={(e) => setFormData({ ...formData, salaire: e.target.value })}
-                fullWidth
-                required
-                InputProps={{
-                  endAdornment: <Typography variant="body2">MAD</Typography>
-                }}
-              />
-
-              <TextField
-                label="Prime"
-                type="number"
-                value={formData.prime}
-                onChange={(e) => setFormData({ ...formData, prime: e.target.value })}
-                fullWidth
-                InputProps={{
-                  endAdornment: <Typography variant="body2">MAD</Typography>
-                }}
-              />
-
               <Grid container spacing={2}>
-                <Grid item xs={12} sm={6}>
+                <Grid item xs={12} md={6}>
+                  <TextField
+                    label="Salaire de base *"
+                    type="number"
+                    value={formData.salaire}
+                    onChange={(e) => setFormData({ ...formData, salaire: e.target.value })}
+                    fullWidth
+                    required
+                    size="small"
+                    InputProps={{ endAdornment: <Typography variant="caption"> MAD</Typography> }}
+                  />
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <TextField
+                    label="Prime"
+                    type="number"
+                    value={formData.prime}
+                    onChange={(e) => setFormData({ ...formData, prime: e.target.value })}
+                    fullWidth
+                    size="small"
+                    InputProps={{ endAdornment: <Typography variant="caption"> MAD</Typography> }}
+                  />
+                </Grid>
+                <Grid item xs={12} md={6}>
                   <TextField
                     label="Heures supplémentaires"
                     type="number"
                     value={formData.heuresSupplementaires}
                     onChange={(e) => setFormData({ ...formData, heuresSupplementaires: e.target.value })}
                     fullWidth
-                    InputProps={{
-                      endAdornment: <Typography variant="body2">h</Typography>
-                    }}
+                    size="small"
+                    InputProps={{ endAdornment: <Typography variant="caption"> h</Typography> }}
                   />
                 </Grid>
-                <Grid item xs={12} sm={6}>
+                <Grid item xs={12} md={6}>
                   <TextField
                     label="Taux horaire"
                     type="number"
                     value={formData.tauxHoraire}
                     onChange={(e) => setFormData({ ...formData, tauxHoraire: e.target.value })}
                     fullWidth
-                    InputProps={{
-                      endAdornment: <Typography variant="body2">MAD/h</Typography>
-                    }}
+                    size="small"
+                    InputProps={{ endAdornment: <Typography variant="caption"> MAD/h</Typography> }}
+                  />
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <TextField
+                    label="Indemnités"
+                    type="number"
+                    value={formData.indemnites}
+                    onChange={(e) => setFormData({ ...formData, indemnites: e.target.value })}
+                    fullWidth
+                    size="small"
+                    InputProps={{ endAdornment: <Typography variant="caption"> MAD</Typography> }}
+                  />
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <TextField
+                    label="Date de la charge"
+                    type="date"
+                    value={formData.date}
+                    onChange={(e) => setFormData({ ...formData, date: e.target.value })}
+                    fullWidth
+                    size="small"
+                    InputLabelProps={{ shrink: true }}
                   />
                 </Grid>
               </Grid>
 
-              <TextField
-                label="Indemnités"
-                type="number"
-                value={formData.indemnites}
-                onChange={(e) => setFormData({ ...formData, indemnites: e.target.value })}
-                fullWidth
-                InputProps={{
-                  endAdornment: <Typography variant="body2">MAD</Typography>
-                }}
-              />
-
-              <Paper sx={{ p: 2, bgcolor: '#f8fafc' }}>
-                <Typography variant="body2" sx={{ fontWeight: 600, mb: 1 }}>
-                  Calcul automatique
-                </Typography>
+              <div style={{
+                background: 'linear-gradient(135deg, #f8fafc 0%, #edf2f7 100%)',
+                padding: '20px',
+                borderRadius: '10px',
+                border: '2px solid #e2e8f0'
+              }}>
                 <Grid container spacing={1}>
                   <Grid item xs={6}>
-                    <Typography variant="caption" color="text.secondary">H. Supp. :</Typography>
+                    <Typography variant="caption" style={{ color: '#64748b' }}>H. Supp. :</Typography>
                   </Grid>
                   <Grid item xs={6}>
-                    <Typography variant="body2" align="right" sx={{ fontWeight: 600 }}>
-                      {((parseFloat(formData.heuresSupplementaires) || 0) * (parseFloat(formData.tauxHoraire) || 0)).toFixed(2)} MAD
+                    <Typography variant="body2" align="right" style={{ fontWeight: 700 }}>
+                      {(toFloat(formData.heuresSupplementaires) * toFloat(formData.tauxHoraire)).toFixed(2)} MAD
                     </Typography>
                   </Grid>
-                  <Grid item xs={12}><Divider /></Grid>
+                  <Grid item xs={12} sx={{ my: 1 }}><Divider /></Grid>
                   <Grid item xs={6}>
-                    <Typography variant="body1" sx={{ fontWeight: 700 }}>Total :</Typography>
+                    <Typography variant="subtitle2" style={{ fontWeight: 800 }}>Total :</Typography>
                   </Grid>
                   <Grid item xs={6}>
-                    <Typography variant="body1" align="right" sx={{ fontWeight: 700, color: '#667eea' }}>
+                    <Typography variant="subtitle2" align="right" style={{ fontWeight: 800, color: '#667eea' }}>
                       {calculerTotal().toFixed(2)} MAD
                     </Typography>
                   </Grid>
                 </Grid>
-              </Paper>
-
-              <TextField
-                label="Date de la charge"
-                type="date"
-                value={formData.date}
-                onChange={(e) => setFormData({ ...formData, date: e.target.value })}
-                fullWidth
-                InputLabelProps={{ shrink: true }}
-              />
+              </div>
             </Stack>
           )}
 
-          {/* Tab 2: Document */}
+          {/* DOCUMENT */}
           {currentTab === 2 && (
-            <Stack spacing={2} sx={{ mt: 2 }}>
-              <FormControl fullWidth>
-                <InputLabel>Type de document</InputLabel>
-                <Select
-                  value={formData.typeDocument}
-                  onChange={(e) => setFormData({ ...formData, typeDocument: e.target.value })}
-                  label="Type de document"
-                >
-                  {typesDocuments.map(type => (
-                    <MenuItem key={type} value={type}>{type}</MenuItem>
-                  ))}
-                </Select>
-              </FormControl>
-
-              <TextField
-                label="Numéro du document"
-                value={formData.numeroDocument}
-                onChange={(e) => setFormData({ ...formData, numeroDocument: e.target.value })}
-                fullWidth
-              />
-
-              <TextField
-                label="Date du document"
-                type="date"
-                value={formData.dateDocument}
-                onChange={(e) => setFormData({ ...formData, dateDocument: e.target.value })}
-                fullWidth
-                InputLabelProps={{ shrink: true }}
-              />
-
-              <TextField
-                label="Pièce jointe (URL)"
-                value={formData.pieceJointe}
-                onChange={(e) => setFormData({ ...formData, pieceJointe: e.target.value })}
-                fullWidth
-                placeholder="https://..."
-              />
-
+            <Stack spacing={2} sx={{ mt: 1 }}>
+              <Grid container spacing={2}>
+                <Grid item xs={12} md={6}>
+                  <FormControl fullWidth size="small">
+                    <InputLabel>Type de document</InputLabel>
+                    <Select
+                      value={formData.typeDocument}
+                      onChange={(e) => setFormData({ ...formData, typeDocument: e.target.value })}
+                      label="Type de document"
+                    >
+                      {typesDocuments.map(type => (
+                        <MenuItem key={type} value={type}>{type}</MenuItem>
+                      ))}
+                    </Select>
+                  </FormControl>
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <TextField
+                    label="Numéro du document"
+                    value={formData.numeroDocument}
+                    onChange={(e) => setFormData({ ...formData, numeroDocument: e.target.value })}
+                    fullWidth
+                    size="small"
+                  />
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <TextField
+                    label="Date du document"
+                    type="date"
+                    value={formData.dateDocument}
+                    onChange={(e) => setFormData({ ...formData, dateDocument: e.target.value })}
+                    fullWidth
+                    size="small"
+                    InputLabelProps={{ shrink: true }}
+                  />
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <TextField
+                    label="Pièce jointe (URL)"
+                    value={formData.pieceJointe}
+                    onChange={(e) => setFormData({ ...formData, pieceJointe: e.target.value })}
+                    fullWidth
+                    size="small"
+                    placeholder="https://..."
+                  />
+                </Grid>
+              </Grid>
               <TextField
                 label="Description"
                 value={formData.description}
@@ -1087,8 +1584,8 @@ export default function ChargesPersonnels() {
                 fullWidth
                 multiline
                 rows={3}
+                size="small"
               />
-
               <TextField
                 label="Notes"
                 value={formData.notes}
@@ -1096,54 +1593,70 @@ export default function ChargesPersonnels() {
                 fullWidth
                 multiline
                 rows={2}
+                size="small"
               />
             </Stack>
           )}
 
-          {/* Tab 3: Paiement - IMPORTANT POUR LA CAISSE */}
+          {/* PAIEMENT */}
           {currentTab === 3 && (
-            <Stack spacing={2} sx={{ mt: 2 }}>
-              <Alert severity="info" icon={<MoneyIcon />}>
-                Mode de paiement (important pour la caisse)
+            <Stack spacing={2} sx={{ mt: 1 }}>
+              <Alert severity="info" icon={<MoneyIcon />} style={{
+                background: 'linear-gradient(135deg, #fef3c7 0%, #fde68a 100%)',
+                border: '2px solid #fbbf24',
+                borderRadius: '10px'
+              }}>
+                Le mode de paiement impacte la caisse (Espèces ⇒ déduction).
               </Alert>
-              
-              <FormControl fullWidth>
-                <InputLabel>Mode de paiement</InputLabel>
-                <Select
-                  value={formData.modePaiement}
-                  onChange={(e) => setFormData({ ...formData, modePaiement: e.target.value })}
-                  label="Mode de paiement"
-                >
-                  {modesPaiement.map(mode => (
-                    <MenuItem key={mode} value={mode}>{mode}</MenuItem>
-                  ))}
-                </Select>
-              </FormControl>
-
-              <TextField
-                label="Référence virement/chèque"
-                value={formData.referenceVirement}
-                onChange={(e) => setFormData({ ...formData, referenceVirement: e.target.value })}
-                fullWidth
-                placeholder="Ex: CHQ-123456 ou VIR-789012"
-              />
+              <Grid container spacing={2}>
+                <Grid item xs={12} md={6}>
+                  <FormControl fullWidth size="small">
+                    <InputLabel>Mode de paiement</InputLabel>
+                    <Select
+                      value={formData.modePaiement}
+                      onChange={(e) => setFormData({ ...formData, modePaiement: e.target.value })}
+                      label="Mode de paiement"
+                    >
+                      {modesPaiement.map(mode => (
+                        <MenuItem key={mode} value={mode}>{mode}</MenuItem>
+                      ))}
+                    </Select>
+                  </FormControl>
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <TextField
+                    label="Référence virement/chèque"
+                    value={formData.referenceVirement}
+                    onChange={(e) => setFormData({ ...formData, referenceVirement: e.target.value })}
+                    fullWidth
+                    size="small"
+                    placeholder="Ex: CHQ-123456 ou VIR-789012"
+                  />
+                </Grid>
+              </Grid>
 
               {formData.modePaiement === 'Espèces' && (
-                <Alert severity="success">
-                  ✅ Ce paiement en espèces sera automatiquement déduit de la caisse dans le Dashboard
+                <Alert severity="success" style={{
+                  background: 'linear-gradient(135deg, #dcfce7 0%, #bbf7d0 100%)',
+                  border: '2px solid #22c55e',
+                  borderRadius: '10px'
+                }}>
+                  ✅ Ce paiement en espèces sera déduit de la caisse
                 </Alert>
               )}
 
-              <Paper sx={{ p: 2, bgcolor: '#f8fafc', mt: 1 }}>
-                <Typography variant="body2" sx={{ fontWeight: 600, mb: 1 }}>
-                  Récapitulatif
-                </Typography>
-                <Grid container spacing={1}>
+              <div style={{
+                background: 'linear-gradient(135deg, #f8fafc 0%, #edf2f7 100%)',
+                padding: '20px',
+                borderRadius: '10px',
+                border: '2px solid #e2e8f0'
+              }}>
+                <Grid container>
                   <Grid item xs={6}>
                     <Typography variant="body2">Montant total :</Typography>
                   </Grid>
                   <Grid item xs={6}>
-                    <Typography variant="body2" align="right" sx={{ fontWeight: 700 }}>
+                    <Typography variant="body2" align="right" style={{ fontWeight: 800 }}>
                       {calculerTotal().toFixed(2)} MAD
                     </Typography>
                   </Grid>
@@ -1151,145 +1664,173 @@ export default function ChargesPersonnels() {
                     <Typography variant="body2">Mode de paiement :</Typography>
                   </Grid>
                   <Grid item xs={6}>
-                    <Typography variant="body2" align="right" sx={{ fontWeight: 600 }}>
+                    <Typography variant="body2" align="right" style={{ fontWeight: 700 }}>
                       {formData.modePaiement || 'Non spécifié'}
                     </Typography>
                   </Grid>
                 </Grid>
-              </Paper>
+              </div>
             </Stack>
           )}
         </DialogContent>
 
-        <DialogActions sx={{ 
-          p: { xs: 2, sm: 3 }, 
-          pt: 2,
-          flexDirection: { xs: 'column-reverse', sm: 'row' },
-          gap: { xs: 1, sm: 0 }
+        <DialogActions style={{
+          padding: isMobile ? '15px' : '20px',
+          gap: '10px',
+          background: '#f8fafc',
+          borderTop: '2px solid #e2e8f0'
         }}>
-          <Button 
+          <button
+            style={{
+              ...styles.filterButton,
+              flex: isMobile ? 1 : 'none',
+              minWidth: isMobile ? 'auto' : '120px'
+            }}
             onClick={handleCloseDialog}
-            fullWidth={isMobile}
           >
             Annuler
-          </Button>
-          <Button
-            variant="contained"
-            onClick={handleSave}
-            disabled={!formData.employe || !formData.salaire}
-            fullWidth={isMobile}
-            sx={{ 
-              background: 'linear-gradient(135deg, #667eea, #764ba2)',
-              ml: { sm: 1 }
+          </button>
+          <button
+            style={{
+              ...styles.button,
+              flex: isMobile ? 1 : 'none',
+              minWidth: isMobile ? 'auto' : '120px',
+              opacity: (newEmployeeMode ? !newEmployee.nom : !formData.employe) || !formData.salaire ? 0.5 : 1,
+              cursor: (newEmployeeMode ? !newEmployee.nom : !formData.employe) || !formData.salaire ? 'not-allowed' : 'pointer'
             }}
+            onClick={handleSave}
+            disabled={(newEmployeeMode ? !newEmployee.nom : !formData.employe) || !formData.salaire}
           >
             {editingCharge ? 'Modifier' : 'Enregistrer'}
-          </Button>
+          </button>
         </DialogActions>
       </Dialog>
 
-      {/* Dialogue de détails */}
-      <Dialog 
-        open={detailsDialogOpen} 
+      {/* Dialog Détails - simplifié pour le style moderne */}
+      <Dialog
+        open={detailsDialogOpen}
         onClose={() => setDetailsDialogOpen(false)}
         fullScreen={isMobile}
-        maxWidth="sm" 
+        maxWidth="sm"
         fullWidth
         PaperProps={{
-          sx: {
-            borderRadius: isMobile ? 0 : 2
+          style: {
+            borderRadius: isMobile ? 0 : '15px',
+            boxShadow: '0 20px 60px rgba(0,0,0,0.3)'
           }
         }}
       >
-        <DialogTitle sx={{ 
-          fontWeight: 700, 
-          color: '#1e293b',
+        <DialogTitle style={{
+          background: 'linear-gradient(135deg, #4a5568 0%, #2d3748 100%)',
+          color: 'white',
+          fontWeight: 800,
+          fontSize: isMobile ? '1.3em' : '1.5em',
+          padding: isMobile ? '15px' : '20px',
           display: 'flex',
           justifyContent: 'space-between',
-          alignItems: 'center',
-          p: { xs: 2, sm: 3 }
+          alignItems: 'center'
         }}>
-          <Typography variant={isMobile ? "h6" : "h5"} sx={{ fontWeight: 700 }}>
-            Détails de la charge
-          </Typography>
+          <span>Détails de la charge</span>
           {isMobile && (
-            <IconButton onClick={() => setDetailsDialogOpen(false)}>
+            <IconButton onClick={() => setDetailsDialogOpen(false)} style={{ color: 'white' }}>
               <CloseIcon />
             </IconButton>
           )}
         </DialogTitle>
-        
-        <DialogContent sx={{ p: { xs: 2, sm: 3 } }}>
+
+        <DialogContent style={{ padding: isMobile ? '15px' : '25px' }}>
           {selectedCharge && (
             <Box sx={{ mt: 1 }}>
               <Stack direction="row" spacing={1} sx={{ mb: 2 }}>
                 <Chip
                   icon={<PersonIcon />}
                   label={selectedCharge.poste || 'Non spécifié'}
-                  sx={{
-                    bgcolor: getPosteColor(selectedCharge.poste) + '20',
+                  style={{
+                    background: getPosteColor(selectedCharge.poste) + '20',
                     color: getPosteColor(selectedCharge.poste),
-                    fontWeight: 700
+                    fontWeight: 800,
+                    padding: '8px 12px',
+                    borderRadius: '20px'
                   }}
                 />
               </Stack>
 
-              <Typography variant="h6" sx={{ fontWeight: 700, mb: 2 }}>
-                {selectedCharge.employe}
+              <Typography variant="h6" style={{ fontWeight: 800, marginBottom: '5px', color: '#2d3748' }}>
+                {selectedCharge.employe || selectedCharge.employeName}
               </Typography>
-              
+              <Typography variant="caption" style={{ color: '#64748b', fontWeight: 600 }}>
+                {selectedCharge.date}
+              </Typography>
+
               <Divider sx={{ my: 2 }} />
-              
+
               <Grid container spacing={2}>
                 <Grid item xs={6}>
-                  <Typography variant="caption" color="text.secondary">CIN</Typography>
-                  <Typography variant="body2">{selectedCharge.cin || '-'}</Typography>
+                  <Typography variant="caption" style={{ color: '#64748b', fontWeight: 600 }}>CIN</Typography>
+                  <Typography variant="body2" style={{ fontWeight: 700 }}>{selectedCharge.cin || '-'}</Typography>
                 </Grid>
                 <Grid item xs={6}>
-                  <Typography variant="caption" color="text.secondary">Téléphone</Typography>
-                  <Typography variant="body2">{selectedCharge.telephone || '-'}</Typography>
+                  <Typography variant="caption" style={{ color: '#64748b', fontWeight: 600 }}>Téléphone</Typography>
+                  <Typography variant="body2" style={{ fontWeight: 700 }}>{selectedCharge.telephone || '-'}</Typography>
                 </Grid>
                 <Grid item xs={6}>
-                  <Typography variant="caption" color="text.secondary">Poste</Typography>
-                  <Typography variant="body2">{selectedCharge.poste || '-'}</Typography>
+                  <Typography variant="caption" style={{ color: '#64748b', fontWeight: 600 }}>Poste</Typography>
+                  <Typography variant="body2" style={{ fontWeight: 700 }}>{selectedCharge.poste || '-'}</Typography>
                 </Grid>
                 <Grid item xs={6}>
-                  <Typography variant="caption" color="text.secondary">N° Sécu</Typography>
-                  <Typography variant="body2">{selectedCharge.numeroSecuriteSociale || '-'}</Typography>
+                  <Typography variant="caption" style={{ color: '#64748b', fontWeight: 600 }}>N° Sécu</Typography>
+                  <Typography variant="body2" style={{ fontWeight: 700 }}>{selectedCharge.numeroSecuriteSociale || '-'}</Typography>
                 </Grid>
                 <Grid item xs={12}>
-                  <Typography variant="caption" color="text.secondary">Adresse</Typography>
-                  <Typography variant="body2">{selectedCharge.adresse || '-'}</Typography>
+                  <Typography variant="caption" style={{ color: '#64748b', fontWeight: 600 }}>Adresse</Typography>
+                  <Typography variant="body2" style={{ fontWeight: 700 }}>{selectedCharge.adresse || '-'}</Typography>
                 </Grid>
               </Grid>
 
               <Divider sx={{ my: 2 }} />
-              
-              <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 1 }}>Rémunération</Typography>
-              <Grid container spacing={1}>
-                <Grid item xs={6}><Typography variant="body2">Salaire :</Typography></Grid>
-                <Grid item xs={6}><Typography variant="body2" align="right">{selectedCharge.salaire?.toFixed(2)} MAD</Typography></Grid>
-                <Grid item xs={6}><Typography variant="body2">Prime :</Typography></Grid>
-                <Grid item xs={6}><Typography variant="body2" align="right">{selectedCharge.prime?.toFixed(2)} MAD</Typography></Grid>
-                <Grid item xs={6}><Typography variant="body2">Heures supp. :</Typography></Grid>
-                <Grid item xs={6}><Typography variant="body2" align="right">{selectedCharge.montantHS?.toFixed(2)} MAD</Typography></Grid>
-                <Grid item xs={6}><Typography variant="body2">Indemnités :</Typography></Grid>
-                <Grid item xs={6}><Typography variant="body2" align="right">{selectedCharge.indemnites?.toFixed(2)} MAD</Typography></Grid>
-                <Grid item xs={12}><Divider /></Grid>
-                <Grid item xs={6}><Typography variant="body1" sx={{ fontWeight: 700 }}>Total :</Typography></Grid>
-                <Grid item xs={6}><Typography variant="body1" align="right" sx={{ fontWeight: 700, color: '#667eea' }}>{selectedCharge.total?.toFixed(2)} MAD</Typography></Grid>
-              </Grid>
+
+              <Typography variant="subtitle2" style={{ fontWeight: 800, marginBottom: '10px', color: '#2d3748' }}>
+                Rémunération
+              </Typography>
+              <div style={{
+                background: 'linear-gradient(135deg, #f8fafc 0%, #edf2f7 100%)',
+                padding: '15px',
+                borderRadius: '10px',
+                border: '2px solid #e2e8f0'
+              }}>
+                <Grid container spacing={1}>
+                  <Grid item xs={6}><Typography variant="body2">Salaire :</Typography></Grid>
+                  <Grid item xs={6}><Typography variant="body2" align="right" style={{ fontWeight: 700 }}>{(selectedCharge.salaire ?? 0).toFixed(2)} MAD</Typography></Grid>
+                  <Grid item xs={6}><Typography variant="body2">Prime :</Typography></Grid>
+                  <Grid item xs={6}><Typography variant="body2" align="right" style={{ fontWeight: 700 }}>{(selectedCharge.prime ?? 0).toFixed(2)} MAD</Typography></Grid>
+                  <Grid item xs={6}><Typography variant="body2">Heures supp. :</Typography></Grid>
+                  <Grid item xs={6}><Typography variant="body2" align="right" style={{ fontWeight: 700 }}>{(selectedCharge.montantHS ?? 0).toFixed(2)} MAD</Typography></Grid>
+                  <Grid item xs={6}><Typography variant="body2">Indemnités :</Typography></Grid>
+                  <Grid item xs={6}><Typography variant="body2" align="right" style={{ fontWeight: 700 }}>{(selectedCharge.indemnites ?? 0).toFixed(2)} MAD</Typography></Grid>
+                  <Grid item xs={12}><Divider sx={{ my: 1 }} /></Grid>
+                  <Grid item xs={6}><Typography variant="subtitle2" style={{ fontWeight: 800 }}>Total :</Typography></Grid>
+                  <Grid item xs={6}><Typography variant="subtitle2" align="right" style={{ fontWeight: 800, color: '#667eea' }}>{(selectedCharge.total ?? 0).toFixed(2)} MAD</Typography></Grid>
+                </Grid>
+              </div>
 
               {selectedCharge.modePaiement && (
                 <>
                   <Divider sx={{ my: 2 }} />
-                  <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 1 }}>Paiement</Typography>
-                  <Typography variant="body2">Mode : {selectedCharge.modePaiement}</Typography>
+                  <Typography variant="subtitle2" style={{ fontWeight: 800, marginBottom: '10px', color: '#2d3748' }}>
+                    Paiement
+                  </Typography>
+                  <Typography variant="body2" style={{ fontWeight: 700 }}>Mode : {selectedCharge.modePaiement}</Typography>
                   {selectedCharge.referenceVirement && (
-                    <Typography variant="body2" sx={{ mt: 0.5 }}>Référence : {selectedCharge.referenceVirement}</Typography>
+                    <Typography variant="body2" style={{ marginTop: '5px', fontWeight: 700 }}>
+                      Référence : {selectedCharge.referenceVirement}
+                    </Typography>
                   )}
                   {selectedCharge.modePaiement === 'Espèces' && (
-                    <Alert severity="info" sx={{ mt: 1 }}>
+                    <Alert severity="info" sx={{ mt: 1 }} style={{
+                      background: 'linear-gradient(135deg, #dbeafe 0%, #bfdbfe 100%)',
+                      border: '2px solid #60a5fa',
+                      borderRadius: '10px'
+                    }}>
                       💰 Ce montant a été déduit de la caisse
                     </Alert>
                   )}
@@ -1299,13 +1840,19 @@ export default function ChargesPersonnels() {
               {selectedCharge.typeDocument && (
                 <>
                   <Divider sx={{ my: 2 }} />
-                  <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 1 }}>Document</Typography>
-                  <Typography variant="body2">Type : {selectedCharge.typeDocument}</Typography>
-                  <Typography variant="body2" sx={{ mt: 0.5 }}>N° : {selectedCharge.numeroDocument || '-'}</Typography>
-                  <Typography variant="body2" sx={{ mt: 0.5 }}>Date : {selectedCharge.dateDocument || '-'}</Typography>
+                  <Typography variant="subtitle2" style={{ fontWeight: 800, marginBottom: '10px', color: '#2d3748' }}>
+                    Document
+                  </Typography>
+                  <Typography variant="body2" style={{ fontWeight: 700 }}>Type : {selectedCharge.typeDocument}</Typography>
+                  <Typography variant="body2" style={{ marginTop: '5px', fontWeight: 700 }}>
+                    N° : {selectedCharge.numeroDocument || '-'}
+                  </Typography>
+                  <Typography variant="body2" style={{ marginTop: '5px', fontWeight: 700 }}>
+                    Date : {selectedCharge.dateDocument || '-'}
+                  </Typography>
                   {selectedCharge.pieceJointe && (
-                    <Typography variant="body2" sx={{ mt: 0.5 }}>
-                      Fichier : <a href={selectedCharge.pieceJointe} target="_blank" rel="noopener noreferrer">Voir</a>
+                    <Typography variant="body2" style={{ marginTop: '5px', fontWeight: 700 }}>
+                      Fichier : <a href={selectedCharge.pieceJointe} target="_blank" rel="noopener noreferrer" style={{ color: '#667eea' }}>Voir</a>
                     </Typography>
                   )}
                 </>
@@ -1314,23 +1861,33 @@ export default function ChargesPersonnels() {
               {selectedCharge.description && (
                 <>
                   <Divider sx={{ my: 2 }} />
-                  <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 1 }}>Description</Typography>
-                  <Typography variant="body2">{selectedCharge.description}</Typography>
+                  <Typography variant="subtitle2" style={{ fontWeight: 800, marginBottom: '10px', color: '#2d3748' }}>
+                    Description
+                  </Typography>
+                  <Typography variant="body2" style={{ fontWeight: 600 }}>{selectedCharge.description}</Typography>
                 </>
               )}
             </Box>
           )}
         </DialogContent>
-        
-        <DialogActions sx={{ p: { xs: 2, sm: 3 }, pt: 1 }}>
-          <Button 
+
+        <DialogActions style={{
+          padding: isMobile ? '15px' : '20px',
+          background: '#f8fafc',
+          borderTop: '2px solid #e2e8f0'
+        }}>
+          <button
+            style={{
+              ...styles.button,
+              width: isMobile ? '100%' : 'auto',
+              minWidth: '120px'
+            }}
             onClick={() => setDetailsDialogOpen(false)}
-            fullWidth={isMobile}
           >
             Fermer
-          </Button>
+          </button>
         </DialogActions>
       </Dialog>
-    </Box>
+    </div>
   );
 }

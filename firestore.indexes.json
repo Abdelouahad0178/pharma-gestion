@@ -1,4 +1,29 @@
 {
-  "indexes": [],
+  "indexes": [
+    {
+      "collectionGroup": "chargesPersonnels",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "employeId", "order": "ASCENDING" },
+        { "fieldPath": "date", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "chargesPersonnels",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "poste", "order": "ASCENDING" },
+        { "fieldPath": "date", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "chargesPersonnels",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "typeDocument", "order": "ASCENDING" },
+        { "fieldPath": "date", "order": "DESCENDING" }
+      ]
+    }
+  ],
   "fieldOverrides": []
 }

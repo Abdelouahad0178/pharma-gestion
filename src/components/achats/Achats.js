@@ -194,6 +194,66 @@ export default function Achats() {
   const [numeroLot, setNumeroLot] = useState("");
   const [fournisseurArticle, setFournisseurArticle] = useState("");
 
+  /* ===================== 🆕 Fournisseurs (liste existante) ===================== */
+  const [fournisseurs, setFournisseurs] = useState([]);
+
+  const normalizeFournisseurName = (obj, fallbackId = "") => {
+    const n =
+      obj?.nom ??
+      obj?.name ??
+      obj?.raisonSociale ??
+      obj?.raison_sociale ??
+      obj?.displayName ??
+      obj?.titre ??
+      "";
+    const s = String(n || "").trim();
+    return s || (fallbackId ? `Fournisseur-${fallbackId.slice(0, 6)}` : "");
+  };
+
+  const fetchFournisseurs = useCallback(async () => {
+    if (!societeId) return setFournisseurs([]);
+    try {
+      const list = [];
+
+      // 1) collection "fournisseurs"
+      const snap1 = await getDocs(collection(db, "societe", societeId, "fournisseurs"));
+      snap1.forEach((d) => {
+        const data = d.data();
+        const name = normalizeFournisseurName(data, d.id);
+        if (name) list.push({ id: d.id, name, data });
+      });
+
+      // 2) fallback "suppliers" si la 1ère est vide
+      if (list.length === 0) {
+        const snap2 = await getDocs(collection(db, "societe", societeId, "suppliers"));
+        snap2.forEach((d) => {
+          const data = d.data();
+          const name = normalizeFournisseurName(data, d.id);
+          if (name) list.push({ id: d.id, name, data });
+        });
+      }
+
+      // Uniques par nom + tri alpha
+      const uniq = Array.from(new Map(list.map((x) => [x.name.toLowerCase(), x])).values()).sort((a, b) =>
+        a.name.localeCompare(b.name)
+      );
+
+      setFournisseurs(uniq);
+    } catch (e) {
+      console.error("fetchFournisseurs:", e);
+      setFournisseurs([]);
+    }
+  }, [societeId]);
+
+  const onFournisseurChange = useCallback(
+    (value) => {
+      setFournisseur(value);
+      // petit confort : si aucun fournisseurArticle renseigné, on aligne sur le bon
+      if (!fournisseurArticle) setFournisseurArticle(value);
+    },
+    [fournisseurArticle]
+  );
+
   /* ===================== 🆕 Recalcul auto date péremption ===================== */
   useEffect(() => {
     if (dateAchat) {
@@ -413,7 +473,8 @@ export default function Achats() {
     fetchAchats();
     fetchStockEntries();
     fetchMedicaments();
-  }, [societeId, fetchParametres, fetchAchats, fetchStockEntries, fetchMedicaments]);
+    fetchFournisseurs(); // 🆕 charger la liste des fournisseurs
+  }, [societeId, fetchParametres, fetchAchats, fetchStockEntries, fetchMedicaments, fetchFournisseurs]);
 
   /* ===================== Saisie produit -> auto-suggest ===================== */
   const handleProduitChange = useCallback((value) => {
@@ -1247,7 +1308,7 @@ export default function Achats() {
       <tr>
         <th class="left">#</th>
         <th class="left">Produit</th>
-        <th>Lot</th>
+        <th>Lot</</th>
         <th>Code</th>
         <th>Qté</th>
         <th>PA</th>
@@ -1412,7 +1473,21 @@ export default function Achats() {
         <div className={`form-panel ${showCreateForm ? "form-shown" : "form-hidden"}`}>
           <div className="form-panel-inner">
             <div className="form-grid">
-              <input className="field" placeholder="Fournisseur *" value={fournisseur} onChange={(e) => setFournisseur(e.target.value)} />
+              {/* 🆕 Fournisseur avec autocomplétion depuis la base */}
+              <input
+                className="field"
+                placeholder="Fournisseur *"
+                value={fournisseur}
+                onChange={(e) => onFournisseurChange(e.target.value)}
+                list="dlFournisseurs"
+                title="Choisissez un fournisseur existant ou tapez un nouveau nom"
+              />
+              <datalist id="dlFournisseurs">
+                {fournisseurs.map((f) => (
+                  <option key={f.id} value={f.name} />
+                ))}
+              </datalist>
+
               <input className="field" type="date" value={dateAchat} onChange={(e) => setDateAchat(e.target.value)} title="📅 Date d'achat (aujourd'hui par défaut)" />
               <select className="select" value={statutPaiement} onChange={(e) => setStatutPaiement(e.target.value)} aria-label="Statut de paiement">
                 <option value="impayé">💰 Impayé</option><option value="partiel">🟡 Partiel</option><option value="payé">✅ Payé</option>
@@ -1439,7 +1514,15 @@ export default function Achats() {
               <input className="field" type="date" value={datePeremption} onChange={(e) => setDatePeremption(e.target.value)} title="📆 Péremption (+2 ans, recalcul auto)" />
               <input className="field" placeholder="N° Lot" value={numeroLot} onChange={(e) => setNumeroLot(e.target.value)} />
               <input className="field" placeholder="N° article" value={numeroArticle} onChange={(e) => setNumeroArticle(e.target.value)} />
-              <input className="field" placeholder="Fournisseur article" value={fournisseurArticle} onChange={(e) => setFournisseurArticle(e.target.value)} />
+              {/* 🆕 Fournisseur article avec la même liste */}
+              <input
+                className="field"
+                placeholder="Fournisseur article"
+                value={fournisseurArticle}
+                onChange={(e) => setFournisseurArticle(e.target.value)}
+                list="dlFournisseurs"
+                title="Choisissez un fournisseur existant ou tapez un nouveau nom"
+              />
               <input className="field" type="number" step="0.01" placeholder="Remise" value={remiseArticle} onChange={(e) => setRemiseArticle(e.target.value)} />
               <button className="btn btn-primary" onClick={handleAddArticle} aria-label="Ajouter l'article au bon">➕ Ajouter</button>
             </div>
@@ -1602,7 +1685,15 @@ export default function Achats() {
         <div className={`filters-panel ${showFilters ? "filters-shown" : "filters-hidden"}`}>
           <div className="filters-panel-inner">
             <div className="form-grid" style={{ marginBottom: 16 }}>
-              <input className="field" placeholder="Fournisseur" value={filterFournisseur} onChange={(e) => setFilterFournisseur(e.target.value)} />
+              {/* 🆕 filtre Fournisseur branché sur la même liste */}
+              <input
+                className="field"
+                placeholder="Fournisseur"
+                value={filterFournisseur}
+                onChange={(e) => setFilterFournisseur(e.target.value)}
+                list="dlFournisseurs"
+                title="Filtrer par fournisseur"
+              />
               <input className="field" type="date" placeholder="Date début" value={filterDateStart} onChange={(e) => setFilterDateStart(e.target.value)} />
               <input className="field" type="date" placeholder="Date fin" value={filterDateEnd} onChange={(e) => setFilterDateEnd(e.target.value)} />
               <select className="select" value={filterStatutPaiement} onChange={(e) => setFilterStatutPaiement(e.target.value)} aria-label="Filtrer par paiement">
