@@ -6,10 +6,7 @@ import { auth, db } from "../../firebase/config";
 import {
   doc,
   setDoc,
-  collection,
-  query,
-  where,
-  getDocs,
+  getDoc,
   serverTimestamp,
 } from "firebase/firestore";
 
@@ -62,20 +59,20 @@ export default function Register() {
     setSuccess("");
   };
 
-  const generateCode = () => {
-    const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+  const generateCode = (len = 8) => {
+    const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // sans I/O/0/1
     let code = "";
-    for (let i = 0; i < 6; i++)
-      code += chars.charAt(Math.floor(Math.random() * chars.length));
+    for (let i = 0; i < len; i++) code += chars.charAt(Math.floor(Math.random() * chars.length));
     return code;
   };
 
-  const generateUniqueInviteCode = async (maxTry = 8) => {
+  // ✅ Teste l’unicité dans /invitations/{code}, pas dans /societe
+  const generateUniqueInviteCode = async (maxTry = 10) => {
     for (let i = 0; i < maxTry; i++) {
-      const c = generateCode();
-      const q = query(collection(db, "societe"), where("invitationCode", "==", c));
-      const snap = await getDocs(q);
-      if (snap.empty) return c;
+      const c = generateCode(8);
+      const ref = doc(db, "invitations", c);
+      const snap = await getDoc(ref);
+      if (!snap.exists()) return c;
     }
     throw new Error("Impossible de générer un code unique. Réessayez.");
   };
@@ -120,11 +117,7 @@ export default function Register() {
 
       // 1bis) Profile displayName (facultatif)
       if (dnameTrim) {
-        try {
-          await updateProfile(cred.user, { displayName: dnameTrim });
-        } catch {
-          /* ignore */
-        }
+        try { await updateProfile(cred.user, { displayName: dnameTrim }); } catch { /* ignore */ }
       }
 
       // 2) Créer users/{uid} D'ABORD (societeId:null)
@@ -133,9 +126,9 @@ export default function Register() {
         {
           email: emailTrim,
           displayName: dnameTrim || null,
-          role: "docteur", // ou "pharmacien"
-          isOwner: true,   // propriétaire permanent
-          societeId: null, // pas encore rattaché
+          role: "docteur",      // ou "pharmacien"
+          isOwner: true,        // propriétaire permanent
+          societeId: null,      // pas encore rattaché
           locked: false,
           active: true,
           adminPopup: null,
@@ -146,7 +139,7 @@ export default function Register() {
         { merge: true }
       );
 
-      // 3) Générer le code d'invitation (pour les futurs employés)
+      // 3) Générer le code d'invitation (unicité via /invitations/{code})
       const invite = await generateUniqueInviteCode();
 
       // 4) Créer la société avec ownerUid (⚠️ correspond aux règles)
@@ -171,7 +164,7 @@ export default function Register() {
         { merge: true }
       );
 
-      // 6) (Optionnel) Paramètres par défaut
+      // 6) (Optionnel) Paramètres par défaut (passe car maintenant sameSoc + owner)
       await safeSet(
         doc(db, "societe", societeId, "parametres", "default"),
         {
@@ -180,6 +173,19 @@ export default function Register() {
           updatedAt: serverTimestamp(),
         },
         { merge: true }
+      );
+
+      // 7) Enregistrer le code d’invitation (utile pour l’unicité et le join)
+      await safeSet(
+        doc(db, "invitations", invite),
+        {
+          societeId,
+          createdBy: uid,
+          createdAt: serverTimestamp(),
+          active: true,
+          type: "employee_join",
+        },
+        { merge: false }
       );
 
       setSuccess("Pharmacie créée avec succès. Vous êtes le propriétaire permanent.");

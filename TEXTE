@@ -22,22 +22,107 @@ https://claude.ai/chat/896e723f-d20c-4a2f-a5cd-b359b0bf6b69// formes juridiques
 
 
 
-
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // This rule allows anyone with your Firestore database reference to view, edit,
-    // and delete all data in your Firestore database. It is useful for getting
-    // started, but it is configured to expire after 30 days because it
-    // leaves your app open to attackers. At that time, all client
-    // requests to your Firestore database will be denied.
-    //
-    // Make sure to write security rules for your app before that time, or else
-    // all client requests to your Firestore database will be denied until you Update
-    // your rules
-    match /{document=**} {
-      allow read, write: if request.time < timestamp.date(2026, 8, 28);
+    /* ============== Helpers ============== */
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function me() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid));
+    }
+
+    function mySocieteId() {
+      return signedIn() ? me().data.societeId : null;
+    }
+
+    function sameSoc(sid) {
+      return signedIn() && mySocieteId() == sid;
+    }
+
+    // ---- Rôles & ownership
+    function isOwnerOf(sid) {
+      return signedIn()
+        && get(/databases/$(database)/documents/societe/$(sid)).data.ownerUid == request.auth.uid;
+    }
+
+    function myRole() {
+      return me().data.role;
+    }
+
+    function isAdminLike() {
+      // adapte si tu veux inclure d’autres rôles
+      return myRole() in ['admin', 'pharmacien', 'docteur'];
+    }
+
+    function isVendeuse() {
+      return myRole() == 'vendeuse';
+    }
+
+    // ---- Admin/Owner de la société
+    function isOwnerOrAdminOf(sid) {
+      return sameSoc(sid) && (isOwnerOf(sid) || isAdminLike());
+    }
+
+    /* ============== users/{uid} ============== */
+    match /users/{uid} {
+
+      // Lire : soi-même OU même société
+      allow read: if signedIn() && (
+        request.auth.uid == uid ||
+        (resource.data.societeId != null && resource.data.societeId == mySocieteId())
+      );
+
+      // Créer : soi-même
+      allow create: if signedIn() && request.auth.uid == uid;
+
+      // Mettre à jour :
+      // - soi-même, OU
+      // - owner/admin de la même société que la cible.
+      //   Pour couvrir la "restauration" (re-attacher un user), on accepte si
+      //   resource.societeId == mySocieteId() OU request.resource.societeId == mySocieteId().
+      allow update: if signedIn() && (
+        request.auth.uid == uid ||
+        (
+          (
+            (resource.data.societeId != null && resource.data.societeId == mySocieteId()) ||
+            (request.resource.data.societeId != null && request.resource.data.societeId == mySocieteId())
+          )
+          && isOwnerOrAdminOf(mySocieteId())
+        )
+      );
+
+      // Supprimer : soi-même OU owner/admin de la même société que la cible
+      allow delete: if signedIn() && (
+        request.auth.uid == uid ||
+        (resource.data.societeId != null && resource.data.societeId == mySocieteId() && isOwnerOrAdminOf(mySocieteId()))
+      );
+    }
+
+    /* ============== societe/{sid} ============== */
+    match /societe/{sid} {
+      // Lire : membres de la société
+      allow read: if sameSoc(sid);
+
+      // Créer : n’importe quel user connecté peut créer SA société s’il se met ownerUid
+      allow create: if signedIn() && request.resource.data.ownerUid == request.auth.uid;
+
+      // Mettre à jour / supprimer : owner uniquement
+      allow update, delete: if isOwnerOf(sid) && sameSoc(sid);
+
+      // Sous-collections : accès complet aux membres (comme chez toi)
+      match /{sub=**} {
+        allow read, write: if sameSoc(sid);
+      }
+    }
+
+    /* ============== invitations/{token} ============== */
+    match /invitations/{token} {
+      allow read: if signedIn();
+      allow create, update, delete: if signedIn();
     }
   }
 }
