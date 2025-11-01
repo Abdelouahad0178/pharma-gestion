@@ -1,5 +1,5 @@
 // src/components/auth/Register.js
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { createUserWithEmailAndPassword, updateProfile } from "firebase/auth";
 import { auth, db } from "../../firebase/config";
@@ -43,6 +43,19 @@ export default function Register() {
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
 
+  // État réseau pour éviter les erreurs Auth offline
+  const [isOnline, setIsOnline] = useState(navigator.onLine);
+  useEffect(() => {
+    const on = () => setIsOnline(true);
+    const off = () => setIsOnline(false);
+    window.addEventListener("online", on);
+    window.addEventListener("offline", off);
+    return () => {
+      window.removeEventListener("online", on);
+      window.removeEventListener("offline", off);
+    };
+  }, []);
+
   /* ================= Helpers ================= */
   const clearErrors = () => {
     setError("");
@@ -69,7 +82,7 @@ export default function Register() {
 
   const newSocieteIdFor = (uid) => `societe_${uid}_${Date.now()}`;
 
-  /* ============= Flow: création d'une nouvelle société ============= */
+  /* ============= Flow: création d'une nouvelle société (OWNER) ============= */
   const handleCreateCompany = async (e) => {
     e?.preventDefault?.();
 
@@ -92,12 +105,16 @@ export default function Register() {
       setError("Veuillez renseigner le nom et l'adresse de la pharmacie.");
       return;
     }
+    if (!isOnline) {
+      setError("Vous êtes hors-ligne. Reconnectez-vous puis réessayez.");
+      return;
+    }
 
     setLoading(true);
     clearErrors();
 
     try {
-      // 1) Auth: créer le compte
+      // 1) Auth: créer le compte OWNER
       const cred = await createUserWithEmailAndPassword(auth, emailTrim, password);
       const uid = cred.user.uid;
 
@@ -110,13 +127,13 @@ export default function Register() {
         }
       }
 
-      // 2) Créer users/{uid} D'ABORD (societeId:null) -> évite l’erreur de règles au bootstrap
+      // 2) Créer users/{uid} D'ABORD (societeId:null)
       await safeSet(
         doc(db, "users", uid),
         {
           email: emailTrim,
           displayName: dnameTrim || null,
-          role: "docteur", // ou "pharmacien" si tu préfères
+          role: "docteur", // ou "pharmacien"
           isOwner: true,   // propriétaire permanent
           societeId: null, // pas encore rattaché
           locked: false,
@@ -132,7 +149,7 @@ export default function Register() {
       // 3) Générer le code d'invitation (pour les futurs employés)
       const invite = await generateUniqueInviteCode();
 
-      // 4) Créer la société (bootstrap) avec ownerUid (⚠️ pas ownerId)
+      // 4) Créer la société avec ownerUid (⚠️ correspond aux règles)
       const societeId = newSocieteIdFor(uid);
       await safeSet(doc(db, "societe", societeId), {
         nom: pharmaNameTrim,
@@ -154,7 +171,7 @@ export default function Register() {
         { merge: true }
       );
 
-      // 6) (Optionnel) Paramètres par défaut de la société
+      // 6) (Optionnel) Paramètres par défaut
       await safeSet(
         doc(db, "societe", societeId, "parametres", "default"),
         {
@@ -177,6 +194,8 @@ export default function Register() {
         setError(
           "Permissions Firestore insuffisantes : vérifiez vos règles (création 'societe' avec 'ownerUid' + création de 'users/{uid}' avant), puis republiez."
         );
+      } else if (e?.code === "auth/network-request-failed") {
+        setError("Problème réseau détecté. Vérifiez votre connexion Internet puis réessayez.");
       } else {
         setError("Erreur lors de la création de la pharmacie.");
       }
@@ -230,6 +249,12 @@ export default function Register() {
           Créer un compte (Propriétaire)
         </div>
 
+        {!isOnline && (
+          <div style={{background:'#fff3cd', border:'1px solid #ffeeba', color:'#856404', padding:10, borderRadius:8, marginTop:12}}>
+            🔌 Vous êtes hors-ligne. La création de compte nécessite Internet.
+          </div>
+        )}
+
         {error && (
           <div className="status-chip danger" style={{ margin: "18px auto" }}>
             {error}
@@ -241,7 +266,7 @@ export default function Register() {
           </div>
         )}
 
-        {/* Formulaire : Création d'une nouvelle société (unique) */}
+        {/* Formulaire : Création d'une nouvelle société (OWNER uniquement) */}
         <form
           onSubmit={handleCreateCompany}
           style={{ display: "flex", flexDirection: "column", gap: 14, marginTop: 22 }}
@@ -257,7 +282,7 @@ export default function Register() {
             <h4 style={{ color: "#2e7d32", margin: 0 }}>👑 Création d'une nouvelle pharmacie</h4>
             <p style={{ color: "#1b5e20", margin: "6px 0 0 0", fontSize: "0.9em" }}>
               Vous serez créé en tant que <strong>propriétaire permanent</strong> avec tous les privilèges.
-              Vous pourrez inviter des employés plus tard avec un code d'invitation.
+              Les employés rejoignent via un <strong>code/lien d’invitation</strong> uniquement.
             </p>
           </div>
 
@@ -323,7 +348,7 @@ export default function Register() {
             onChange={(e) => setPharmaPhone(e.target.value)}
           />
 
-          <button className="btn" disabled={loading} style={{ fontSize: "1.05rem" }}>
+          <button className="btn" disabled={loading || !isOnline} style={{ fontSize: "1.05rem" }}>
             {loading ? "Création…" : "👑 Créer ma pharmacie (Propriétaire)"}
           </button>
 
@@ -344,7 +369,7 @@ export default function Register() {
           </button>
         </form>
 
-        {/* Lien connexion */}
+        {/* Lien connexion + invitation */}
         <div
           style={{
             marginTop: 20,
@@ -369,6 +394,33 @@ export default function Register() {
             type="button"
           >
             Connectez-vous
+          </button>
+        </div>
+
+        <div
+          style={{
+            marginTop: 10,
+            color: "#e1e6ef",
+            textAlign: "center",
+            fontSize: "0.98rem",
+          }}
+        >
+          Employé(e) avec un code ?{" "}
+          <button
+            className="btn-neumorph"
+            style={{
+              background: "transparent",
+              color: "#7ee4e6",
+              border: "none",
+              marginLeft: 6,
+              fontWeight: 700,
+              boxShadow: "none",
+              padding: 0,
+            }}
+            onClick={() => navigate("/accept-invitation")}
+            type="button"
+          >
+            Rejoindre via invitation
           </button>
         </div>
       </div>

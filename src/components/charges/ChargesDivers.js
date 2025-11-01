@@ -48,12 +48,15 @@ import {
   deleteDoc,
   doc,
   getDocs,
+  getDoc,
+  setDoc,
   query,
   orderBy,
   where,
   Timestamp,
   writeBatch,
-  onSnapshot
+  onSnapshot,
+  increment
 } from 'firebase/firestore';
 import { useUserRole } from '../../contexts/UserRoleContext';
 
@@ -63,10 +66,105 @@ const toFloat = (v) => {
   return Number.isFinite(n) ? n : 0;
 };
 
+// Normalisation robuste (accents/casse/espaces)
+const norm = (s) =>
+  String(s || '')
+    .normalize('NFD')
+    .replace(/\p{Diacritic}/gu, '')
+    .toLowerCase()
+    .trim();
+
+/* ===== Helpers Caisse ===== */
+async function ensureCaisseDoc(societeId) {
+  const ref = doc(db, 'societe', societeId, 'caisse', 'solde');
+  const snap = await getDoc(ref);
+  if (!snap.exists()) {
+    await setDoc(ref, { balance: 0, updatedAt: Timestamp.now() }, { merge: true });
+  }
+  return ref;
+}
+
+/**
+ * Applique un delta sur la caisse et enregistre un mouvement.
+ * @param {string} societeId
+ * @param {number} delta   (positif = entrée, négatif = sortie)
+ * @param {object} meta    métadonnées du mouvement (label, chargeDiversId, etc.)
+ */
+async function applyCaisseDelta(societeId, delta, meta = {}) {
+  const soldeRef = await ensureCaisseDoc(societeId);
+
+  // Update solde
+  await updateDoc(soldeRef, { balance: increment(delta), updatedAt: Timestamp.now() });
+
+  // Historique mouvement
+  const mv = {
+    delta,                              // ex: -500 = sortie
+    type: delta >= 0 ? 'in' : 'out',
+    at: Timestamp.now(),
+    ...meta
+  };
+  await addDoc(collection(db, 'societe', societeId, 'caisseMovements'), mv);
+}
+
+/**
+ * Annule (revert) tous les mouvements de caisse liés à une charge donnée
+ * en appliquant le delta inverse de la somme des mouvements, puis supprime les docs.
+ * @return {number} totalReverted
+ */
+async function revertCaisseMovementsForCharge(societeId, chargeId) {
+  const qMov = query(
+    collection(db, 'societe', societeId, 'caisseMovements'),
+    where('chargeDiversId', '==', chargeId)
+  );
+  const snap = await getDocs(qMov);
+  if (snap.empty) return 0;
+
+  let sum = 0;
+  snap.docs.forEach(d => { sum += toFloat(d.data().delta ?? d.data().amount); });
+
+  if (sum !== 0) {
+    const soldeRef = await ensureCaisseDoc(societeId);
+    await updateDoc(soldeRef, { balance: increment(-sum), updatedAt: Timestamp.now() });
+  }
+
+  const batch = writeBatch(db);
+  snap.docs.forEach(d => batch.delete(d.ref));
+  await batch.commit();
+
+  return -sum;
+}
+
+/**
+ * Réconcilie la caisse selon le mode/statut/montant d'une charge.
+ * - Si mode === 'Espèces' et statut === 'Payé' => sortie de caisse = -montant
+ * - Sinon => aucun impact caisse
+ */
+async function reconcileCaisseForCharge(societeId, chargeId, form) {
+  await revertCaisseMovementsForCharge(societeId, chargeId);
+
+  const montant = toFloat(form.montant);
+  const mode = norm(form.modePaiement);
+  const statut = norm(form.statut);
+  const isCashImpact = mode === 'especes' && statut === 'paye';
+
+  if (isCashImpact && montant > 0) {
+    const delta = -montant; // sortie de caisse
+    await applyCaisseDelta(societeId, delta, {
+      label: `Charge diverse: ${form.libelle || ''} (${form.categorie || '-'})`,
+      modePaiement: form.modePaiement,
+      statut: form.statut,
+      chargeDiversId: chargeId,
+      reference: form.referenceVirement || '',
+      date: form.date || null,
+      createdFor: 'chargeDivers'
+    });
+  }
+}
+
 export default function ChargesDivers() {
   const { user, societeId } = useUserRole();
   
-  // Détection responsive
+  // Responsive
   const isMobile = useMediaQuery('(max-width:768px)');
   const isTablet = useMediaQuery('(min-width:769px) and (max-width:1024px)');
   const isDesktop = useMediaQuery('(min-width:1025px)');
@@ -75,7 +173,7 @@ export default function ChargesDivers() {
   const [filteredCharges, setFilteredCharges] = useState([]);
   const [loading, setLoading] = useState(true);
 
-  // Dialogues
+  // Dialogs
   const [dialogOpen, setDialogOpen] = useState(false);
   const [detailsDialogOpen, setDetailsDialogOpen] = useState(false);
 
@@ -94,7 +192,7 @@ export default function ChargesDivers() {
     typeDocument: ''
   });
 
-  // Form CHARGE
+  // Form
   const today = new Date().toISOString().split('T')[0];
   const [formData, setFormData] = useState({
     categorie: '',
@@ -116,6 +214,19 @@ export default function ChargesDivers() {
     referenceVirement: '',
     statut: 'Payé'
   });
+
+  // Solde caisse (affichage/diagnostic)
+  const [caisseSolde, setCaisseSolde] = useState(null);
+  useEffect(() => {
+    if (!societeId) return;
+    const soldeRef = doc(db, 'societe', societeId, 'caisse', 'solde');
+    const unsub = onSnapshot(
+      soldeRef,
+      (snap) => setCaisseSolde(snap.exists() ? Number(snap.data().balance || 0) : 0),
+      (err) => console.error('Listener caisse/solde:', err)
+    );
+    return () => unsub && unsub();
+  }, [societeId]);
 
   const categories = [
     'Loyer',
@@ -330,18 +441,24 @@ export default function ChargesDivers() {
     setDetailsDialogOpen(true);
   };
 
-  /* =================== Save =================== */
+  /* =================== Save (paiements + caisse) =================== */
   const handleSave = async () => {
     try {
       if (!formData.categorie || !formData.libelle || !formData.montant) {
         alert("Veuillez remplir les champs obligatoires (Catégorie, Libellé, Montant).");
         return;
       }
+      if (!societeId) {
+        alert('Société introuvable.');
+        return;
+      }
+
+      const montant = toFloat(formData.montant);
 
       const chargeData = {
         categorie: formData.categorie,
         libelle: formData.libelle,
-        montant: toFloat(formData.montant),
+        montant,
         date: formData.date,
         fournisseur: formData.fournisseur,
         contactFournisseur: formData.contactFournisseur,
@@ -357,17 +474,72 @@ export default function ChargesDivers() {
         modePaiement: formData.modePaiement,
         referenceVirement: formData.referenceVirement,
         statut: formData.statut,
-        updatedAt: Timestamp.now()
+        updatedAt: Timestamp.now(),
+        updatedBy: user?.uid || null
       };
 
+      // 1) Créer / Mettre à jour la charge
+      let chargeId;
       if (editingCharge) {
         await updateDoc(doc(db, 'societe', societeId, 'chargesDivers', editingCharge.id), chargeData);
-        alert('Charge modifiée avec succès');
+        chargeId = editingCharge.id;
       } else {
-        chargeData.createdAt = Timestamp.now();
-        await addDoc(collection(db, 'societe', societeId, 'chargesDivers'), chargeData);
-        alert('Charge ajoutée avec succès');
+        const payload = { ...chargeData, createdAt: Timestamp.now(), createdBy: user?.uid || null };
+        const ref = await addDoc(collection(db, 'societe', societeId, 'chargesDivers'), payload);
+        chargeId = ref.id;
       }
+
+      // 2) Supprimer anciens paiements liés
+      const qLinked = query(
+        collection(db, 'societe', societeId, 'paiements'),
+        where('chargeDiversId', '==', chargeId)
+      );
+      const oldPaysSnap = await getDocs(qLinked);
+      if (!oldPaysSnap.empty) {
+        const batch = writeBatch(db);
+        oldPaysSnap.docs.forEach(d => batch.delete(d.ref));
+        await batch.commit();
+      }
+
+      // 3) Créer paiement (lu par Dashboard)
+      if (formData.modePaiement && montant > 0) {
+        const isCashImpact = norm(formData.modePaiement) === 'especes' && norm(formData.statut) === 'paye';
+
+        const paiementData = {
+          // ⚠️ Le Dashboard teste "chargediverse"
+          type: 'chargediverse',
+          category: 'chargediverse',
+          relatedTo: 'chargediverse',
+
+          chargeDiversId: chargeId,
+          montant,
+          date: formData.date,
+
+          // Le Dashboard teste isCash() sur ces clés:
+          mode: formData.modePaiement,
+          paymentMode: formData.modePaiement,
+          moyen: formData.modePaiement,
+          typePaiement: formData.modePaiement,
+
+          statut: formData.statut,
+          description: `Charge diverse: ${formData.libelle} (${formData.categorie})`,
+          reference: formData.referenceVirement || '',
+          fournisseur: formData.fournisseur || '',
+
+          // Indices supplémentaires
+          isCashOut: isCashImpact,
+          sign: isCashImpact ? -1 : 0,
+
+          timestamp: Timestamp.now(),
+          createdAt: Timestamp.now(),
+          createdBy: user?.uid || null
+        };
+
+        await addDoc(collection(db, 'societe', societeId, 'paiements'), paiementData);
+      }
+
+      // 4) 🔥 Caisse (revert + ré-application si espèces+payé)
+      await reconcileCaisseForCharge(societeId, chargeId, formData);
 
       handleCloseDialog();
     } catch (e) {
@@ -376,18 +548,32 @@ export default function ChargesDivers() {
     }
   };
 
+  /* =================== Suppression (cascade paiements + caisse) =================== */
   const handleDelete = async (id) => {
     if (!window.confirm('Supprimer cette charge ?')) return;
     try {
+      // supprimer paiements liés
+      const qLinked = query(
+        collection(db, 'societe', societeId, 'paiements'),
+        where('chargeDiversId', '==', id)
+      );
+      const snap = await getDocs(qLinked);
+      const batch = writeBatch(db);
+      snap.docs.forEach(d => batch.delete(d.ref));
+      await batch.commit();
+
+      // revert caisse
+      await revertCaisseMovementsForCharge(societeId, id);
+
+      // supprimer la charge
       await deleteDoc(doc(db, 'societe', societeId, 'chargesDivers', id));
-      alert('Charge supprimée avec succès');
     } catch (e) {
       console.error('Erreur suppression:', e);
       alert('Erreur lors de la suppression');
     }
   };
 
-  // Styles modernes alignés avec ChargesPersonnels
+  // Styles modernes
   const styles = {
     container: {
       minHeight: '100vh',
@@ -522,6 +708,11 @@ export default function ChargesDivers() {
           <p style={styles.subtitle}>
             Gestion complète des charges et dépenses diverses
           </p>
+          {caisseSolde !== null && (
+            <p style={{ marginTop: 8, color: '#d1fae5', fontWeight: 800 }}>
+              💵 Solde caisse : {Number(caisseSolde).toFixed(2)} MAD
+            </p>
+          )}
         </div>
 
         <div style={styles.content}>
@@ -672,7 +863,7 @@ export default function ChargesDivers() {
             </div>
           </Collapse>
 
-          {/* Liste des charges */}
+          {/* Liste */}
           <div style={styles.chargesGrid}>
             {filteredCharges.length === 0 ? (
               <div style={{
@@ -1183,7 +1374,7 @@ export default function ChargesDivers() {
                 placeholder="Ex: CHQ-123456 ou VIR-789012"
               />
 
-              {formData.modePaiement === 'Espèces' && formData.statut === 'Payé' && (
+              {norm(formData.modePaiement) === 'especes' && norm(formData.statut) === 'paye' && (
                 <Alert
                   severity="success"
                   style={{
@@ -1409,7 +1600,7 @@ export default function ChargesDivers() {
                       Référence : {selectedCharge.referenceVirement}
                     </Typography>
                   )}
-                  {selectedCharge.modePaiement === 'Espèces' && selectedCharge.statut === 'Payé' && (
+                  {norm(selectedCharge.modePaiement) === 'especes' && norm(selectedCharge.statut) === 'paye' && (
                     <Alert severity="info" sx={{ mt: 1 }} style={{
                       background: 'linear-gradient(135deg, #dbeafe 0%, #bfdbfe 100%)',
                       border: '2px solid #60a5fa',
