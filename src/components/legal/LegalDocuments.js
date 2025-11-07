@@ -362,14 +362,14 @@ export default function LegalDocuments() {
         </p>
         <h3 style={styles.subsectionTitle}>2. Offres et tarifs</h3>
         <div style={styles.success}><strong>📦 Formules d'abonnement disponibles :</strong></div>
-        <h4 style={{...styles.subsectionTitle, fontSize: '1.1em'}}>🌟 STARTER - 299 MAD/mois</h4>
+        <h4 style={{...styles.subsectionTitle, fontSize: '1.1em'}}>🌟 STARTER - 299 DHS/mois</h4>
         <ul style={styles.list}>
           <li style={styles.listItem}>1 utilisateur (propriétaire)</li>
           <li style={styles.listItem}>Gestion stock, ventes, achats</li>
           <li style={styles.listItem}>Sauvegarde automatique</li>
           <li style={styles.listItem}>Support par email</li>
         </ul>
-        <h4 style={{...styles.subsectionTitle, fontSize: '1.1em'}}>💼 PROFESSIONAL - 599 MAD/mois</h4>
+        <h4 style={{...styles.subsectionTitle, fontSize: '1.1em'}}>💼 PROFESSIONAL - 599 DHS/mois</h4>
         <ul style={styles.list}>
           <li style={styles.listItem}>Jusqu'à 5 utilisateurs</li>
           <li style={styles.listItem}>Toutes fonctionnalités Starter</li>
@@ -377,7 +377,7 @@ export default function LegalDocuments() {
           <li style={styles.listItem}>Gestion multi-stocks</li>
           <li style={styles.listItem}>Support prioritaire</li>
         </ul>
-        <h4 style={{...styles.subsectionTitle, fontSize: '1.1em'}}>🏢 ENTERPRISE - 999 MAD/mois</h4>
+        <h4 style={{...styles.subsectionTitle, fontSize: '1.1em'}}>🏢 ENTERPRISE - 999 DHS/mois</h4>
         <ul style={styles.list}>
           <li style={styles.listItem}>Utilisateurs illimités</li>
           <li style={styles.listItem}>Toutes fonctionnalités Professional</li>
@@ -386,7 +386,7 @@ export default function LegalDocuments() {
           <li style={styles.listItem}>Support téléphonique dédié</li>
           <li style={styles.listItem}>Formation personnalisée</li>
         </ul>
-        <p style={styles.paragraph}><strong>⚠️ Note :</strong> Prix en MAD HT. TVA 20% applicable.</p>
+        <p style={styles.paragraph}><strong>⚠️ Note :</strong> Prix en DHS HT. TVA 20% applicable.</p>
         <h3 style={styles.subsectionTitle}>3. Souscription</h3>
         <p style={styles.paragraph}>La souscription s'effectue en ligne via notre site web :</p>
         <ul style={styles.list}>
@@ -625,7 +625,7 @@ export default function LegalDocuments() {
         <p style={styles.paragraph}>
           <strong>Raison sociale :</strong> [VOTRE SOCIÉTÉ]<br />
           <strong>Forme juridique :</strong> [SARL/SA/SARL AU/etc.]<br />
-          <strong>Capital social :</strong> [Montant] MAD<br />
+          <strong>Capital social :</strong> [Montant] DHS<br />
           <strong>RC :</strong> [Numéro RC Casablanca]<br />
           <strong>IF :</strong> [Identifiant Fiscal]<br />
           <strong>ICE :</strong> [Identifiant Commun de l'Entreprise]<br />

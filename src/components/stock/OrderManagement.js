@@ -46,11 +46,6 @@ const safeParseDate = (dateInput) => {
   }
 };
 
-const formatDateSafe = (dateInput) => {
-  const d = safeParseDate(dateInput);
-  return d ? d.toLocaleDateString("fr-FR") : "";
-};
-
 const normalize = (s) =>
   String(s || "")
     .normalize("NFD")
@@ -137,19 +132,17 @@ export default function OrderManagement() {
   const [groupCommercial, setGroupCommercial] = useState({});
   const [lineStatus, setLineStatus] = useState({});
 
-  // Lignes manuelles persistées
   const [manualLines, setManualLines] = useState([]);
-
-  // Opérations ignorées (par id vente#index), persistées
   const [dismissedOps, setDismissedOps] = useState(new Set());
 
-  const [manualSuppliers, setManualSuppliers] = useState({});
+  // Filtres
+  const [searchText, setSearchText] = useState("");
+  const [statusFilter, setStatusFilter] = useState("all");
 
   const ORDER_STATUS_COLL = "order_status";
   const DISMISSED_COLL = "order_dismissed";
   const MANUAL_LINES_COLL = "order_manual_lines";
 
-  // Refs de listeners temps réel
   const ventesListenerRef = useRef(null);
   const stockListenerRef = useRef(null);
   const orderStatusListenerRef = useRef(null);
@@ -336,9 +329,9 @@ export default function OrderManagement() {
     if (!waiting) {
       setupVentesListener();
       setupStockListener();
-      setupOrderStatusListener();   // ⏱️ temps réel
-      setupManualLinesListener();   // ⏱️ temps réel
-      setupDismissedOpsListener();  // ⏱️ temps réel
+      setupOrderStatusListener();
+      setupManualLinesListener();
+      setupDismissedOpsListener();
       fetchFournisseurs();
       fetchAchatsIndex();
     }
@@ -475,7 +468,6 @@ export default function OrderManagement() {
       .trim() || "-";
   };
 
-  // ====== FUSION / RECONSTRUCTION ======
   useEffect(() => {
     if (isProcessingRef.current) return;
     isProcessingRef.current = true;
@@ -539,12 +531,11 @@ export default function OrderManagement() {
           });
           processedKeys.add(supplementKey);
         } else {
-          const fournisseurFinal = manualSuppliers[x.key] || x.fournisseur || "";
           allLines.push({
             key: x.key,
             nom: x.nom,
             numeroLot: x.numeroLot,
-            fournisseur: fournisseurFinal,
+            fournisseur: x.fournisseur || "",
             quantite: newQty,
             date: todayISO(),
             remise: 0,
@@ -557,7 +548,6 @@ export default function OrderManagement() {
       }
     });
 
-    // reconstruction lignes envoyées/verrouillées
     Object.entries(lineStatus).forEach(([key, status]) => {
       if ((status.sent || status.validated) && !processedKeys.has(key)) {
         const [baseKey] = key.split("|supplement");
@@ -582,7 +572,6 @@ export default function OrderManagement() {
       }
     });
 
-    // Injecter les lignes manuelles persistées non envoyées/validées
     const manualPending = (manualLines || []).filter((ml) => {
       const st = lineStatus[ml.key] || {};
       return !st?.sent && !st?.validated;
@@ -605,9 +594,8 @@ export default function OrderManagement() {
 
       return newState;
     });
-  }, [ventesAggregate, lineStatus, manualSuppliers, ventes, dismissedOps, manualLines]);
+  }, [ventesAggregate, lineStatus, ventes, dismissedOps, manualLines]);
 
-  // Nettoyer les lignes orphelines si la vente disparait
   useEffect(() => {
     setToOrder((prev) =>
       prev.filter((line) => {
@@ -651,11 +639,10 @@ export default function OrderManagement() {
     });
   }, [groups, findSupplierRecord]);
 
-  /* ================== ACTIONS LIGNES (écriture → reflétée en temps réel) ================== */
+  /* ================== ACTIONS LIGNES ================== */
 
   const setLineStatusPartial = useCallback(
     (key, patch) => {
-      // On laisse la source de vérité à Firestore → le listener mettra à jour `lineStatus` en temps réel
       if (!societeId) return;
       const ref = doc(db, "societe", societeId, ORDER_STATUS_COLL, key);
       const payload = {
@@ -705,7 +692,6 @@ export default function OrderManagement() {
   const setLineField = useCallback(
     (key, field, val) => {
       setToOrder((prev) => prev.map((l) => (l.key === key ? { ...l, [field]: val } : l)));
-      // miroir en base si c'est une ligne manuelle persistée
       const ml = manualLines.find((m) => m.key === key);
       if (ml?.manualId && societeId) {
         setDoc(
@@ -741,18 +727,14 @@ export default function OrderManagement() {
       const key = line.key;
       const ops = Array.isArray(line.sourceOps) ? line.sourceOps : [];
 
-      // 1) ignorer définitivement les opérations ventes (si existantes)
       if (ops.length) await persistDismissOps(ops);
 
-      // 2) si ligne manuelle → suppression du doc (listener mettra l'UI à jour)
       if (line.isManual && line.manualId && societeId) {
         await deleteDoc(doc(db, "societe", societeId, MANUAL_LINES_COLL, line.manualId)).catch(() => {});
       }
 
-      // 3) nettoyer statut
       clearLineStatus(key);
 
-      // UI : optimiste
       setToOrder((prev) => prev.filter((l) => l.key !== key));
       setSuccess("Ligne supprimée.");
       setTimeout(() => setSuccess(""), 1200);
@@ -880,7 +862,7 @@ export default function OrderManagement() {
     const body = lines
       .map((l, i) => {
         const urgent = l.urgent ? " (URGENT)" : "";
-        const rem = l.remise ? ` — Remise: ${Number(l.remise).toFixed(2)} DH` : "";
+        const rem = l.remise ? ` — Remise: ${Number(l.remise).toFixed(2)} DHS` : "";
         return `${i + 1}. ${l.nom}${urgent}\n   Lot: ${l.numeroLot} — Qté: ${l.quantite}${rem}`;
       })
       .join("\n");
@@ -948,7 +930,6 @@ export default function OrderManagement() {
 
       const now = Timestamp.now();
 
-      // Geler le statut (écritures -> reflétées instantanément par le listener order_status)
       await Promise.all(
         lines.map(async (l) => {
           const frozenOps = Array.isArray(l.sourceOps) ? l.sourceOps : [];
@@ -965,14 +946,13 @@ export default function OrderManagement() {
             frozenSupplier: l.fournisseur || supplierName,
           });
 
-          // si ligne manuelle, on la retire de la collection (le listener mettra l'UI à jour)
           if (l.isManual && l.manualId && societeId) {
             await deleteDoc(doc(db, "societe", societeId, MANUAL_LINES_COLL, l.manualId)).catch(() => {});
           }
         })
       );
 
-      setSuccess("Message WhatsApp prêt — lignes verrouillées (temps réel).");
+      setSuccess("Message WhatsApp prêt — lignes verrouillées.");
       setTimeout(() => setSuccess(""), 1500);
     },
     [
@@ -992,13 +972,11 @@ export default function OrderManagement() {
   const markLineValidated = useCallback(
     (key) => {
       const now = Timestamp.now();
-      // L’UI se mettra à jour via le listener temps réel
       setLineStatusPartial(key, { validated: true, validatedAt: now, sent: true, sentAt: now });
     },
     [setLineStatusPartial]
   );
 
-  // ========= Formulaire Ligne manuelle (persistée pour temps réel/reload) =========
   const addManualLine = useCallback(async () => {
     const nom = window.prompt("Nom du médicament :");
     if (!nom) return;
@@ -1034,20 +1012,44 @@ export default function OrderManagement() {
 
     try {
       if (!societeId) throw new Error("Société inconnue");
-      // Création -> le listener manual_lines chargera automatiquement l’UI
       await addDoc(collection(db, "societe", societeId, MANUAL_LINES_COLL), {
         ...newLine,
         societeId,
         createdAt: Timestamp.now(),
         updatedAt: Timestamp.now(),
       });
-      setSuccess("Ligne manuelle ajoutée (temps réel).");
+      setSuccess("Ligne manuelle ajoutée.");
       setTimeout(() => setSuccess(""), 1200);
     } catch (e) {
       console.error("addManualLine:", e);
-      setError("Impossible d’enregistrer la ligne manuelle.");
+      setError("Impossible d'enregistrer la ligne manuelle.");
     }
   }, [fournisseurs, societeId]);
+
+  /* ================== COMPTEURS POUR BADGES ================== */
+  const statusCounts = useMemo(() => {
+    const counts = {
+      all: 0,
+      pending: 0,
+      sent: 0,
+      validated: 0,
+    };
+
+    toOrder.forEach((line) => {
+      const st = lineStatus[line.key] || {};
+      counts.all++;
+
+      if (st.validated) {
+        counts.validated++;
+      } else if (st.sent) {
+        counts.sent++;
+      } else {
+        counts.pending++;
+      }
+    });
+
+    return counts;
+  }, [toOrder, lineStatus]);
 
   /* ================== UI ================== */
 
@@ -1104,10 +1106,10 @@ export default function OrderManagement() {
                 WebkitTextFillColor: "transparent",
               }}
             >
-              Gestion des Commandes (Fournisseurs)
+              Gestion des Commandes Fournisseurs
             </h1>
             <p style={{ margin: "6px 0 0", color: "#6b7280" }}>
-              Tout est synchronisé en temps réel : envoi et validation apparaissent instantanément.
+              Synchronisation en temps réel • {statusCounts.all} ligne(s) totale(s)
             </p>
           </div>
         </div>
@@ -1125,7 +1127,7 @@ export default function OrderManagement() {
           }}
         >
           {error}
-          <button onClick={() => setError("")} style={{ marginLeft: 8, border: "none", background: "transparent", cursor: "pointer" }}>
+          <button onClick={() => setError("")} style={{ marginLeft: 8, border: "none", background: "transparent", cursor: "pointer", fontSize: 20 }}>
             ×
           </button>
         </div>
@@ -1142,7 +1144,7 @@ export default function OrderManagement() {
           }}
         >
           {success}
-          <button onClick={() => setSuccess("")} style={{ marginLeft: 8, border: "none", background: "transparent", cursor: "pointer" }}>
+          <button onClick={() => setSuccess("")} style={{ marginLeft: 8, border: "none", background: "transparent", cursor: "pointer", fontSize: 20 }}>
             ×
           </button>
         </div>
@@ -1156,21 +1158,105 @@ export default function OrderManagement() {
           boxShadow: "0 10px 30px rgba(0,0,0,.05)",
         }}
       >
-        <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-          <h2 style={{ margin: 0, fontWeight: 800 }}>Quantités à commander</h2>
-          <span
-            style={{
-              padding: "4px 10px",
-              borderRadius: 999,
-              background: "#EEF2FF",
-              border: "1px solid #C7D2FE",
-              fontWeight: 800,
-              color: "#3730A3",
-            }}
-          >
-            {toOrder.length} ligne(s)
-          </span>
+        {/* BARRE DE FILTRES */}
+        <div
+          style={{
+            background: "linear-gradient(135deg, #f8fafc, #f1f5f9)",
+            border: "2px solid #e2e8f0",
+            borderRadius: 16,
+            padding: 16,
+            marginBottom: 20,
+          }}
+        >
+          <div style={{ marginBottom: 16 }}>
+            <input
+              type="text"
+              placeholder="🔍 Rechercher un médicament par nom..."
+              value={searchText}
+              onChange={(e) => setSearchText(e.target.value)}
+              style={{
+                width: "100%",
+                padding: "12px 16px",
+                borderRadius: 12,
+                border: "2px solid #cbd5e1",
+                fontSize: 15,
+                fontWeight: 500,
+                outline: "none",
+                transition: "all 0.2s ease",
+              }}
+              onFocus={(e) => (e.target.style.borderColor = "#6366f1")}
+              onBlur={(e) => (e.target.style.borderColor = "#cbd5e1")}
+            />
+          </div>
 
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+            <span style={{ fontWeight: 700, color: "#475569", fontSize: 14 }}>Statut :</span>
+
+            {[
+              { value: "all", label: "Tous", count: statusCounts.all, color: "#6366f1" },
+              { value: "pending", label: "En attente", count: statusCounts.pending, color: "#f59e0b" },
+              { value: "sent", label: "Envoyés", count: statusCounts.sent, color: "#3b82f6" },
+              { value: "validated", label: "Validés", count: statusCounts.validated, color: "#22c55e" },
+            ].map((option) => (
+              <button
+                key={option.value}
+                onClick={() => setStatusFilter(option.value)}
+                style={{
+                  padding: "8px 16px",
+                  borderRadius: 10,
+                  border: statusFilter === option.value ? `2px solid ${option.color}` : "2px solid #e2e8f0",
+                  background: statusFilter === option.value ? option.color : "#fff",
+                  color: statusFilter === option.value ? "#fff" : "#64748b",
+                  fontWeight: 700,
+                  fontSize: 14,
+                  cursor: "pointer",
+                  transition: "all 0.2s ease",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 6,
+                }}
+              >
+                <span>{option.label}</span>
+                <span
+                  style={{
+                    background: statusFilter === option.value ? "rgba(255,255,255,0.3)" : "#f1f5f9",
+                    padding: "2px 8px",
+                    borderRadius: 999,
+                    fontSize: 12,
+                    fontWeight: 800,
+                  }}
+                >
+                  {option.count}
+                </span>
+              </button>
+            ))}
+
+            {(searchText || statusFilter !== "all") && (
+              <button
+                onClick={() => {
+                  setSearchText("");
+                  setStatusFilter("all");
+                }}
+                style={{
+                  marginLeft: "auto",
+                  padding: "8px 16px",
+                  borderRadius: 10,
+                  border: "2px solid #ef4444",
+                  background: "#fff",
+                  color: "#ef4444",
+                  fontWeight: 700,
+                  fontSize: 14,
+                  cursor: "pointer",
+                }}
+              >
+                🔄 Réinitialiser
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* Actions principales */}
+        <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 16 }}>
           <button
             onClick={addManualLine}
             style={{
@@ -1178,13 +1264,12 @@ export default function OrderManagement() {
               color: "#fff",
               border: "none",
               borderRadius: 10,
-              padding: "6px 12px",
+              padding: "10px 16px",
               cursor: "pointer",
               fontWeight: 700,
             }}
-            title="Ajouter une ligne manuellement"
           >
-            + Ligne manuelle
+            ➕ Ligne manuelle
           </button>
 
           <button
@@ -1193,7 +1278,7 @@ export default function OrderManagement() {
               await Promise.all(
                 keysToClean.map((k) => deleteDoc(doc(db, "societe", societeId, ORDER_STATUS_COLL, k)).catch(() => {}))
               );
-              setSuccess("Nettoyage effectué : opérations validées retirées (temps réel).");
+              setSuccess("Nettoyage effectué.");
               setTimeout(() => setSuccess(""), 1400);
             }}
             style={{
@@ -1201,29 +1286,29 @@ export default function OrderManagement() {
               background: "transparent",
               border: "1px dashed #9ca3af",
               borderRadius: 10,
-              padding: "6px 10px",
+              padding: "10px 16px",
               cursor: "pointer",
               color: "#4b5563",
+              fontWeight: 600,
             }}
-            title="Supprimer les opérations validées"
           >
-            Nettoyer validées
+            🧹 Nettoyer validées
           </button>
         </div>
 
         {Object.keys(groups).length === 0 ? (
-          <div style={{ padding: 14, color: "#6b7280" }}>
-            En attente de ventes… Les articles vendus s'ajouteront ici automatiquement.
+          <div style={{ padding: 40, textAlign: "center", color: "#6b7280" }}>
+            <div style={{ fontSize: 48, marginBottom: 16 }}>📦</div>
+            <div style={{ fontSize: 16, fontWeight: 600 }}>Aucune commande en attente</div>
+            <div style={{ fontSize: 14, marginTop: 8 }}>Les articles vendus apparaîtront ici automatiquement</div>
           </div>
         ) : (
           Object.keys(groups).map((supName) => {
             const lines = [...groups[supName]];
-
             const rec = findSupplierRecord(supName);
             const supplierId = rec?.id || null;
             const commercials = rec?.commerciaux || [];
             const telSel = supplierId ? groupCommercial[supplierId] || "" : "";
-
             const todayString = new Date().toISOString().split("T")[0];
 
             const filteredLines = lines.filter((l) => {
@@ -1231,8 +1316,28 @@ export default function OrderManagement() {
               const isToday = l.date === todayString;
               const isSentButNotValidated = st.sent && !st.validated;
               const isNewAfterSent = l.isNewAfterSent === true;
-              return isToday || isSentButNotValidated || isNewAfterSent;
+
+              const baseFilter = isToday || isSentButNotValidated || isNewAfterSent;
+              if (!baseFilter) return false;
+
+              if (searchText) {
+                const searchLower = normalize(searchText);
+                const nomLower = normalize(l.nom);
+                if (!nomLower.includes(searchLower)) return false;
+              }
+
+              if (statusFilter === "pending") {
+                return !st.sent && !st.validated;
+              } else if (statusFilter === "sent") {
+                return st.sent && !st.validated;
+              } else if (statusFilter === "validated") {
+                return st.validated;
+              }
+
+              return true;
             });
+
+            if (filteredLines.length === 0) return null;
 
             return (
               <div
@@ -1254,9 +1359,21 @@ export default function OrderManagement() {
                     marginBottom: 10,
                   }}
                 >
-                  <strong>
-                    {supName === "Fournisseur inconnu" ? "Fournisseur inconnu (vérifiez Achats/Stock)" : supName}
+                  <strong style={{ fontSize: 16 }}>
+                    {supName === "Fournisseur inconnu" ? "⚠️ Fournisseur inconnu" : `🏢 ${supName}`}
                   </strong>
+                  <span
+                    style={{
+                      padding: "2px 8px",
+                      borderRadius: 999,
+                      background: "#f1f5f9",
+                      fontSize: 12,
+                      fontWeight: 700,
+                      color: "#64748b",
+                    }}
+                  >
+                    {filteredLines.length} ligne(s)
+                  </span>
 
                   <div
                     style={{
@@ -1267,76 +1384,24 @@ export default function OrderManagement() {
                       flexWrap: "wrap",
                     }}
                   >
-                    <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                      <select
-                        value={telSel}
-                        onChange={(e) => handleCommercialSelectChange(supName, e.target.value)}
-                        style={{
-                          padding: "8px 10px",
-                          borderRadius: 10,
-                          border: "2px solid #e5e7eb",
-                          minWidth: 240,
-                        }}
-                        title="Sélection du commercial WhatsApp"
-                      >
-                        <option value="">— Commercial (WhatsApp) —</option>
-                        {commercials.map((c, i) => (
-                          <option key={i} value={normalizePhoneForWa(c.telephone || "")}>
-                            {c.nom || "Commercial"} — {c.telephone || ""}
-                          </option>
-                        ))}
-                      </select>
-
-                      {commercials.length > 0 && (
-                        <div
-                          style={{
-                            fontSize: 12,
-                            color: "#6b7280",
-                            background: "#f9fafb",
-                            padding: 8,
-                            borderRadius: 8,
-                            border: "1px solid #e5e7eb",
-                          }}
-                        >
-                          <div style={{ fontWeight: 600, marginBottom: 6 }}>Commerciaux enregistrés :</div>
-                          {commercials.map((c, i) => (
-                            <div
-                              key={i}
-                              style={{
-                                display: "flex",
-                                alignItems: "center",
-                                justifyContent: "space-between",
-                                padding: "4px 6px",
-                                background: "#fff",
-                                borderRadius: 6,
-                                marginBottom: 4,
-                                border: "1px solid #e5e7eb",
-                              }}
-                            >
-                              <span style={{ flex: 1 }}>
-                                <strong>{c.nom}</strong> - {c.telephone}
-                              </span>
-                              <button
-                                onClick={() => deleteCommercial(supName, i)}
-                                style={{
-                                  padding: "4px 8px",
-                                  background: "linear-gradient(135deg,#ef4444,#dc2626)",
-                                  color: "#fff",
-                                  border: "none",
-                                  borderRadius: 6,
-                                  cursor: "pointer",
-                                  fontSize: 11,
-                                  fontWeight: 600,
-                                }}
-                                title={`Supprimer ${c.nom}`}
-                              >
-                                Supprimer
-                              </button>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
+                    <select
+                      value={telSel}
+                      onChange={(e) => handleCommercialSelectChange(supName, e.target.value)}
+                      style={{
+                        padding: "8px 12px",
+                        borderRadius: 10,
+                        border: "2px solid #e5e7eb",
+                        minWidth: 200,
+                        fontWeight: 600,
+                      }}
+                    >
+                      <option value="">— Sélectionner commercial —</option>
+                      {commercials.map((c, i) => (
+                        <option key={i} value={normalizePhoneForWa(c.telephone || "")}>
+                          {c.nom} — {c.telephone}
+                        </option>
+                      ))}
+                    </select>
 
                     <button
                       onClick={() => addCommercial(supName)}
@@ -1345,12 +1410,12 @@ export default function OrderManagement() {
                         color: "#fff",
                         border: "none",
                         borderRadius: 10,
-                        padding: "8px 12px",
+                        padding: "8px 14px",
                         fontWeight: 700,
                         cursor: "pointer",
                       }}
                     >
-                      + Commercial
+                      ➕ Commercial
                     </button>
 
                     <button
@@ -1360,29 +1425,62 @@ export default function OrderManagement() {
                         color: "#fff",
                         border: "none",
                         borderRadius: 10,
-                        padding: "8px 12px",
+                        padding: "8px 14px",
                         fontWeight: 800,
                         cursor: "pointer",
                       }}
-                      title="Envoyer le bon de commande via WhatsApp"
                     >
-                      Envoyer WhatsApp
+                      📤 WhatsApp
                     </button>
                   </div>
                 </div>
 
+                {commercials.length > 0 && (
+                  <div
+                    style={{
+                      fontSize: 12,
+                      color: "#6b7280",
+                      background: "#f9fafb",
+                      padding: 10,
+                      borderRadius: 8,
+                      marginBottom: 10,
+                    }}
+                  >
+                    <strong>Commerciaux :</strong>
+                    {commercials.map((c, i) => (
+                      <span key={i} style={{ marginLeft: 8 }}>
+                        {c.nom} ({c.telephone})
+                        <button
+                          onClick={() => deleteCommercial(supName, i)}
+                          style={{
+                            marginLeft: 6,
+                            padding: "2px 6px",
+                            background: "#fee2e2",
+                            border: "1px solid #fecaca",
+                            borderRadius: 6,
+                            cursor: "pointer",
+                            fontSize: 10,
+                          }}
+                        >
+                          ✕
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                )}
+
                 <div style={{ overflowX: "auto" }}>
-                  <table style={{ width: "100%", minWidth: 980, borderCollapse: "collapse" }}>
+                  <table style={{ width: "100%", minWidth: 900, borderCollapse: "collapse" }}>
                     <thead>
                       <tr style={{ background: "linear-gradient(135deg,#1f2937,#111827)", color: "#fff" }}>
                         <th style={{ padding: 10, textAlign: "left" }}>Médicament</th>
                         <th style={{ padding: 10, textAlign: "left" }}>N° lot</th>
                         <th style={{ padding: 10, textAlign: "center" }}>Date</th>
-                        <th style={{ padding: 10, textAlign: "center" }}>Quantité</th>
-                        <th style={{ padding: 10, textAlign: "center" }}>Remise (DH)</th>
-                        <th style={{ padding: 10, textAlign: "center" }}>URGENT</th>
+                        <th style={{ padding: 10, textAlign: "center" }}>Qté</th>
+                        <th style={{ padding: 10, textAlign: "center" }}>Remise</th>
+                        <th style={{ padding: 10, textAlign: "center" }}>Urgent</th>
                         <th style={{ padding: 10, textAlign: "center" }}>Statut</th>
-                        <th style={{ padding: 10, textAlign: "center", width: 360 }}>Actions</th>
+                        <th style={{ padding: 10, textAlign: "center", width: 320 }}>Actions</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -1393,8 +1491,6 @@ export default function OrderManagement() {
 
                         const displayNom = isLocked ? st.frozenName || l.nom : l.nom;
                         const displayLot = isLocked ? st.frozenLot || l.numeroLot : l.numeroLot;
-                        const displaySupplier = isLocked ? st.frozenSupplier || l.fournisseur : l.fournisseur;
-
                         const displayQuantite = isLocked ? st.frozenQuantity || l.quantite : l.quantite;
                         const displayDate = isLocked ? st.frozenDate || l.date : l.date;
                         const displayRemise = isLocked ? st.frozenRemise || l.remise : l.remise;
@@ -1404,63 +1500,43 @@ export default function OrderManagement() {
                           <tr
                             key={l.key}
                             style={{
-                              background: isLocked
-                                ? "rgba(254,243,199,.4)"
+                              background: st.validated
+                                ? "rgba(220,252,231,.3)"
+                                : isLocked
+                                ? "rgba(254,243,199,.3)"
                                 : isNewAfterSent
-                                ? "rgba(220,252,231,.4)"
+                                ? "rgba(191,219,254,.3)"
                                 : idx % 2
-                                ? "rgba(249,250,251,.6)"
+                                ? "#f9fafb"
                                 : "white",
-                              borderBottom: "1px solid #f3f4f6",
-                              borderLeft: isLocked ? "4px solid #f59e0b" : isNewAfterSent ? "4px solid #22c55e" : undefined,
+                              borderLeft: st.validated
+                                ? "4px solid #22c55e"
+                                : isLocked
+                                ? "4px solid #f59e0b"
+                                : isNewAfterSent
+                                ? "4px solid #3b82f6"
+                                : undefined,
                             }}
                           >
                             <td style={{ padding: 10, fontWeight: 700 }}>
-                              {isNewAfterSent ? (
-                                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                                  <span style={{ fontSize: 20, fontWeight: 900 }}>➕</span>
-                                  <span>{displayNom}</span>
-                                  {l.supplementVersion && (
-                                    <span
-                                      style={{
-                                        padding: "2px 6px",
-                                        background: "#dcfce7",
-                                        border: "2px solid #22c55e",
-                                        borderRadius: 6,
-                                        fontSize: 10,
-                                        fontWeight: 800,
-                                      }}
-                                    >
-                                      SUPPLÉMENT #{l.supplementVersion}
-                                    </span>
-                                  )}
-                                </div>
-                              ) : (
-                                displayNom
-                              )}
-                              {isLocked && (
+                              {displayNom}
+                              {isNewAfterSent && (
                                 <span
                                   style={{
-                                    marginLeft: 8,
-                                    padding: "2px 8px",
-                                    borderRadius: 999,
-                                    background: "#fef3c7",
-                                    border: "1px solid #f59e0b",
-                                    fontSize: 11,
-                                    fontWeight: 600,
+                                    marginLeft: 6,
+                                    padding: "2px 6px",
+                                    background: "#dbeafe",
+                                    border: "1px solid #93c5fd",
+                                    borderRadius: 6,
+                                    fontSize: 10,
+                                    fontWeight: 800,
                                   }}
-                                  title="Ligne verrouillée - envoyée mais non validée"
                                 >
-                                  VERROUILLÉE
+                                  NOUVEAU
                                 </span>
                               )}
-                              <div style={{ fontSize: 11, color: "#6b7280", marginTop: 4 }}>
-                                Fournisseur : <strong>{displaySupplier || "—"}</strong>
-                              </div>
                             </td>
-
                             <td style={{ padding: 10 }}>{displayLot}</td>
-
                             <td style={{ padding: 10, textAlign: "center" }}>
                               <input
                                 type="date"
@@ -1473,11 +1549,9 @@ export default function OrderManagement() {
                                   border: "1px solid #e5e7eb",
                                   background: isLocked ? "#f9fafb" : "#fff",
                                   cursor: isLocked ? "not-allowed" : "text",
-                                  opacity: isLocked ? 0.7 : 1,
                                 }}
                               />
                             </td>
-
                             <td style={{ padding: 10, textAlign: "center" }}>
                               <input
                                 type="number"
@@ -1488,18 +1562,15 @@ export default function OrderManagement() {
                                 }
                                 disabled={isLocked}
                                 style={{
-                                  width: 100,
+                                  width: 80,
                                   textAlign: "center",
                                   padding: "6px 8px",
                                   borderRadius: 8,
                                   border: "1px solid #e5e7eb",
                                   background: isLocked ? "#f9fafb" : "#fff",
-                                  cursor: isLocked ? "not-allowed" : "text",
-                                  opacity: isLocked ? 0.7 : 1,
                                 }}
                               />
                             </td>
-
                             <td style={{ padding: 10, textAlign: "center" }}>
                               <input
                                 type="number"
@@ -1511,143 +1582,116 @@ export default function OrderManagement() {
                                 }
                                 disabled={isLocked}
                                 style={{
-                                  width: 120,
+                                  width: 100,
                                   textAlign: "center",
                                   padding: "6px 8px",
                                   borderRadius: 8,
                                   border: "1px solid #e5e7eb",
                                   background: isLocked ? "#f9fafb" : "#fff",
-                                  cursor: isLocked ? "not-allowed" : "text",
-                                  opacity: isLocked ? 0.7 : 1,
                                 }}
                               />
                             </td>
-
                             <td style={{ padding: 10, textAlign: "center" }}>
-                              <label
-                                style={{
-                                  display: "inline-flex",
-                                  alignItems: "center",
-                                  gap: 8,
-                                  fontWeight: 700,
-                                  cursor: isLocked ? "not-allowed" : "pointer",
-                                  opacity: isLocked ? 0.7 : 1,
-                                }}
-                              >
-                                <input
-                                  type="checkbox"
-                                  checked={!!displayUrgent}
-                                  onChange={(e) => !isLocked && setLineField(l.key, "urgent", !!e.target.checked)}
-                                  disabled={isLocked}
-                                />
-                                {displayUrgent ? "URGENT" : "—"}
-                              </label>
+                              <input
+                                type="checkbox"
+                                checked={!!displayUrgent}
+                                onChange={(e) => !isLocked && setLineField(l.key, "urgent", !!e.target.checked)}
+                                disabled={isLocked}
+                                style={{ width: 18, height: 18, cursor: isLocked ? "not-allowed" : "pointer" }}
+                              />
                             </td>
-
                             <td style={{ padding: 10, textAlign: "center" }}>
-                              {st.sent ? (
+                              {st.validated ? (
                                 <span
                                   style={{
-                                    display: "inline-block",
-                                    padding: "2px 8px",
+                                    padding: "4px 10px",
                                     borderRadius: 999,
-                                    background: isLocked ? "#fef3c7" : "#DBEAFE",
-                                    border: isLocked ? "1px solid #f59e0b" : "1px solid #93C5FD",
+                                    background: "#dcfce7",
+                                    border: "1px solid #86efac",
                                     fontSize: 12,
-                                    marginRight: 6,
-                                    fontWeight: isLocked ? 700 : 400,
+                                    fontWeight: 700,
                                   }}
-                                  title={st.sentAt ? `Envoyé le ${formatDateSafe(st.sentAt)}` : "Envoyé"}
                                 >
-                                  Envoyé
+                                  ✅ Validé
+                                </span>
+                              ) : st.sent ? (
+                                <span
+                                  style={{
+                                    padding: "4px 10px",
+                                    borderRadius: 999,
+                                    background: "#fef3c7",
+                                    border: "1px solid #fde047",
+                                    fontSize: 12,
+                                    fontWeight: 700,
+                                  }}
+                                >
+                                  📤 Envoyé
                                 </span>
                               ) : (
-                                <span style={{ color: "#9CA3AF" }}>—</span>
-                              )}
-
-                              {st.validated && (
-                                <span
-                                  style={{
-                                    display: "inline-block",
-                                    padding: "2px 8px",
-                                    borderRadius: 999,
-                                    background: "#DCFCE7",
-                                    border: "1px solid #86EFAC",
-                                    fontSize: 12,
-                                  }}
-                                  title={st.validatedAt ? `Validé le ${formatDateSafe(st.validatedAt)}` : "Validé"}
-                                >
-                                  Validé
-                                </span>
+                                <span style={{ color: "#9ca3af", fontSize: 12 }}>⏳ En attente</span>
                               )}
                             </td>
-
                             <td style={{ padding: 10, textAlign: "center" }}>
-                              {!st.validated && st.sent && (
-                                <button
-                                  onClick={() => markLineValidated(l.key)}
-                                  style={{
-                                    marginRight: 8,
-                                    background: "linear-gradient(135deg,#34d399,#10b981)",
-                                    color: "#fff",
-                                    border: "none",
-                                    borderRadius: 10,
-                                    padding: "6px 10px",
-                                    cursor: "pointer",
-                                  }}
-                                  title="Marquer la commande comme validée"
-                                >
-                                  Valider
-                                </button>
-                              )}
-
-                              {!isLocked && (
-                                <>
+                              <div style={{ display: "flex", gap: 6, justifyContent: "center", flexWrap: "wrap" }}>
+                                {!st.validated && st.sent && (
                                   <button
-                                    onClick={() => duplicateLine(l.key)}
+                                    onClick={() => markLineValidated(l.key)}
                                     style={{
-                                      marginRight: 8,
-                                      background: "linear-gradient(135deg,#60a5fa,#3b82f6)",
+                                      background: "linear-gradient(135deg,#22c55e,#16a34a)",
                                       color: "#fff",
                                       border: "none",
-                                      borderRadius: 10,
+                                      borderRadius: 8,
                                       padding: "6px 10px",
                                       cursor: "pointer",
+                                      fontSize: 13,
+                                      fontWeight: 700,
                                     }}
-                                    title="Dupliquer la ligne"
                                   >
-                                    Dupliquer
+                                    ✅
                                   </button>
-
-                                  <button
-                                    onClick={() => removeLine(l)}
-                                    style={{
-                                      background: "linear-gradient(135deg,#ef4444,#dc2626)",
-                                      color: "#fff",
-                                      border: "none",
-                                      borderRadius: 10,
-                                      padding: "6px 10px",
-                                      cursor: "pointer",
-                                    }}
-                                    title="Supprimer"
-                                  >
-                                    Supprimer
-                                  </button>
-                                </>
-                              )}
-
-                              {isLocked && <span style={{ fontSize: 12, fontWeight: 600 }}>Ligne verrouillée</span>}
+                                )}
+                                {!isLocked && (
+                                  <>
+                                    <button
+                                      onClick={() => duplicateLine(l.key)}
+                                      style={{
+                                        background: "linear-gradient(135deg,#60a5fa,#3b82f6)",
+                                        color: "#fff",
+                                        border: "none",
+                                        borderRadius: 8,
+                                        padding: "6px 10px",
+                                        cursor: "pointer",
+                                        fontSize: 13,
+                                      }}
+                                      title="Dupliquer"
+                                    >
+                                      📋
+                                    </button>
+                                    <button
+                                      onClick={() => removeLine(l)}
+                                      style={{
+                                        background: "linear-gradient(135deg,#ef4444,#dc2626)",
+                                        color: "#fff",
+                                        border: "none",
+                                        borderRadius: 8,
+                                        padding: "6px 10px",
+                                        cursor: "pointer",
+                                        fontSize: 13,
+                                      }}
+                                      title="Supprimer"
+                                    >
+                                      🗑️
+                                    </button>
+                                  </>
+                                )}
+                                {isLocked && (
+                                  <span style={{ fontSize: 11, color: "#6b7280", fontWeight: 600 }}>🔒 Verrouillé</span>
+                                )}
+                              </div>
                             </td>
                           </tr>
                         );
                       })}
-                      {filteredLines.length === 0 && (
-                        <tr>
-                          <td colSpan={8} style={{ padding: 12, textAlign: "center", color: "#6b7280" }}>
-                            Aucune ligne pour ce fournisseur (selon les filtres actuels)
-                          </td>
-                        </tr>
-                      )}
                     </tbody>
                   </table>
                 </div>
@@ -1655,7 +1699,6 @@ export default function OrderManagement() {
             );
           })
         )}
-        
       </div>
     </div>
   );

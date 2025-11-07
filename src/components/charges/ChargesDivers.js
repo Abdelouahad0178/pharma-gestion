@@ -74,7 +74,52 @@ const norm = (s) =>
     .toLowerCase()
     .trim();
 
-/* ===== Helpers Caisse ===== */
+// Date helpers (mêmes principes que Dashboard)
+function toDate(v) {
+  if (!v) return null;
+  try {
+    if (v?.toDate && typeof v.toDate === 'function') return v.toDate();
+    if (typeof v?.seconds === 'number') return new Date(v.seconds * 1000);
+    if (v instanceof Date) return isNaN(v) ? null : v;
+    const d = new Date(v);
+    return isNaN(d) ? null : d;
+  } catch {
+    return null;
+  }
+}
+function sameLocalDay(a, b = new Date()) {
+  const da = toDate(a), dbb = toDate(b);
+  if (!da || !dbb) return false;
+  return (
+    da.getFullYear() === dbb.getFullYear() &&
+    da.getMonth() === dbb.getMonth() &&
+    da.getDate() === dbb.getDate()
+  );
+}
+
+// Paiements: même détection que dans Dashboard
+function isCash(mode) {
+  const m = norm(mode);
+  return ['especes', 'espèces', 'espece', 'espèce', 'cash', 'liquide'].includes(m);
+}
+function isSalePayment(p) {
+  const t = norm(p?.type || p?.relatedTo || p?.for || p?.category);
+  return [
+    'vente','ventes','sale','sales',
+    'reglementclient','reglement_client'
+  ].includes(t);
+}
+function isSupplierPayment(p) {
+  const t = norm(p?.type || p?.relatedTo || p?.for || p?.category);
+  return [
+    'achat','achats','fournisseur','fournisseurs',
+    'supplier','suppliers','purchase','purchases',
+    'reglementfournisseur','reglement_fournisseur',
+    'chargepersonnel','chargediverse'
+  ].includes(t);
+}
+
+/* ===== Helpers Caisse (persistance) ===== */
 async function ensureCaisseDoc(societeId) {
   const ref = doc(db, 'societe', societeId, 'caisse', 'solde');
   const snap = await getDoc(ref);
@@ -93,7 +138,7 @@ async function ensureCaisseDoc(societeId) {
 async function applyCaisseDelta(societeId, delta, meta = {}) {
   const soldeRef = await ensureCaisseDoc(societeId);
 
-  // Update solde
+  // Update solde (cumulé)
   await updateDoc(soldeRef, { balance: increment(delta), updatedAt: Timestamp.now() });
 
   // Historique mouvement
@@ -215,63 +260,54 @@ export default function ChargesDivers() {
     statut: 'Payé'
   });
 
-  // Solde caisse (affichage/diagnostic)
-  const [caisseSolde, setCaisseSolde] = useState(null);
+  /* ======== 🟢 Caisse « du jour » alignée sur Dashboard ======== */
+  const [caisseToday, setCaisseToday] = useState({ in: 0, out: 0, solde: 0 });
+
   useEffect(() => {
     if (!societeId) return;
-    const soldeRef = doc(db, 'societe', societeId, 'caisse', 'solde');
+    // On écoute TOUTES les écritures de paiements et on filtre localement "aujourd'hui"
+    const qPaiements = query(
+      collection(db, 'societe', societeId, 'paiements'),
+      orderBy('date', 'desc')
+    );
     const unsub = onSnapshot(
-      soldeRef,
-      (snap) => setCaisseSolde(snap.exists() ? Number(snap.data().balance || 0) : 0),
-      (err) => console.error('Listener caisse/solde:', err)
+      qPaiements,
+      (snap) => {
+        const all = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+        // Même logique que Dashboard pour la caisse (période = aujourd'hui)
+        const pToday = all.filter(p => sameLocalDay(p.date || p.timestamp, new Date()));
+
+        const encaissements = pToday
+          .filter(p => isSalePayment(p) && isCash(p?.mode ?? p?.paymentMode ?? p?.moyen ?? p?.typePaiement))
+          .reduce((s, p) => s + (Number(p?.montant) || 0), 0);
+
+        const decaissements = pToday
+          .filter(p => isSupplierPayment(p) && isCash(p?.mode ?? p?.paymentMode ?? p?.moyen ?? p?.typePaiement))
+          .reduce((s, p) => s + (Number(p?.montant) || 0), 0);
+
+        setCaisseToday({ in: encaissements, out: decaissements, solde: encaissements - decaissements });
+      },
+      (err) => {
+        console.error('Listener paiements (caisseToday):', err);
+        setCaisseToday({ in: 0, out: 0, solde: 0 });
+      }
     );
     return () => unsub && unsub();
   }, [societeId]);
 
-  const categories = [
-    'Loyer',
-    'Électricité',
-    'Eau',
-    'Téléphone',
-    'Internet',
-    'Assurance',
-    'Taxes',
-    'Fournitures',
-    'Maintenance',
-    'Transport',
-    'Marketing',
-    'Formation',
-    'Autre'
-  ];
-
-  const typesDocuments = [
-    'Facture',
-    'Facture proforma',
-    'Quittance',
-    'Reçu',
-    'Bon de commande',
-    'Bon de livraison',
-    'Contrat',
-    'Attestation',
-    'Ordre de virement',
-    'Autre'
-  ];
-
-  const modesPaiement = [
-    'Espèces',
-    'Chèque',
-    'Virement bancaire',
-    'Carte bancaire',
-    'Prélèvement',
-    'Autre'
-  ];
-
-  const statuts = [
-    'Payé',
-    'En attente',
-    'Impayé',
-    'Annulé'
-  ];
+  /* ======== (Optionnel) ancien solde cumulé — on ne l’affiche plus ======== */
+  // On garde ce listener si tu veux diagnostiquer; mais on n’utilise pas ce solde cumulé côté UI.
+  // const [caisseSoldeGlobal, setCaisseSoldeGlobal] = useState(null);
+  // useEffect(() => {
+  //   if (!societeId) return;
+  //   const soldeRef = doc(db, 'societe', societeId, 'caisse', 'solde');
+  //   const unsub = onSnapshot(
+  //     soldeRef,
+  //     (snap) => setCaisseSoldeGlobal(snap.exists() ? Number(snap.data().balance || 0) : 0),
+  //     (err) => console.error('Listener caisse/solde:', err)
+  //   );
+  //   return () => unsub && unsub();
+  // }, [societeId]);
 
   /* =================== Charges en TEMPS RÉEL =================== */
   useEffect(() => {
@@ -538,7 +574,7 @@ export default function ChargesDivers() {
         await addDoc(collection(db, 'societe', societeId, 'paiements'), paiementData);
       }
 
-      // 4) 🔥 Caisse (revert + ré-application si espèces+payé)
+      // 4) 🔥 Caisse (revert + ré-application si espèces+payé) — côté persistance cumulée
       await reconcileCaisseForCharge(societeId, chargeId, formData);
 
       handleCloseDialog();
@@ -562,7 +598,7 @@ export default function ChargesDivers() {
       snap.docs.forEach(d => batch.delete(d.ref));
       await batch.commit();
 
-      // revert caisse
+      // revert caisse (persistance cumulée)
       await revertCaisseMovementsForCharge(societeId, id);
 
       // supprimer la charge
@@ -708,11 +744,14 @@ export default function ChargesDivers() {
           <p style={styles.subtitle}>
             Gestion complète des charges et dépenses diverses
           </p>
-          {caisseSolde !== null && (
-            <p style={{ marginTop: 8, color: '#d1fae5', fontWeight: 800 }}>
-              💵 Solde caisse : {Number(caisseSolde).toFixed(2)} MAD
-            </p>
-          )}
+
+          {/* ✅ Solde caisse du JOUR (identique au Dashboard en "Aujourd'hui") */}
+          <p style={{ marginTop: 8, color: caisseToday.solde >= 0 ? '#d1fae5' : '#fecaca', fontWeight: 800 }}>
+            💵 Caisse (AUJOURD'HUI) : {caisseToday.solde.toFixed(2)} DHS
+            <span style={{ fontWeight: 700, opacity: .9 }}>
+              {' '} • IN: {caisseToday.in.toFixed(2)} • OUT: {caisseToday.out.toFixed(2)}
+            </span>
+          </p>
         </div>
 
         <div style={styles.content}>
@@ -722,7 +761,7 @@ export default function ChargesDivers() {
               <div style={{...styles.statIcon, color: '#667eea'}}>💰</div>
               <div style={styles.statLabel}>Total Charges</div>
               <div style={{...styles.statValue, color: '#667eea'}}>
-                {stats.total.toFixed(2)} MAD
+                {stats.total.toFixed(2)} DHS
               </div>
             </div>
             <div style={styles.statCard}>
@@ -736,14 +775,14 @@ export default function ChargesDivers() {
               <div style={{...styles.statIcon, color: '#3b82f6'}}>✅</div>
               <div style={styles.statLabel}>Payées</div>
               <div style={{...styles.statValue, color: '#3b82f6'}}>
-                {stats.payes.toFixed(2)} MAD
+                {stats.payes.toFixed(2)} DHS
               </div>
             </div>
             <div style={styles.statCard}>
               <div style={{...styles.statIcon, color: '#f59e0b'}}>⏳</div>
               <div style={styles.statLabel}>En attente</div>
               <div style={{...styles.statValue, color: '#f59e0b'}}>
-                {stats.enAttente.toFixed(2)} MAD
+                {stats.enAttente.toFixed(2)} DHS
               </div>
             </div>
           </div>
@@ -824,7 +863,7 @@ export default function ChargesDivers() {
                       style={{ background: 'white' }}
                     >
                       <MenuItem value="">Toutes</MenuItem>
-                      {categories.map(cat => (
+                      {['Loyer','Électricité','Eau','Téléphone','Internet','Assurance','Taxes','Fournitures','Maintenance','Transport','Marketing','Formation','Autre'].map(cat => (
                         <MenuItem key={cat} value={cat}>{cat}</MenuItem>
                       ))}
                     </Select>
@@ -840,7 +879,7 @@ export default function ChargesDivers() {
                       style={{ background: 'white' }}
                     >
                       <MenuItem value="">Tous</MenuItem>
-                      {statuts.map(st => (
+                      {['Payé','En attente','Impayé','Annulé'].map(st => (
                         <MenuItem key={st} value={st}>{st}</MenuItem>
                       ))}
                     </Select>
@@ -960,7 +999,7 @@ export default function ChargesDivers() {
                         fontWeight: 800,
                         color: '#667eea'
                       }}>
-                        {toFloat(charge.montant).toFixed(2)} MAD
+                        {toFloat(charge.montant).toFixed(2)} DHS
                       </div>
                     </div>
                     <div>
@@ -1143,7 +1182,7 @@ export default function ChargesDivers() {
                       label="Catégorie *"
                       style={{ background: 'white' }}
                     >
-                      {categories.map(cat => (
+                      {['Loyer','Électricité','Eau','Téléphone','Internet','Assurance','Taxes','Fournitures','Maintenance','Transport','Marketing','Formation','Autre'].map(cat => (
                         <MenuItem key={cat} value={cat}>{cat}</MenuItem>
                       ))}
                     </Select>
@@ -1158,7 +1197,7 @@ export default function ChargesDivers() {
                       label="Statut"
                       style={{ background: 'white' }}
                     >
-                      {statuts.map(st => (
+                      {['Payé','En attente','Impayé','Annulé'].map(st => (
                         <MenuItem key={st} value={st}>{st}</MenuItem>
                       ))}
                     </Select>
@@ -1188,7 +1227,7 @@ export default function ChargesDivers() {
                     size="small"
                     style={{ background: 'white' }}
                     InputProps={{
-                      endAdornment: <span style={{ marginLeft: '8px', color: '#64748b' }}>MAD</span>
+                      endAdornment: <span style={{ marginLeft: '8px', color: '#64748b' }}>DHS</span>
                     }}
                   />
                 </Grid>
@@ -1267,7 +1306,7 @@ export default function ChargesDivers() {
                   label="Type de document"
                   style={{ background: 'white' }}
                 >
-                  {typesDocuments.map(type => (
+                  {['Facture','Facture proforma','Quittance','Reçu','Bon de commande','Bon de livraison','Contrat','Attestation','Ordre de virement','Autre'].map(type => (
                     <MenuItem key={type} value={type}>{type}</MenuItem>
                   ))}
                 </Select>
@@ -1358,7 +1397,7 @@ export default function ChargesDivers() {
                   label="Mode de paiement"
                   style={{ background: 'white' }}
                 >
-                  {modesPaiement.map(mode => (
+                  {['Espèces','Chèque','Virement bancaire','Carte bancaire','Prélèvement','Autre'].map(mode => (
                     <MenuItem key={mode} value={mode}>{mode}</MenuItem>
                   ))}
                 </Select>
@@ -1401,7 +1440,7 @@ export default function ChargesDivers() {
                   <Grid item xs={6}><Typography variant="body2">Montant :</Typography></Grid>
                   <Grid item xs={6}>
                     <Typography variant="body2" align="right" style={{ fontWeight: 800, color: '#667eea' }}>
-                      {toFloat(formData.montant).toFixed(2)} MAD
+                      {toFloat(formData.montant).toFixed(2)} DHS
                     </Typography>
                   </Grid>
                   <Grid item xs={6}><Typography variant="body2">Statut :</Typography></Grid>
@@ -1526,7 +1565,7 @@ export default function ChargesDivers() {
                 <Grid item xs={6}>
                   <Typography variant="caption" style={{ color: '#64748b', fontWeight: 600 }}>Montant</Typography>
                   <Typography variant="h6" style={{ fontWeight: 800, color: '#667eea' }}>
-                    {toFloat(selectedCharge.montant).toFixed(2)} MAD
+                    {toFloat(selectedCharge.montant).toFixed(2)} DHS
                   </Typography>
                 </Grid>
                 <Grid item xs={6}>

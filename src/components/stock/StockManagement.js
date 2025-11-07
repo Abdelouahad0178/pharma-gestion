@@ -740,7 +740,7 @@ export default function StockManagement() {
         beepErr();
         return;
       }
-      const montant = Number(window.prompt("Montant (DH) de l'avoir (peut être 0) :", 0));
+      const montant = Number(window.prompt("Montant (DHS) de l'avoir (peut être 0) :", 0));
       if (!Number.isFinite(montant) || montant < 0) {
         setError("Montant invalide.");
         beepErr();
@@ -1653,7 +1653,7 @@ export default function StockManagement() {
             >
               <div style={{ fontSize: 14, color: "#831843", fontWeight: 600 }}>Montant total</div>
               <div style={{ fontSize: 32, fontWeight: 800, color: "#9f1239" }}>
-                {statsRetours.montantTotal.toFixed(2)} DH
+                {statsRetours.montantTotal.toFixed(2)} DHS
               </div>
             </div>
           </div>
@@ -1853,7 +1853,7 @@ export default function StockManagement() {
                           {safeNumber(lot.retourQuantite)}
                         </td>
                         <td style={{ padding: 12, textAlign: "right", fontWeight: 600 }}>
-                          {safeNumber(lot.avoirMontant).toFixed(2)} DH
+                          {safeNumber(lot.avoirMontant).toFixed(2)} DHS
                         </td>
                         <td style={{ padding: 12, fontSize: 13, color: "#6b7280", maxWidth: 200 }}>
                           {lot.retourCause || "—"}
@@ -2278,7 +2278,7 @@ export default function StockManagement() {
                         {safeNumber(lot.stock2)}
                       </td>
                       <td style={{ padding: 12, textAlign: "right" }}>
-                        {Number(lot.prixVente || 0).toFixed(2)} DH
+                        {Number(lot.prixVente || 0).toFixed(2)} DHS
                       </td>
                       <td
                         style={{

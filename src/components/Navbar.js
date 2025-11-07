@@ -1,6 +1,7 @@
-// src/components/Navbar.js - Version complète avec gestion permissions personnalisées + Analytics + Charges
+// src/components/Navbar.js - Version complète avec gestion permissions personnalisées + Analytics + Charges + Catalogue + Clôture caisse
 import React, { useState, useEffect } from "react";
 import { Link, useNavigate, useLocation } from "react-router-dom";
+
 import {
   AppBar,
   Toolbar,
@@ -32,10 +33,12 @@ import {
   SupervisorAccount as SupervisorAccountIcon,
   ManageAccounts as ManageAccountsIcon,
   Star as StarIcon,
-  BarChart as BarChartIcon, // Analytics
-  Gavel as GavelIcon,        // Documents légaux
-  Person as PersonIcon,       // 🆕 Charges Personnels
-  Receipt as ReceiptIcon      // 🆕 Charges Divers
+  BarChart as BarChartIcon,      // Analytics
+  Gavel as GavelIcon,            // Documents légaux
+  Person as PersonIcon,          // Charges Personnels
+  Receipt as ReceiptIcon,        // Charges Divers
+  MenuBook as MenuBookIcon,      // Catalogue médicaments
+  AccountBalanceWallet as WalletIcon // Clôture caisse
 } from "@mui/icons-material";
 
 import { signOut } from "firebase/auth";
@@ -84,11 +87,20 @@ export default function Navbar() {
     { text: "Achats", icon: <ShoppingCartIcon />, path: "/achats", permission: "voir_achats", description: "Gestion des achats fournisseurs" },
     { text: "Ventes", icon: <PointOfSaleIcon />, path: "/ventes", permission: "voir_ventes", description: "Gestion des ventes clients" },
     { text: "Clients", icon: <PeopleIcon />, path: "/clients", permission: "voir_ventes", description: "Gestion des clients, commandes & paiements" },
-    { text: "Stock", icon: <LocalPharmacyIcon />, path: "/stock", permission: "voir_stock", description: "Gestion du stock pharmacie" },
+
+    // Aligné avec App.js: /stock est protégé par "ajouter_stock"
+    { text: "Stock", icon: <LocalPharmacyIcon />, path: "/stock", permission: "ajouter_stock", description: "Gestion du stock pharmacie" },
+
+    // Nouveau : Catalogue médicaments (route /catalogue dans App.js, permission voir_ventes)
+    { text: "Catalogue médicaments", icon: <MenuBookIcon />, path: "/catalogue", permission: "voir_ventes", description: "Catalogue partagé des médicaments (références, DCI, dosage)" },
+
     { text: "Devis & Factures", icon: <DescriptionIcon />, path: "/devis-factures", permission: "voir_devis_factures", description: "Gestion devis et factures" },
     { text: "Paiements", icon: <AttachMoneyIcon />, path: "/paiements", permission: "voir_paiements", description: "Suivi des paiements" },
+
+    // ✅ Nouveau : Clôture caisse (route /cloture, permission réutilisée 'voir_paiements')
+    { text: "Clôture caisse", icon: <WalletIcon />, path: "/cloture", permission: "voir_paiements", description: "Clôture journalière (contrôle de caisse)" },
     
-    // 🆕 Section Charges Divers
+    // Charges
     { text: "Charges Personnels", icon: <PersonIcon />, path: "/charges-personnels", permission: "voir_dashboard", description: "Gestion des charges du personnel" },
     { text: "Charges Divers", icon: <ReceiptIcon />, path: "/charges-divers", permission: "voir_dashboard", description: "Gestion des charges diverses" },
     
@@ -110,7 +122,7 @@ export default function Navbar() {
   };
 
   if (loading || !authReady) return null;
-  if (!canAccessApp()) return null;
+  if (!canAccessApp()) return null; // doit rester une fonction
 
   const extraPermissions = hasCustomPermissions() ? getExtraPermissions() : [];
 
@@ -119,7 +131,6 @@ export default function Navbar() {
       sx={{
         width: 285,
         height: "100%",
-        
         color: "#fff"
       }}
       role="presentation"
@@ -452,30 +463,6 @@ export default function Navbar() {
               🕒 {currentTime}
             </Typography>
           </Box>
-
-          {/* Accès rapide Analytics */}
-          {can("voir_dashboard") && (
-            <IconButton
-              color="inherit"
-              onClick={() => navigate('/analytics')}
-              sx={{ bgcolor: "#fff2", borderRadius: 2, mr: 1, "&:hover": { bgcolor: "#fff3" } }}
-              title="Statistiques et graphiques"
-            >
-              <BarChartIcon />
-            </IconButton>
-          )}
-
-          {/* Accès rapide Backup */}
-          {can("voir_dashboard") && (
-            <IconButton
-              color="inherit"
-              onClick={() => navigate('/backup')}
-              sx={{ bgcolor: "#fff2", borderRadius: 2, mr: 1, "&:hover": { bgcolor: "#fff3" } }}
-              title="Sauvegardes rapides"
-            >
-              <BackupIcon />
-            </IconButton>
-          )}
 
           <Button
             color="inherit"

@@ -752,11 +752,11 @@ export default function DevisFactures() {
                       <tr>
                         <td class="product-name">${a.produit || ""}</td>
                         <td><span class="quantity-cell">${a.quantite || 0}</span></td>
-                        <td class="price-cell">${Number(a.prixUnitaire || 0).toFixed(2)} DH</td>
-                        <td class="discount-cell">${Number(a.remise || 0).toFixed(2)} DH</td>
+                        <td class="price-cell">${Number(a.prixUnitaire || 0).toFixed(2)} DHS</td>
+                        <td class="discount-cell">${Number(a.remise || 0).toFixed(2)} DHS</td>
                         <td class="total-cell">${(
                           (a.quantite || 0) * (a.prixUnitaire || 0) - (a.remise || 0)
-                        ).toFixed(2)} DH</td>
+                        ).toFixed(2)} DHS</td>
                       </tr>`
                       )
                       .join("")}
@@ -767,7 +767,7 @@ export default function DevisFactures() {
               <div class="grand-total-section">
                 <div class="total-content">
                   <div class="total-label">💰 Montant Total ${titleDocument}</div>
-                  <div class="total-amount">${total.toFixed(2)} DH</div>
+                  <div class="total-amount">${total.toFixed(2)} DHS</div>
                   <div class="total-note">
                     ${
                       isFacture
@@ -1390,7 +1390,7 @@ export default function DevisFactures() {
                   </div>
 
                   <div style={styles.inputGroup}>
-                    <label style={styles.label}>Prix Unitaire (DH)</label>
+                    <label style={styles.label}>Prix Unitaire (DHS)</label>
                     <input
                       style={styles.input}
                       type="number"
@@ -1404,7 +1404,7 @@ export default function DevisFactures() {
                   </div>
 
                   <div style={styles.inputGroup}>
-                    <label style={styles.label}>Remise (DH)</label>
+                    <label style={styles.label}>Remise (DHS)</label>
                     <input
                       style={styles.input}
                       type="number"
@@ -1466,16 +1466,16 @@ export default function DevisFactures() {
                             {a.produit}
                             {isMobile && (
                               <div style={{ fontSize: "0.7em", color: "#6b7280", marginTop: "2px" }}>
-                                {Number(a.prixUnitaire || 0).toFixed(2)} DH × {a.quantite}
-                                {Number(a.remise || 0) > 0 && ` - ${Number(a.remise || 0).toFixed(2)} DH`}
+                                {Number(a.prixUnitaire || 0).toFixed(2)} DHS × {a.quantite}
+                                {Number(a.remise || 0) > 0 && ` - ${Number(a.remise || 0).toFixed(2)} DHS`}
                               </div>
                             )}
                           </td>
                           <td style={{...styles.tableCell, color: "#667eea", fontWeight: 700}}>{a.quantite}</td>
-                          {!isMobile && <td style={{...styles.tableCell, color: "#667eea", fontWeight: 700}}>{Number(a.prixUnitaire || 0).toFixed(2)} DH</td>}
-                          {!isMobile && <td style={{...styles.tableCell, color: "#e53e3e", fontWeight: 700}}>{Number(a.remise || 0).toFixed(2)} DH</td>}
+                          {!isMobile && <td style={{...styles.tableCell, color: "#667eea", fontWeight: 700}}>{Number(a.prixUnitaire || 0).toFixed(2)} DHS</td>}
+                          {!isMobile && <td style={{...styles.tableCell, color: "#e53e3e", fontWeight: 700}}>{Number(a.remise || 0).toFixed(2)} DHS</td>}
                           <td style={{...styles.tableCell, color: "#48bb78", fontWeight: 800, fontSize: isMobile ? "0.9em" : "1.1em"}}>
-                            {(Number(a.quantite || 0) * Number(a.prixUnitaire || 0) - Number(a.remise || 0)).toFixed(2)} DH
+                            {(Number(a.quantite || 0) * Number(a.prixUnitaire || 0) - Number(a.remise || 0)).toFixed(2)} DHS
                           </td>
                           <td style={styles.tableCell}>
                             <button
@@ -1503,7 +1503,7 @@ export default function DevisFactures() {
                           💰 TOTAL {type === "FACT" ? "FACTURE" : "DEVIS"}
                         </td>
                         <td colSpan={2} style={{...styles.tableCell, fontWeight: 900, fontSize: isMobile ? "1.1em" : "1.3em"}}>
-                          {articles.reduce((sum, a) => sum + (Number(a.quantite || 0) * Number(a.prixUnitaire || 0) - Number(a.remise || 0)), 0).toFixed(2)} DH
+                          {articles.reduce((sum, a) => sum + (Number(a.quantite || 0) * Number(a.prixUnitaire || 0) - Number(a.remise || 0)), 0).toFixed(2)} DHS
                         </td>
                       </tr>
                     </tbody>
@@ -1650,7 +1650,7 @@ export default function DevisFactures() {
               <span style={{ fontWeight: 700, color: "#4a5568", fontSize: isMobile ? "0.9em" : "1em" }}>
                 💰 Total affiché: {filteredDocuments.reduce((sum, doc) => 
                   sum + (doc.articles || []).reduce((s, a) => s + (Number(a.quantite || 0) * Number(a.prixUnitaire || 0) - Number(a.remise || 0)), 0), 0
-                ).toFixed(2)} DH
+                ).toFixed(2)} DHS
               </span>
               <span style={{ fontWeight: 600, color: "#6b7280", fontSize: isMobile ? "0.8em" : "1em" }}>
                 📊 {filteredDocuments.filter(d => d.type === "FACT").length} factures • {filteredDocuments.filter(d => d.type === "DEV").length} devis
@@ -1736,7 +1736,7 @@ export default function DevisFactures() {
                             color: "#48bb78",
                             fontSize: isMobile ? "0.9em" : "1.1em"
                           }}>
-                            {total.toFixed(2)} DH
+                            {total.toFixed(2)} DHS
                           </td>
                           <td style={styles.tableCell}>
                             <div style={styles.mobileActionButtons}>
@@ -1910,7 +1910,7 @@ export default function DevisFactures() {
                                 </span>
                               </td>
                               <td style={{...styles.tableCell, textAlign: "right", fontWeight: 700, color: "#48bb78", fontSize: isMobile ? "0.9em" : "1.1em"}}>
-                                {totalV.toFixed(2)} DH
+                                {totalV.toFixed(2)} DHS
                               </td>
                             </tr>
                           );
@@ -1938,7 +1938,7 @@ export default function DevisFactures() {
                     .filter(v => selectedBons.includes(v.id))
                     .reduce((sum, v) => sum + (v.articles || []).reduce(
                       (s, a) => s + ((Number(a.prixUnitaire || 0)) * (Number(a.quantite || 0)) - (Number(a.remise || 0))), 0
-                    ), 0).toFixed(2)} DH
+                    ), 0).toFixed(2)} DHS
                 </p>
                 <div style={{ 
                   marginTop: "15px",

@@ -25,6 +25,7 @@ import Protected from './components/Protected';
 import AddSocieteIdToAllUsers from './components/admin/AddSocieteIdToAllUsers';
 import InitOwner from './components/admin/InitOwner';
 import Clients from './components/clients/Clients';
+import ClotureCaisse from './components/caisse/ClotureCaisse';
 
 // 🆕 Analytics - Graphiques et statistiques
 import Analytics from './components/analytics/Analytics';
@@ -38,6 +39,9 @@ import Abonnement from './pages/Abonnement';
 // 🆕 Modules Charges - Gestion des charges
 import ChargesPersonnels from './components/charges/ChargesPersonnels';
 import ChargesDivers from './components/charges/ChargesDivers';
+
+// 🆕 Catalogue partagé des médicaments
+import CatalogueMedicaments from './components/catalogue/CatalogueMedicaments';
 
 // 🢁 Bouton flottant "Retour en haut"
 import BackToTop from './components/common/BackToTop';
@@ -359,6 +363,12 @@ function AppWrapper() {
           {/* Analytics - Statistiques */}
           <Route path="/analytics" element={<Protected permission="voir_dashboard"><Analytics /></Protected>} />
 
+          {/* 🆕 Catalogue partagé des médicaments */}
+          <Route path="/catalogue" element={<Protected permission="voir_ventes"><CatalogueMedicaments /></Protected>} />
+
+          {/* ✅ Clôture caisse — protégée par 'voir_paiements' */}
+          <Route path="/cloture" element={<Protected permission="voir_paiements"><ClotureCaisse /></Protected>} />
+
           <Route path="/parametres" element={<Protected permission="parametres"><Parametres /></Protected>} />
           <Route path="/backup" element={<Protected permission="voir_dashboard"><BackupPage /></Protected>} />
           <Route path="/import" element={<Protected permission="voir_dashboard"><div className="fullscreen-table-wrap"><div className="fullscreen-table-title">Import de Sauvegarde</div><ImportBackup /></div></Protected>} />
@@ -370,6 +380,9 @@ function AppWrapper() {
 
           <Route path="/admin-init-owner" element={<InitOwner />} />
           <Route path="/admin-update-societe" element={<AddSocieteIdToAllUsers />} />
+
+          {/* ✅ Redirection option 1 : /societe → /dashboard */}
+          <Route path="/societe" element={<Navigate to="/dashboard" replace />} />
 
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

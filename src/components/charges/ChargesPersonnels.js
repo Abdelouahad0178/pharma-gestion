@@ -784,7 +784,7 @@ export default function ChargesPersonnels() {
             <div style={styles.statCard}>
               <div style={{ ...styles.statIcon, color: '#667eea' }}>💰</div>
               <div style={styles.statLabel}>Total Charges</div>
-              <div style={{ ...styles.statValue, color: '#667eea' }}>{stats.total.toFixed(2)} MAD</div>
+              <div style={{ ...styles.statValue, color: '#667eea' }}>{stats.total.toFixed(2)} DHS</div>
             </div>
             <div style={styles.statCard}>
               <div style={{ ...styles.statIcon, color: '#10b981' }}>📊</div>
@@ -794,12 +794,12 @@ export default function ChargesPersonnels() {
             <div style={styles.statCard}>
               <div style={{ ...styles.statIcon, color: '#3b82f6' }}>💵</div>
               <div style={styles.statLabel}>Total Salaires</div>
-              <div style={{ ...styles.statValue, color: '#3b82f6' }}>{stats.salaires.toFixed(2)} MAD</div>
+              <div style={{ ...styles.statValue, color: '#3b82f6' }}>{stats.salaires.toFixed(2)} DHS</div>
             </div>
             <div style={styles.statCard}>
               <div style={{ ...styles.statIcon, color: '#f59e0b' }}>🎁</div>
               <div style={styles.statLabel}>Total Primes</div>
-              <div style={{ ...styles.statValue, color: '#f59e0b' }}>{stats.primes.toFixed(2)} MAD</div>
+              <div style={{ ...styles.statValue, color: '#f59e0b' }}>{stats.primes.toFixed(2)} DHS</div>
             </div>
           </div>
 
@@ -997,7 +997,7 @@ export default function ChargesPersonnels() {
                         Salaire
                       </div>
                       <div style={{ fontSize: `${0.96 * fontScale}rem`, fontWeight: 700, color: '#2d3748' }}>
-                        {(charge.salaire ?? 0).toFixed(2)} MAD
+                        {(charge.salaire ?? 0).toFixed(2)} DHS
                       </div>
                     </div>
                     <div>
@@ -1013,7 +1013,7 @@ export default function ChargesPersonnels() {
                         Prime
                       </div>
                       <div style={{ fontSize: `${0.96 * fontScale}rem`, fontWeight: 700, color: '#2d3748' }}>
-                        {(charge.prime ?? 0).toFixed(2)} MAD
+                        {(charge.prime ?? 0).toFixed(2)} DHS
                       </div>
                     </div>
                     <div>
@@ -1029,7 +1029,7 @@ export default function ChargesPersonnels() {
                         Total
                       </div>
                       <div style={{ fontSize: `${1 * fontScale}rem`, fontWeight: 800, color: '#667eea' }}>
-                        {(charge.total ?? 0).toFixed(2)} MAD
+                        {(charge.total ?? 0).toFixed(2)} DHS
                       </div>
                     </div>
                     <div>
@@ -1456,7 +1456,7 @@ export default function ChargesPersonnels() {
                   fontSize: `${0.92 * fontScale}rem`
                 }}
               >
-                Tous les montants sont en MAD.
+                Tous les montants sont en DHS.
               </Alert>
               <Grid container spacing={1.5}>
                 <Grid item xs={12} md={6}>
@@ -1469,7 +1469,7 @@ export default function ChargesPersonnels() {
                     required
                     size="small"
                     InputLabelProps={{ sx: { fontSize: `${0.9 * fontScale}rem` } }}
-                    InputProps={{ sx: { fontSize: `${0.95 * fontScale}rem` }, endAdornment: <Typography variant="caption"> MAD</Typography> }}
+                    InputProps={{ sx: { fontSize: `${0.95 * fontScale}rem` }, endAdornment: <Typography variant="caption"> DHS</Typography> }}
                   />
                 </Grid>
                 <Grid item xs={12} md={6}>
@@ -1481,7 +1481,7 @@ export default function ChargesPersonnels() {
                     fullWidth
                     size="small"
                     InputLabelProps={{ sx: { fontSize: `${0.9 * fontScale}rem` } }}
-                    InputProps={{ sx: { fontSize: `${0.95 * fontScale}rem` }, endAdornment: <Typography variant="caption"> MAD</Typography> }}
+                    InputProps={{ sx: { fontSize: `${0.95 * fontScale}rem` }, endAdornment: <Typography variant="caption"> DHS</Typography> }}
                   />
                 </Grid>
                 <Grid item xs={12} md={6}>
@@ -1505,7 +1505,7 @@ export default function ChargesPersonnels() {
                     fullWidth
                     size="small"
                     InputLabelProps={{ sx: { fontSize: `${0.9 * fontScale}rem` } }}
-                    InputProps={{ sx: { fontSize: `${0.95 * fontScale}rem` }, endAdornment: <Typography variant="caption"> MAD/h</Typography> }}
+                    InputProps={{ sx: { fontSize: `${0.95 * fontScale}rem` }, endAdornment: <Typography variant="caption"> DHS/h</Typography> }}
                   />
                 </Grid>
                 <Grid item xs={12} md={6}>
@@ -1517,7 +1517,7 @@ export default function ChargesPersonnels() {
                     fullWidth
                     size="small"
                     InputLabelProps={{ sx: { fontSize: `${0.9 * fontScale}rem` } }}
-                    InputProps={{ sx: { fontSize: `${0.95 * fontScale}rem` }, endAdornment: <Typography variant="caption"> MAD</Typography> }}
+                    InputProps={{ sx: { fontSize: `${0.95 * fontScale}rem` }, endAdornment: <Typography variant="caption"> DHS</Typography> }}
                   />
                 </Grid>
                 <Grid item xs={12} md={6}>
@@ -1550,7 +1550,7 @@ export default function ChargesPersonnels() {
                   </Grid>
                   <Grid item xs={6}>
                     <Typography variant="body2" align="right" sx={{ fontWeight: 700 }}>
-                      {(toFloat(formData.heuresSupplementaires) * toFloat(formData.tauxHoraire)).toFixed(2)} MAD
+                      {(toFloat(formData.heuresSupplementaires) * toFloat(formData.tauxHoraire)).toFixed(2)} DHS
                     </Typography>
                   </Grid>
                   <Grid item xs={12} sx={{ my: 1 }}>
@@ -1563,7 +1563,7 @@ export default function ChargesPersonnels() {
                   </Grid>
                   <Grid item xs={6}>
                     <Typography variant="subtitle2" align="right" sx={{ fontWeight: 800, color: '#667eea' }}>
-                      {calculerTotal().toFixed(2)} MAD
+                      {calculerTotal().toFixed(2)} DHS
                     </Typography>
                   </Grid>
                 </Grid>
@@ -1728,7 +1728,7 @@ export default function ChargesPersonnels() {
                   </Grid>
                   <Grid item xs={6}>
                     <Typography variant="body2" align="right" style={{ fontWeight: 800 }}>
-                      {calculerTotal().toFixed(2)} MAD
+                      {calculerTotal().toFixed(2)} DHS
                     </Typography>
                   </Grid>
                   <Grid item xs={6}>
@@ -1882,16 +1882,16 @@ export default function ChargesPersonnels() {
               >
                 <Grid container spacing={0.5}>
                   <Grid item xs={6}><Typography variant="body2">Salaire :</Typography></Grid>
-                  <Grid item xs={6}><Typography variant="body2" align="right" style={{ fontWeight: 700 }}>{(selectedCharge.salaire ?? 0).toFixed(2)} MAD</Typography></Grid>
+                  <Grid item xs={6}><Typography variant="body2" align="right" style={{ fontWeight: 700 }}>{(selectedCharge.salaire ?? 0).toFixed(2)} DHS</Typography></Grid>
                   <Grid item xs={6}><Typography variant="body2">Prime :</Typography></Grid>
-                  <Grid item xs={6}><Typography variant="body2" align="right" style={{ fontWeight: 700 }}>{(selectedCharge.prime ?? 0).toFixed(2)} MAD</Typography></Grid>
+                  <Grid item xs={6}><Typography variant="body2" align="right" style={{ fontWeight: 700 }}>{(selectedCharge.prime ?? 0).toFixed(2)} DHS</Typography></Grid>
                   <Grid item xs={6}><Typography variant="body2">Heures supp. :</Typography></Grid>
-                  <Grid item xs={6}><Typography variant="body2" align="right" style={{ fontWeight: 700 }}>{(selectedCharge.montantHS ?? 0).toFixed(2)} MAD</Typography></Grid>
+                  <Grid item xs={6}><Typography variant="body2" align="right" style={{ fontWeight: 700 }}>{(selectedCharge.montantHS ?? 0).toFixed(2)} DHS</Typography></Grid>
                   <Grid item xs={6}><Typography variant="body2">Indemnités :</Typography></Grid>
-                  <Grid item xs={6}><Typography variant="body2" align="right" style={{ fontWeight: 700 }}>{(selectedCharge.indemnites ?? 0).toFixed(2)} MAD</Typography></Grid>
+                  <Grid item xs={6}><Typography variant="body2" align="right" style={{ fontWeight: 700 }}>{(selectedCharge.indemnites ?? 0).toFixed(2)} DHS</Typography></Grid>
                   <Grid item xs={12}><Divider sx={{ my: 1 }} /></Grid>
                   <Grid item xs={6}><Typography variant="subtitle2" sx={{ fontWeight: 800 }}>Total :</Typography></Grid>
-                  <Grid item xs={6}><Typography variant="subtitle2" align="right" sx={{ fontWeight: 800, color: '#667eea' }}>{(selectedCharge.total ?? 0).toFixed(2)} MAD</Typography></Grid>
+                  <Grid item xs={6}><Typography variant="subtitle2" align="right" sx={{ fontWeight: 800, color: '#667eea' }}>{(selectedCharge.total ?? 0).toFixed(2)} DHS</Typography></Grid>
                 </Grid>
               </div>
 

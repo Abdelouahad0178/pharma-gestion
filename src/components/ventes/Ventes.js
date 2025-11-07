@@ -1,5 +1,5 @@
 // src/components/ventes/Ventes.js
-import React, { useEffect, useState, useCallback, useMemo, useRef } from "react";
+import React, { useEffect, useState, useCallback, useMemo, useRef, memo } from "react";
 import { createPortal } from "react-dom";
 import { db } from "../../firebase/config";
 import { useUserRole } from "../../contexts/UserRoleContext";
@@ -19,9 +19,10 @@ import {
   addDoc,
 } from "firebase/firestore";
 
+const ITEMS_PER_PAGE = 50;
+
 /* ======================================================
-   ⚙️ Assurer l’appartenance utilisateur → société
-   (évite les 403/permission-denied avec les règles Firestore)
+   ⚙️ Assurer l'appartenance utilisateur → société
 ====================================================== */
 async function ensureMembership(user, societeId) {
   try {
@@ -71,7 +72,6 @@ async function ensureMembership(user, societeId) {
 ====================================================== */
 const APPLIED_SALES_COLL = "sales_applied";
 const DISMISSED_COLL = "order_dismissed";
-
 const newOpKey = () =>
   `op_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 
@@ -148,7 +148,7 @@ const safeNumber = (v, def = 0) => {
 };
 const safeToFixed = (v, dec = 2) => safeNumber(v).toFixed(dec);
 
-/* ===================== Codes-barres ===================== */
+/* ===================== Codes-barres (aligné catalogue) ===================== */
 const BARCODE_FIELDS = ["codeBarre", "barcode", "ean", "ean13", "upc", "gtin"];
 const findAnyBarcode = (obj) => {
   for (const f of BARCODE_FIELDS) {
@@ -168,7 +168,7 @@ const distinctCountByProduit = (list) => {
   return set.size;
 };
 
-/* ====== Composants séparés (hors Ventes) pour éviter l'erreur hooks ====== */
+/* ====== Realtime indicator ====== */
 function RealtimeBeat({ lastRealtimeBeat }) {
   return (
     <span style={{ fontSize: 12, color: "#059669" }}>
@@ -177,6 +177,7 @@ function RealtimeBeat({ lastRealtimeBeat }) {
   );
 }
 
+/* ====== Scanner caméra (optionnel) ====== */
 function CameraBarcodeInlineModal({ open, onClose, onDetected }) {
   const videoRef = React.useRef(null);
   const [error, setError] = React.useState("");
@@ -282,6 +283,253 @@ function CameraBarcodeInlineModal({ open, onClose, onDetected }) {
   );
 }
 
+/* 🆕 ===================== COMPOSANT PAGINATION ===================== */
+const Pagination = memo(({ currentPage, totalPages, onPageChange }) => {
+  const pages = [];
+  const maxVisible = 5;
+
+  let startPage = Math.max(1, currentPage - Math.floor(maxVisible / 2));
+  let endPage = Math.min(totalPages, startPage + maxVisible - 1);
+
+  if (endPage - startPage < maxVisible - 1) {
+    startPage = Math.max(1, endPage - maxVisible + 1);
+  }
+
+  for (let i = startPage; i <= endPage; i++) {
+    pages.push(i);
+  }
+
+  if (totalPages <= 1) return null;
+
+  return (
+    <div
+      style={{
+        display: "flex",
+        justifyContent: "center",
+        alignItems: "center",
+        gap: 8,
+        padding: "20px 0",
+        flexWrap: "wrap",
+      }}
+    >
+      <button
+        onClick={() => onPageChange(1)}
+        disabled={currentPage === 1}
+        style={{
+          padding: "8px 12px",
+          borderRadius: 8,
+          border: "2px solid #e5e7eb",
+          background: currentPage === 1 ? "#f3f4f6" : "white",
+          cursor: currentPage === 1 ? "not-allowed" : "pointer",
+          fontWeight: 700,
+          opacity: currentPage === 1 ? 0.5 : 1,
+        }}
+      >
+        ⏮️
+      </button>
+
+      <button
+        onClick={() => onPageChange(currentPage - 1)}
+        disabled={currentPage === 1}
+        style={{
+          padding: "8px 12px",
+          borderRadius: 8,
+          border: "2px solid #e5e7eb",
+          background: currentPage === 1 ? "#f3f4f6" : "white",
+          cursor: currentPage === 1 ? "not-allowed" : "pointer",
+          fontWeight: 700,
+          opacity: currentPage === 1 ? 0.5 : 1,
+        }}
+      >
+        ◀️
+      </button>
+
+      {startPage > 1 && (
+        <>
+          <button
+            onClick={() => onPageChange(1)}
+            style={{
+              padding: "8px 12px",
+              borderRadius: 8,
+              border: "2px solid #e5e7eb",
+              background: "white",
+              cursor: "pointer",
+              fontWeight: 700,
+            }}
+          >
+            1
+          </button>
+          {startPage > 2 && <span style={{ padding: "0 8px" }}>...</span>}
+        </>
+      )}
+
+      {pages.map((page) => (
+        <button
+          key={page}
+          onClick={() => onPageChange(page)}
+          style={{
+            padding: "8px 12px",
+            borderRadius: 8,
+            border: "2px solid #e5e7eb",
+            background:
+              page === currentPage
+                ? "linear-gradient(135deg,#667eea,#764ba2)"
+                : "white",
+            color: page === currentPage ? "white" : "#0f172a",
+            cursor: "pointer",
+            fontWeight: 700,
+            minWidth: 40,
+          }}
+        >
+          {page}
+        </button>
+      ))}
+
+      {endPage < totalPages && (
+        <>
+          {endPage < totalPages - 1 && <span style={{ padding: "0 8px" }}>...</span>}
+          <button
+            onClick={() => onPageChange(totalPages)}
+            style={{
+              padding: "8px 12px",
+              borderRadius: 8,
+              border: "2px solid #e5e7eb",
+              background: "white",
+              cursor: "pointer",
+              fontWeight: 700,
+            }}
+          >
+            {totalPages}
+          </button>
+        </>
+      )}
+
+      <button
+        onClick={() => onPageChange(currentPage + 1)}
+        disabled={currentPage === totalPages}
+        style={{
+          padding: "8px 12px",
+          borderRadius: 8,
+          border: "2px solid #e5e7eb",
+          background: currentPage === totalPages ? "#f3f4f6" : "white",
+          cursor: currentPage === totalPages ? "not-allowed" : "pointer",
+          fontWeight: 700,
+          opacity: currentPage === totalPages ? 0.5 : 1,
+        }}
+      >
+        ▶️
+      </button>
+
+      <button
+        onClick={() => onPageChange(totalPages)}
+        disabled={currentPage === totalPages}
+        style={{
+          padding: "8px 12px",
+          borderRadius: 8,
+          border: "2px solid #e5e7eb",
+          background: currentPage === totalPages ? "#f3f4f6" : "white",
+          cursor: currentPage === totalPages ? "not-allowed" : "pointer",
+          fontWeight: 700,
+          opacity: currentPage === totalPages ? 0.5 : 1,
+        }}
+      >
+        ⏭️
+      </button>
+
+      <span style={{ marginLeft: 16, color: "#64748b", fontSize: 14 }}>
+        Page {currentPage} sur {totalPages}
+      </span>
+    </div>
+  );
+});
+
+Pagination.displayName = "Pagination";
+
+/* 🆕 ===================== COMPOSANT VENTE ROW MÉMOÏSÉ ===================== */
+const VenteRow = memo(({ 
+  vente, 
+  index, 
+  appliedSet, 
+  dismissedSet,
+  onViewDetails,
+  onEdit,
+  onPrint,
+  onDelete
+}) => {
+  const total =
+    vente.montantTotal ||
+    (Array.isArray(vente.articles) ? vente.articles : []).reduce((sum, a) =>
+      sum + (safeNumber(a.prixUnitaire) * safeNumber(a.quantite) - safeNumber(a.remise || 0)), 0
+    );
+
+  const distinctInVente = distinctCountByProduit(vente.articles || []);
+
+  const stockCounts = { stock1: 0, stock2: 0, unknown: 0 };
+  (vente.articles || []).forEach((a) => {
+    const source = a.stockSource || "unknown";
+    if (source === "stock1") stockCounts.stock1++;
+    else if (source === "stock2") stockCounts.stock2++;
+    else stockCounts.unknown++;
+  });
+
+  let applied = 0, dismissed = 0;
+  (vente.articles || []).forEach((_, idx) => {
+    const opId = `${vente.id}#${idx}`;
+    if (appliedSet.has(opId)) applied++;
+    if (dismissedSet.has(opId)) dismissed++;
+  });
+  const pending = (vente.articles || []).length - applied - dismissed;
+
+  const principalStock = vente.stockSource || vente.stock || "stock1";
+
+  return (
+    <tr style={{borderBottom:"1px solid #f1f5f9",transition:"all 0.3s ease",background: index % 2 === 0 ? "rgba(248, 250, 252, 0.5)" : "white",borderLeft: principalStock === "stock2" ? "4px solid #10b981" : "4px solid #3b82f6"}}>
+      <td style={{ padding: 16, borderRight: "1px solid #f1f5f9" }}>
+        <div style={{background: principalStock === "stock2" ? "linear-gradient(135deg,#10b981,#059669)" : "linear-gradient(135deg,#3b82f6,#2563eb)", color: "white", padding: "5px 10px", borderRadius: 10, fontSize: 11, fontWeight: 700, letterSpacing: "0.3px", display: "inline-block"}}>
+          #{(vente.id || "").slice(-6).toUpperCase()}
+        </div>
+      </td>
+      <td style={{ padding: 16, borderRight: "1px solid #f1f5f9" }}>
+        <div style={{ fontWeight: 600, fontSize: 15, color: "#1f2937", marginBottom: 3 }}>{vente.client}</div>
+        <div style={{ fontSize: 11, color: "#6b7280", background: "#f8fafc", padding: "2px 7px", borderRadius: 8, display: "inline-block" }}>{vente.modePaiement || "Espèces"}</div>
+      </td>
+      <td style={{ padding: 16, textAlign: "center", borderRight: "1px solid #f1f5f9" }}>
+        <div style={{ fontSize: 13, fontWeight: 600, color: "#374151" }}>{formatDateSafe(vente.date)}</div>
+      </td>
+      <td style={{ padding: 16, textAlign: "center", borderRight: "1px solid #f1f5f9" }}>
+        <div style={{ display: "flex", gap: 6, justifyContent: "center", alignItems: "center", flexWrap: "wrap" }}>
+          <span style={{ background: "linear-gradient(135deg, #8b5cf6, #7c3aed)", color: "white", padding: "3px 7px", borderRadius: 10, fontSize: 10, fontWeight: 700 }} title="Produits distincts (S1 et S2 considérés comme le même produit)">
+            {distinctInVente} prod.
+          </span>
+          {stockCounts.stock1 > 0 && (<span style={{ background: "linear-gradient(135deg, #3b82f6, #2563eb)", color: "white", padding: "2px 5px", borderRadius: 8, fontSize: 9, fontWeight: 600 }} title={`${stockCounts.stock1} lignes depuis Stock1`}>S1:{stockCounts.stock1}</span>)}
+          {stockCounts.stock2 > 0 && (<span style={{ background: "linear-gradient(135deg, #10b981, #059669)", color: "white", padding: "2px 5px", borderRadius: 8, fontSize: 9, fontWeight: 600 }} title={`${stockCounts.stock2} lignes depuis Stock2`}>S2:{stockCounts.stock2}</span>)}
+          {applied > 0 && (<span style={{ background: "linear-gradient(135deg, #22c55e, #16a34a)", color: "white", padding: "2px 6px", borderRadius: 8, fontSize: 9, fontWeight: 700 }} title="Lignes appliquées au stock">✓ {applied}</span>)}
+          {dismissed > 0 && (<span style={{ background: "linear-gradient(135deg, #6b7280, #4b5563)", color: "white", padding: "2px 6px", borderRadius: 8, fontSize: 9, fontWeight: 700 }} title="Lignes ignorées">⊗ {dismissed}</span>)}
+          {pending > 0 && (<span style={{ background: "linear-gradient(135deg, #f59e0b, #d97706)", color: "white", padding: "2px 6px", borderRadius: 8, fontSize: 9, fontWeight: 700 }} title="En attente d'application">… {pending}</span>)}
+        </div>
+      </td>
+      <td style={{ padding: 16, textAlign: "center", borderRight: "1px solid #f1f5f9" }}>
+        <span style={{background: vente.statutPaiement === "payé" ? "linear-gradient(135deg,#22c55e,#16a34a)" : vente.statutPaiement === "partiel" ? "linear-gradient(135deg,#eab308,#ca8a04)" : "linear-gradient(135deg,#ef4444,#dc2626)", color:"white", padding:"5px 14px", borderRadius:16, fontSize:11, fontWeight:600, textTransform:"capitalize"}}>
+          {vente.statutPaiement}
+        </span>
+      </td>
+      <td style={{ padding: 16, textAlign: "right", borderRight: "1px solid #f1f5f9" }}>
+        <div style={{ fontSize: 15, fontWeight: 700, color: "#16a34a" }}>{safeToFixed(total)} DHS</div>
+      </td>
+      <td style={{ padding: 16, textAlign: "center" }}>
+        <div style={{ display: "flex", gap: 8, justifyContent: "center" }}>
+          <span onClick={() => onViewDetails(vente)} style={{ cursor: "pointer", fontSize: 17 }} title="Voir les détails">👁️</span>
+          <span onClick={() => onEdit(vente)} style={{ cursor: "pointer", fontSize: 17 }} title="Modifier">✏️</span>
+          <span onClick={() => onPrint(vente)} style={{ cursor: "pointer", fontSize: 17 }} title="Imprimer">🖨️</span>
+          <span onClick={() => onDelete(vente)} style={{ cursor: "pointer", fontSize: 17 }} title="Supprimer (stock restauré auto)">🗑️</span>
+        </div>
+      </td>
+    </tr>
+  );
+});
+
+VenteRow.displayName = "VenteRow";
+
 /* ======================================================
    Composant principal (avec Lazy On/Off)
 ====================================================== */
@@ -302,6 +550,9 @@ export default function Ventes() {
       return next;
     });
   }, []);
+
+  /* 🆕 ===== PAGINATION STATE ===== */
+  const [currentPage, setCurrentPage] = useState(1);
 
   /* ===== Audio (bip) ===== */
   const audioCtxRef = useRef(null);
@@ -336,7 +587,7 @@ export default function Ventes() {
   const beepError   = useCallback(() => playBeep(220, 220, "square", 0.2), [playBeep]);
 
   useEffect(() => {
-    if (!active) return; // n’arme le déverrouillage audio que si actif
+    if (!active) return;
     const unlock = () => { try { getAudioCtx()?.resume?.(); } catch {} };
     window.addEventListener("click", unlock, { once: true });
     window.addEventListener("keydown", unlock, { once: true });
@@ -405,7 +656,6 @@ export default function Ventes() {
     setWaiting(loading || !societeId || !user);
   }, [loading, societeId, user]);
 
-  // S’assurer de l’appartenance seulement si actif
   useEffect(() => {
     if (!active) return;
     if (user && societeId) { ensureMembership(user, societeId); }
@@ -417,7 +667,6 @@ export default function Ventes() {
 
     const unsubs = [];
 
-    // Paramètres
     const paramRef = doc(db, "societe", societeId, "parametres", "documents");
     unsubs.push(
       onSnapshot(paramRef, (snap) => {
@@ -425,7 +674,6 @@ export default function Ventes() {
       }, (e)=>console.error("fetchParametres error:", e))
     );
 
-    // Ventes
     const qVentes = query(collection(db, "societe", societeId, "ventes"), orderBy("date", "desc"), limit(300));
     unsubs.push(
       onSnapshot(qVentes, (snap) => {
@@ -437,7 +685,6 @@ export default function Ventes() {
       }, (e)=>{ console.error("Erreur chargement ventes:", e); setError("Erreur lors du chargement des ventes"); })
     );
 
-    // Lots
     const qStockEntries = collection(db, "societe", societeId, "stock_entries");
     unsubs.push(
       onSnapshot(qStockEntries, (snap) => {
@@ -459,17 +706,31 @@ export default function Ventes() {
       },(e)=>{ console.error("fetchStockEntries error:", e); setStockEntries([]); })
     );
 
-    // Médicaments (catalogue)
-    const qMedic = collection(db, "societe", societeId, "stock");
+    const qMedic = query(collection(db, "societe", societeId, "stock"), orderBy("nom", "asc"));
     unsubs.push(
       onSnapshot(qMedic, (snap)=> {
         const arr = [];
-        snap.forEach((d)=> arr.push({ id:d.id, ...d.data() }));
+        snap.forEach((d)=> {
+          const data = d.data() || {};
+          arr.push({
+            id: d.id,
+            nom: String(data?.nom ?? data?.name ?? ""),
+            name: String(data?.nom ?? data?.name ?? ""),
+            prixVente: safeNumber(data?.prixVente ?? data?.price ?? 0),
+            price: safeNumber(data?.prixVente ?? data?.price ?? 0),
+            quantite: safeNumber(data?.quantite ?? data?.qty ?? 0),
+            qty: safeNumber(data?.quantite ?? data?.qty ?? 0),
+            ...Object.fromEntries(
+              BARCODE_FIELDS
+                .filter((k) => data?.[k] != null && String(data[k]).trim() !== "")
+                .map((k) => [k, String(data[k])])
+            ),
+          });
+        });
         setMedicaments(arr);
       }, (e)=> console.error("Erreur chargement médicaments:", e))
     );
 
-    // Flags applied
     unsubs.push(
       onSnapshot(collection(db, "societe", societeId, APPLIED_SALES_COLL), (snap)=> {
         const s = new Set();
@@ -478,7 +739,6 @@ export default function Ventes() {
       }, (e)=> console.error("Erreur listener applied:", e))
     );
 
-    // Flags dismissed
     unsubs.push(
       onSnapshot(collection(db, "societe", societeId, DISMISSED_COLL), (snap)=> {
         const s = new Set();
@@ -490,7 +750,7 @@ export default function Ventes() {
     return () => { unsubs.forEach((u) => { try { u(); } catch {} }); };
   }, [societeId, active]);
 
-  /* ===== Agrégation catalogue ===== */
+  /* ===== 🆕 Agrégation catalogue (SEULEMENT LES MÉDICAMENTS EN STOCK > 0) ===== */
   const getAllAvailableMedicaments = useMemo(() => {
     const num = (v) => {
       if (typeof v === "number") return v || 0;
@@ -508,6 +768,7 @@ export default function Ventes() {
         quantiteTotal: num(m?.quantite ?? m?.qty ?? 0),
         hasLots: false,
         lastPrice: num(m?.prixVente ?? m?.price ?? 0),
+        barcode: findAnyBarcode(m),
       });
     });
 
@@ -517,14 +778,18 @@ export default function Ventes() {
       const qLot = num(lot?.stock1 ?? 0) + num(lot?.stock2 ?? 0);
       const prixLot = num(lot?.prixVente ?? lot?.price ?? 0);
 
-      if (!map.has(key)) map.set(key, { nom: key, quantiteTotal: 0, hasLots: false, lastPrice: 0 });
+      if (!map.has(key)) map.set(key, { nom: key, quantiteTotal: 0, hasLots: false, lastPrice: 0, barcode: "" });
       const item = map.get(key);
       item.quantiteTotal += qLot;
       if (qLot > 0) item.hasLots = true;
       if (!item.lastPrice && prixLot) item.lastPrice = prixLot;
+      if (!item.barcode) item.barcode = findAnyBarcode(lot);
     });
 
-    return Array.from(map.values()).sort((a, b) => a.nom.localeCompare(b.nom));
+    // 🆕 FILTRE : Ne garder que les médicaments avec quantiteTotal > 0
+    return Array.from(map.values())
+      .filter((m) => m.quantiteTotal > 0)
+      .sort((a, b) => a.nom.localeCompare(b.nom));
   }, [medicaments, stockEntries]);
 
   /* ===== Totaux / filtres ===== */
@@ -537,7 +802,7 @@ export default function Ventes() {
   const distinctPanierCount = useMemo(() => distinctCountByProduit(articles), [articles]);
 
   const ventesFiltrees = useMemo(() => {
-    if (!active) return []; // rien à afficher si inactif
+    if (!active) return [];
     return ventes.filter((v) => {
       let keep = true;
       if (filterStatut && v.statutPaiement !== filterStatut) keep = false;
@@ -554,6 +819,19 @@ export default function Ventes() {
       return keep;
     });
   }, [ventes, filterStatut, searchTerm, active]);
+
+  /* 🆕 ===== RÉINITIALISER LA PAGE LORS DU CHANGEMENT DE FILTRES ===== */
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchTerm, filterStatut]);
+
+  /* 🆕 ===== PAGINATION DES VENTES ===== */
+  const totalPages = Math.ceil(ventesFiltrees.length / ITEMS_PER_PAGE);
+  const paginatedVentes = useMemo(() => {
+    const startIndex = (currentPage - 1) * ITEMS_PER_PAGE;
+    const endIndex = startIndex + ITEMS_PER_PAGE;
+    return ventesFiltrees.slice(startIndex, endIndex);
+  }, [ventesFiltrees, currentPage]);
 
   /* ===================== Formulaire ===================== */
   const handleProduitChange = useCallback((value) => {
@@ -572,13 +850,13 @@ export default function Ventes() {
     if (lotsForProduct.length > 0) {
       const firstLot = lotsForProduct[0];
       setSelectedLot(firstLot.id);
-      setPrixUnitaire(safeNumber(firstLot.prixVente));
+      setPrixUnitaire(safeNumber(firstLot.prixVente ?? firstLot.price));
       const code = findAnyBarcode(firstLot);
       setNumeroArticle(String(code || ""));
     } else {
       const med = (medicaments || []).find((m) => (m.nom || m.name) === value);
       if (med) {
-        setPrixUnitaire(safeNumber(med.prixVente));
+        setPrixUnitaire(safeNumber(med.prixVente ?? med.price));
         const code = findAnyBarcode(med);
         setNumeroArticle(String(code || ""));
       }
@@ -589,7 +867,7 @@ export default function Ventes() {
     setSelectedLot(lotId);
     const selectedLotData = (availableLots || []).find((lot) => lot.id === lotId);
     if (selectedLotData) {
-      setPrixUnitaire(safeNumber(selectedLotData.prixVente));
+      setPrixUnitaire(safeNumber(selectedLotData.prixVente ?? selectedLotData.price));
       const code = findAnyBarcode(selectedLotData);
       setNumeroArticle(String(code || ""));
     }
@@ -638,7 +916,6 @@ export default function Ventes() {
         beepError();
         return;
       }
-      console.warn("Article ajouté sans lot spécifique");
     }
 
     const articleData = {
@@ -744,7 +1021,6 @@ export default function Ventes() {
           ? doc(db, "societe", societeId, "ventes", editId)
           : doc(collection(db, "societe", societeId, "ventes"));
 
-        // PHASE 1: Lectures
         const lotSnapshots = [];
         for (const article of normalizedArticles) {
           if (article.stockEntryId) {
@@ -756,8 +1032,6 @@ export default function Ventes() {
           }
         }
 
-        // PHASE 2: Écritures
-        // 2.1 - MAJ stocks
         for (const { lotRef, lotSnap, article } of lotSnapshots) {
           if (lotRef && lotSnap && lotSnap.exists()) {
             const lotData = lotSnap.data();
@@ -800,7 +1074,6 @@ export default function Ventes() {
           }
         }
 
-        // 2.2 - Vente
         const venteData = {
           client,
           date: Timestamp.fromDate(parsedDate),
@@ -827,7 +1100,6 @@ export default function Ventes() {
           transaction.set(venteRef, venteData);
         }
 
-        // 2.3 - Paiement automatique si payé et création
         if (statutPaiement === "payé" && !isEditing) {
           const paiementRef = doc(collection(db, "societe", societeId, "paiements"));
           transaction.set(paiementRef, {
@@ -842,7 +1114,6 @@ export default function Ventes() {
           });
         }
 
-        // 2.4 - Flags lignes appliquées
         for (let i = 0; i < normalizedArticles.length; i++) {
           const opId = `${venteRef.id}#${i}`;
           const appliedRef = doc(db, "societe", societeId, APPLIED_SALES_COLL, opId);
@@ -861,7 +1132,6 @@ export default function Ventes() {
         }
       });
 
-      // LOG ACTIVITÉ
       const hasLots = articles.some((a) => a.numeroLot);
       const nombreLots = new Set(articles.map((a) => a.numeroLot).filter(Boolean)).size;
       const montantTotal = articles.reduce(
@@ -906,7 +1176,9 @@ export default function Ventes() {
   /* ===================== Suppression ===================== */
   const handleDeleteVente = useCallback(async (vente) => {
     if (!active) return;
-    if (!window.confirm(`Supprimer la vente de ${vente.client} ?\n\nLe stock sera automatiquement restauré pour tous les articles de cette vente.`)) return;
+    if (!window.confirm(`Supprimer la vente de ${vente.client} ?
+
+Le stock sera automatiquement restauré pour tous les articles de cette vente.`)) return;
 
     setIsSaving(true);
     setError("");
@@ -914,59 +1186,85 @@ export default function Ventes() {
     try {
       await ensureMembership(user, societeId);
 
+      // ✅ CORRECTION : Faire TOUTES les lectures AVANT la transaction
+      const arts = vente.articles || [];
+      
+      // 1️⃣ Préparer toutes les lectures de lots
+      const lotReadsPromises = arts
+        .filter(article => article.stockEntryId)
+        .map(article => {
+          const lotRef = doc(db, "societe", societeId, "stock_entries", article.stockEntryId);
+          return getDoc(lotRef).then(snap => ({
+            lotRef,
+            lotSnap: snap,
+            article
+          }));
+        });
+
+      // 2️⃣ Préparer la lecture des paiements
+      const paiementsPromise = getDocs(
+        query(
+          collection(db, "societe", societeId, "paiements"),
+          where("docId", "==", vente.id),
+          where("type", "==", "ventes")
+        )
+      ).catch(e => {
+        console.warn("Erreur lecture paiements:", e);
+        return { docs: [] };
+      });
+
+      // 3️⃣ Exécuter TOUTES les lectures en parallèle
+      const [lotReads, paiementsSnapshot] = await Promise.all([
+        Promise.all(lotReadsPromises),
+        paiementsPromise
+      ]);
+
+      // 4️⃣ Maintenant faire la transaction avec SEULEMENT des écritures
       await runTransaction(db, async (transaction) => {
-        const arts = vente.articles || [];
-        for (const article of arts) {
-          if (article.stockEntryId) {
-            const lotRef = doc(db, "societe", societeId, "stock_entries", article.stockEntryId);
-            const lotSnap = await transaction.get(lotRef);
-            if (lotSnap.exists()) {
-              const lotData = lotSnap.data();
-              const s1 = safeNumber(lotData.stock1);
-              const s2 = safeNumber(lotData.stock2);
-              const qte = safeNumber(article.quantite);
+        // Restaurer le stock pour chaque lot
+        lotReads.forEach(({ lotRef, lotSnap, article }) => {
+          if (lotSnap.exists()) {
+            const lotData = lotSnap.data();
+            const s1 = safeNumber(lotData.stock1);
+            const s2 = safeNumber(lotData.stock2);
+            const qte = safeNumber(article.quantite);
 
-              let newS1 = s1, newS2 = s2;
-              if (article.stockSource === "stock1") newS1 = s1 + qte;
-              else if (article.stockSource === "stock2") newS2 = s2 + qte;
-              else newS1 = s1 + qte;
+            let newS1 = s1, newS2 = s2;
+            if (article.stockSource === "stock1") newS1 = s1 + qte;
+            else if (article.stockSource === "stock2") newS2 = s2 + qte;
+            else newS1 = s1 + qte;
 
-              transaction.update(lotRef, {
-                stock1: newS1,
-                stock2: newS2,
-                quantite: newS1 + newS2,
-                updatedAt: Timestamp.now(),
-                updatedBy: user.email || user.uid,
-                lastStockRestoration: {
-                  venteId: vente.id,
-                  produit: article.produit,
-                  quantite: qte,
-                  at: Timestamp.now(),
-                  reason: "vente_supprimee",
-                },
-              });
-            }
+            transaction.update(lotRef, {
+              stock1: newS1,
+              stock2: newS2,
+              quantite: newS1 + newS2,
+              updatedAt: Timestamp.now(),
+              updatedBy: user.email || user.uid,
+              lastStockRestoration: {
+                venteId: vente.id,
+                produit: article.produit,
+                quantite: qte,
+                at: Timestamp.now(),
+                reason: "vente_supprimee",
+              },
+            });
           }
-        }
+        });
 
+        // Supprimer les markers de sync
         for (let i = 0; i < arts.length; i++) {
           const opId = `${vente.id}#${i}`;
           transaction.delete(doc(db, "societe", societeId, APPLIED_SALES_COLL, opId));
           transaction.delete(doc(db, "societe", societeId, DISMISSED_COLL, opId));
         }
 
+        // Supprimer la vente
         transaction.delete(doc(db, "societe", societeId, "ventes", vente.id));
 
-        try {
-          const paiementsSnapshot = await getDocs(
-            query(
-              collection(db, "societe", societeId, "paiements"),
-              where("docId", "==", vente.id),
-              where("type", "==", "ventes")
-            )
-          );
-          paiementsSnapshot.forEach((pDoc) => transaction.delete(pDoc.ref));
-        } catch (e) { console.warn("Suppression paiement liée: ", e); }
+        // Supprimer les paiements liés
+        paiementsSnapshot.docs.forEach((pDoc) => {
+          transaction.delete(pDoc.ref);
+        });
       });
 
       await logActivity("vente_supprimee", {
@@ -1066,10 +1364,10 @@ export default function Ventes() {
             }${
               a.datePeremption ? `<div style="margin-top:4px;">Expiration: <span style="color:${isExpired ? "#dc2626" : "#6b7280"};font-weight:600;">${formatDateSafe(a.datePeremption)}${isExpired ? " ⚠️ EXPIRÉ" : ""}</span></div>` : ""
             }</div>` : ""
-      }</td><td>${safeNumber(a.quantite)}</td><td>${safeToFixed(a.prixUnitaire)} DH</td><td>${safeToFixed(a.remise)} DH</td><td style="font-weight:600;">${safeToFixed(safeNumber(a.prixUnitaire) * safeNumber(a.quantite) - safeNumber(a.remise))} DH</td></tr>`;
+      }</td><td>${safeNumber(a.quantite)}</td><td>${safeToFixed(a.prixUnitaire)} DHS</td><td>${safeToFixed(a.remise)} DHS</td><td style="font-weight:600;">${safeToFixed(safeNumber(a.prixUnitaire) * safeNumber(a.quantite) - safeNumber(a.remise))} DHS</td></tr>`;
     }).join("")}
     </tbody></table>
-    <div class="totals"><div style="font-size:20px;font-weight:bold;">TOTAL: ${safeToFixed(total)} DH</div></div>
+    <div class="totals"><div style="font-size:20px;font-weight:bold;">TOTAL: ${safeToFixed(total)} DHS</div></div>
     ${vente.notes ? `<div style="margin-top:20px;padding:15px;background:#fef3c7;border-left:5px solid #f59e0b;"><strong>Notes:</strong> ${vente.notes}</div>` : ""}
     <div class="signature-section"><div class="signature-box"><div class="signature-line"></div><p>Signature Client</p></div>${cachetHtml}<div class="signature-box"><div class="signature-line"></div><p>Signature Vendeur</p></div></div>
     <div class="footer"><p>${parametres.pied}</p><p style="font-size:12px;color:#6b7280;margin-top:10px;">Document imprimé le ${new Date().toLocaleString("fr-FR")} par ${user?.email || "Utilisateur"}</p></div>
@@ -1113,7 +1411,7 @@ export default function Ventes() {
       const nom = found.nom || found.name || "";
       setProduit(nom || ""); setQuantite(1);
 
-      const pV = safeNumber(found.prixVente ?? found.prixUnitaire ?? found.prixAchat ?? 0);
+      const pV = safeNumber(found.prixVente ?? found.price ?? 0);
       if (pV > 0) setPrixUnitaire(pV);
 
       const lotsForProduct = (Array.isArray(stockEntries) ? stockEntries : [])
@@ -1187,7 +1485,7 @@ export default function Ventes() {
     );
   }
 
-  /* ====== Vue “Veille” quand inactive ====== */
+  /* ====== Vue "Veille" quand inactive ====== */
   if (!active) {
     return (
       <div style={{minHeight:"100vh",background:"linear-gradient(135deg,#fafafa 0%,#f1f5f9 100%)",padding:20,fontFamily:'"Inter",-apple-system,BlinkMacSystemFont,sans-serif'}}>
@@ -1236,7 +1534,7 @@ export default function Ventes() {
         <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:16}}>
           <div>
             <h1 style={{margin:0,fontSize:32,fontWeight:800,background:"linear-gradient(135deg,#667eea,#764ba2)",WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent",backgroundClip:"text"}}>Gestion des Ventes Multi-Articles</h1>
-            <p style={{margin:"6px 0 0",color:"#6b7280",fontSize:16}}>Système de vente multi-lots avec restauration automatique du stock et suivi d'activités.</p>
+            <p style={{margin:"6px 0 0",color:"#6b7280",fontSize:16}}>Catalogue aligné (nom/prixVente/quantite + codes-barres) et lots FIFO.</p>
             <div style={{marginTop:6}}><RealtimeBeat lastRealtimeBeat={lastRealtimeBeat} /></div>
           </div>
 
@@ -1293,7 +1591,7 @@ export default function Ventes() {
                 🛒 {distinctPanierCount} produit{distinctPanierCount > 1 ? "s" : ""} distinct{distinctPanierCount > 1 ? "s" : ""}
               </div>
               <div style={{fontSize:14,color:"#16a34a"}}>
-                Total actuel: <span style={{fontWeight:700,fontSize:16}}>{safeToFixed(totalVenteCourante)} DH</span>
+                Total actuel: <span style={{fontWeight:700,fontSize:16}}>{safeToFixed(totalVenteCourante)} DHS</span>
               </div>
             </div>
           )}
@@ -1328,7 +1626,11 @@ export default function Ventes() {
             <form onSubmit={handleAddArticle}>
               <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit, minmax(200px, 1fr))",gap:10,marginBottom:12}}>
                 <div>
-                  <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: "#374151", marginBottom: 4 }}>Médicament *</label>
+                  <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: "#374151", marginBottom: 4 }}>
+                    Médicament * {getAllAvailableMedicaments.length > 0 && (
+                      <span style={{ color: "#059669", fontSize: 11 }}>({getAllAvailableMedicaments.length} en stock)</span>
+                    )}
+                  </label>
                   <select
                     value={produit}
                     onChange={(e) => handleProduitChange(e.target.value)}
@@ -1349,13 +1651,13 @@ export default function Ventes() {
                 </div>
 
                 <div>
-                  <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: "#374151", marginBottom: 4 }}>Prix unitaire (DH) *</label>
+                  <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: "#374151", marginBottom: 4 }}>Prix unitaire (DHS) *</label>
                   <input type="number" value={prixUnitaire} onChange={(e) => setPrixUnitaire(e.target.value)} required min={0} step="0.01"
                          style={{width:"100%",padding:"8px 12px",borderRadius:10,border:"2px solid #e5e7eb",fontSize:14,background:"white"}} />
                 </div>
 
                 <div>
-                  <label style={{display:"block",fontSize:12,fontWeight:600,color:"#374151",marginBottom:4}}>Remise (DH)</label>
+                  <label style={{display:"block",fontSize:12,fontWeight:600,color:"#374151",marginBottom:4}}>Remise (DHS)</label>
                   <input type="number" value={remiseArticle} onChange={(e) => setRemiseArticle(e.target.value)} min={0} step="0.01"
                          style={{width:"100%",padding:"8px 12px",borderRadius:10,border:"2px solid #e5e7eb",fontSize:14,background:"white"}}/>
                 </div>
@@ -1398,7 +1700,7 @@ export default function Ventes() {
                               {lot.fournisseur}
                             </span>
                             <span style={{background:"#f3e8ff",color:"#7c3aed",padding:"2px 6px",borderRadius:8,fontSize:10,fontWeight:600}}>
-                              {safeToFixed(lot.prixVente)} DH
+                              {safeToFixed(lot.prixVente ?? lot.price)} DHS
                             </span>
                             <span style={{background:primaryStock==="stock1"?"#dbeafe":"#dcfce7",color:primaryStock==="stock1"?"#2563eb":"#16a34a",padding:"2px 6px",borderRadius:8,marginLeft:4,fontSize:10,fontWeight:600}}>
                               → {primaryStock.toUpperCase()}
@@ -1471,10 +1773,10 @@ export default function Ventes() {
                             )}
                           </td>
                           <td style={{ padding: 10, textAlign: "center", fontWeight: 600, fontSize: 13 }}>{safeNumber(a.quantite)}</td>
-                          <td style={{ padding: 10, textAlign: "right", fontWeight: 500, fontSize: 13 }}>{safeToFixed(a.prixUnitaire)} DH</td>
+                          <td style={{ padding: 10, textAlign: "right", fontWeight: 500, fontSize: 13 }}>{safeToFixed(a.prixUnitaire)} DHS</td>
                           <td style={{ padding: 10, textAlign: "right", fontWeight: 500, fontSize: 13, color: safeNumber(a.remise) > 0 ? "#dc2626" : "#6b7280" }}>{safeToFixed(a.remise)} DH</td>
                           <td style={{ padding: 10, textAlign: "right", fontWeight: 700, fontSize: 13, color: "#16a34a" }}>
-                            {safeToFixed(safeNumber(a.prixUnitaire) * safeNumber(a.quantite) - safeNumber(a.remise))} DH
+                            {safeToFixed(safeNumber(a.prixUnitaire) * safeNumber(a.quantite) - safeNumber(a.remise))} DHS
                           </td>
                           <td style={{ padding: 10, textAlign: "center" }}>
                             <button onClick={() => handleRemoveArticle(i)} style={{ background: "linear-gradient(135deg, #ef4444, #dc2626)", color: "white", border: "none", borderRadius: 6, padding: "4px 8px", cursor: "pointer", fontSize: 10, fontWeight: 600 }}>
@@ -1485,7 +1787,7 @@ export default function Ventes() {
                       ))}
                       <tr style={{ background: "linear-gradient(135deg, #f0fdf4, #dcfce7)", borderTop: "2px solid #16a34a" }}>
                         <td colSpan={4} style={{ padding: 12, textAlign: "right", fontSize: 15, fontWeight: 700, color: "#15803d" }}>TOTAL DE LA VENTE</td>
-                        <td style={{ padding: 12, textAlign: "right", fontSize: 18, fontWeight: 800, color: "#16a34a" }}>{safeToFixed(totalVenteCourante)} DH</td>
+                        <td style={{ padding: 12, textAlign: "right", fontSize: 18, fontWeight: 800, color: "#16a34a" }}>{safeToFixed(totalVenteCourante)} DHS</td>
                         <td style={{ padding: 12 }}></td>
                       </tr>
                     </tbody>
@@ -1610,7 +1912,33 @@ export default function Ventes() {
         </div>
       </div>
 
-      {/* Tableau des ventes */}
+      {/* Indicateur résultats */}
+      {ventesFiltrees.length > 0 && (
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "flex-end",
+            alignItems: "center",
+            marginBottom: 12,
+          }}
+        >
+          <div
+            style={{
+              padding: "10px 16px",
+              background: "linear-gradient(135deg,#f0fdf4,#dcfce7)",
+              border: "2px solid #86efac",
+              borderRadius: 10,
+              color: "#166534",
+              fontWeight: 700,
+              fontSize: 14,
+            }}
+          >
+            📊 {ventesFiltrees.length} vente(s) • Page {currentPage}/{totalPages}
+          </div>
+        </div>
+      )}
+
+      {/* Tableau des ventes avec PAGINATION */}
       <div style={{background:"rgba(255,255,255,0.95)",backdropFilter:"blur(20px)",borderRadius:20,overflow:"hidden",border:"1px solid rgba(255,255,255,0.2)",boxShadow:"0 20px 40px rgba(0,0,0,0.1)"}}>
         <div style={{ overflowX: "auto", maxHeight: "70vh", overflowY: "auto" }}>
           <table style={{ width: "100%", minWidth: 1000, borderCollapse: "collapse" }}>
@@ -1619,14 +1947,14 @@ export default function Ventes() {
                 <th style={{ padding: 16, textAlign: "left", fontWeight: 700, fontSize: 13, borderRight: "1px solid rgba(255,255,255,0.1)" }}>N° VENTE</th>
                 <th style={{ padding: 16, textAlign: "left", fontWeight: 700, fontSize: 13, borderRight: "1px solid rgba(255,255,255,0.1)" }}>CLIENT</th>
                 <th style={{ padding: 16, textAlign: "center", fontWeight: 700, fontSize: 13, borderRight: "1px solid rgba(255,255,255,0.1)" }}>DATE</th>
-                <th style={{ padding: 16, textAlign: "center", fontWeight: 700, fontSize: 13, borderRight: "1px solid rgba(255,255,255,0.1)" }}>ARTICLES / STOCK / SYNC</th>
+                <th style={{ padding: 16, textAlign:  "center", fontWeight: 700, fontSize: 13, borderRight: "1px solid rgba(255,255,255,0.1)" }}>ARTICLES / STOCK / SYNC</th>
                 <th style={{ padding: 16, textAlign: "center", fontWeight: 700, fontSize: 13, borderRight: "1px solid rgba(255,255,255,0.1)" }}>STATUT</th>
                 <th style={{ padding: 16, textAlign: "right", fontWeight: 700, fontSize: 13, borderRight: "1px solid rgba(255,255,255,0.1)" }}>TOTAL</th>
                 <th style={{ padding: 16, textAlign: "center", fontWeight: 700, fontSize: 13, width: 220 }}>ACTIONS</th>
               </tr>
             </thead>
             <tbody>
-              {ventesFiltrees.length === 0 ? (
+              {paginatedVentes.length === 0 ? (
                 <tr>
                   <td colSpan={7} style={{ padding: "50px 20px", textAlign: "center", color: "#6b7280", fontSize: 17, fontWeight: 500 }}>
                     <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 14 }}>
@@ -1639,82 +1967,30 @@ export default function Ventes() {
                   </td>
                 </tr>
               ) : (
-                ventesFiltrees.map((v, index) => {
-                  const total =
-                    v.montantTotal ||
-                    (Array.isArray(v.articles) ? v.articles : []).reduce((sum, a) =>
-                      sum + (safeNumber(a.prixUnitaire) * safeNumber(a.quantite) - safeNumber(a.remise || 0)), 0
-                    );
-
-                  const distinctInVente = distinctCountByProduit(v.articles || []);
-
-                  const stockCounts = { stock1: 0, stock2: 0, unknown: 0 };
-                  (v.articles || []).forEach((a) => {
-                    const source = a.stockSource || "unknown";
-                    if (source === "stock1") stockCounts.stock1++;
-                    else if (source === "stock2") stockCounts.stock2++;
-                    else stockCounts.unknown++;
-                  });
-
-                  let applied = 0, dismissed = 0;
-                  (v.articles || []).forEach((_, idx) => {
-                    const opId = `${v.id}#${idx}`;
-                    if (appliedSet.has(opId)) applied++;
-                    if (dismissedSet.has(opId)) dismissed++;
-                  });
-                  const pending = (v.articles || []).length - applied - dismissed;
-
-                  const principalStock = v.stockSource || v.stock || "stock1";
-
-                  return (
-                    <tr key={v.id} style={{borderBottom:"1px solid #f1f5f9",transition:"all 0.3s ease",background: index % 2 === 0 ? "rgba(248, 250, 252, 0.5)" : "white",borderLeft: principalStock === "stock2" ? "4px solid #10b981" : "4px solid #3b82f6"}}>
-                      <td style={{ padding: 16, borderRight: "1px solid #f1f5f9" }}>
-                        <div style={{background: principalStock === "stock2" ? "linear-gradient(135deg,#10b981,#059669)" : "linear-gradient(135deg,#3b82f6,#2563eb)", color: "white", padding: "5px 10px", borderRadius: 10, fontSize: 11, fontWeight: 700, letterSpacing: "0.3px", display: "inline-block"}}>
-                          #{(v.id || "").slice(-6).toUpperCase()}
-                        </div>
-                      </td>
-                      <td style={{ padding: 16, borderRight: "1px solid #f1f5f9" }}>
-                        <div style={{ fontWeight: 600, fontSize: 15, color: "#1f2937", marginBottom: 3 }}>{v.client}</div>
-                        <div style={{ fontSize: 11, color: "#6b7280", background: "#f8fafc", padding: "2px 7px", borderRadius: 8, display: "inline-block" }}>{v.modePaiement || "Espèces"}</div>
-                      </td>
-                      <td style={{ padding: 16, textAlign: "center", borderRight: "1px solid #f1f5f9" }}>
-                        <div style={{ fontSize: 13, fontWeight: 600, color: "#374151" }}>{formatDateSafe(v.date)}</div>
-                      </td>
-                      <td style={{ padding: 16, textAlign: "center", borderRight: "1px solid #f1f5f9" }}>
-                        <div style={{ display: "flex", gap: 6, justifyContent: "center", alignItems: "center", flexWrap: "wrap" }}>
-                          <span style={{ background: "linear-gradient(135deg, #8b5cf6, #7c3aed)", color: "white", padding: "3px 7px", borderRadius: 10, fontSize: 10, fontWeight: 700 }} title="Produits distincts (S1 et S2 considérés comme le même produit)">
-                            {distinctInVente} prod.
-                          </span>
-                          {stockCounts.stock1 > 0 && (<span style={{ background: "linear-gradient(135deg, #3b82f6, #2563eb)", color: "white", padding: "2px 5px", borderRadius: 8, fontSize: 9, fontWeight: 600 }} title={`${stockCounts.stock1} lignes depuis Stock1`}>S1:{stockCounts.stock1}</span>)}
-                          {stockCounts.stock2 > 0 && (<span style={{ background: "linear-gradient(135deg, #10b981, #059669)", color: "white", padding: "2px 5px", borderRadius: 8, fontSize: 9, fontWeight: 600 }} title={`${stockCounts.stock2} lignes depuis Stock2`}>S2:{stockCounts.stock2}</span>)}
-                          {applied > 0 && (<span style={{ background: "linear-gradient(135deg, #22c55e, #16a34a)", color: "white", padding: "2px 6px", borderRadius: 8, fontSize: 9, fontWeight: 700 }} title="Lignes appliquées au stock">✓ {applied}</span>)}
-                          {dismissed > 0 && (<span style={{ background: "linear-gradient(135deg, #6b7280, #4b5563)", color: "white", padding: "2px 6px", borderRadius: 8, fontSize: 9, fontWeight: 700 }} title="Lignes ignorées">⊗ {dismissed}</span>)}
-                          {pending > 0 && (<span style={{ background: "linear-gradient(135deg, #f59e0b, #d97706)", color: "white", padding: "2px 6px", borderRadius: 8, fontSize: 9, fontWeight: 700 }} title="En attente d'application">… {pending}</span>)}
-                        </div>
-                      </td>
-                      <td style={{ padding: 16, textAlign: "center", borderRight: "1px solid #f1f5f9" }}>
-                        <span style={{background: v.statutPaiement === "payé" ? "linear-gradient(135deg,#22c55e,#16a34a)" : v.statutPaiement === "partiel" ? "linear-gradient(135deg,#eab308,#ca8a04)" : "linear-gradient(135deg,#ef4444,#dc2626)", color:"white", padding:"5px 14px", borderRadius:16, fontSize:11, fontWeight:600, textTransform:"capitalize"}}>
-                          {v.statutPaiement}
-                        </span>
-                      </td>
-                      <td style={{ padding: 16, textAlign: "right", borderRight: "1px solid #f1f5f9" }}>
-                        <div style={{ fontSize: 15, fontWeight: 700, color: "#16a34a" }}>{safeToFixed(total)} DH</div>
-                      </td>
-                      <td style={{ padding: 16, textAlign: "center" }}>
-                        <div style={{ display: "flex", gap: 8, justifyContent: "center" }}>
-                          <span onClick={() => handleViewDetails(v)} style={{ cursor: "pointer", fontSize: 17 }} title="Voir les détails">👁️</span>
-                          <span onClick={() => handleEditVente(v)} style={{ cursor: "pointer", fontSize: 17 }} title="Modifier">✏️</span>
-                          <span onClick={() => handlePrintVente(v)} style={{ cursor: "pointer", fontSize: 17 }} title="Imprimer">🖨️</span>
-                          <span onClick={() => handleDeleteVente(v)} style={{ cursor: "pointer", fontSize: 17 }} title="Supprimer (stock restauré auto)">🗑️</span>
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })
+                paginatedVentes.map((v, index) => (
+                  <VenteRow
+                    key={v.id}
+                    vente={v}
+                    index={index}
+                    appliedSet={appliedSet}
+                    dismissedSet={dismissedSet}
+                    onViewDetails={handleViewDetails}
+                    onEdit={handleEditVente}
+                    onPrint={handlePrintVente}
+                    onDelete={handleDeleteVente}
+                  />
+                ))
               )}
             </tbody>
           </table>
         </div>
+
+        {/* PAGINATION */}
+        <Pagination
+          currentPage={currentPage}
+          totalPages={totalPages}
+          onPageChange={setCurrentPage}
+        />
       </div>
 
       {/* Modal de détails via Portal */}
@@ -1758,7 +2034,7 @@ export default function Ventes() {
               </div>
               <div style={{background:"linear-gradient(135deg,#d1fae5,#a7f3d0)",borderRadius:12,padding:14}}>
                 <h4 style={{margin:"0 0 4px",color:"#065f46",fontSize:13,fontWeight:600}}>Total</h4>
-                <p style={{margin:0,fontSize:15,fontWeight:800,color:"#1f2937"}}>{safeToFixed(selectedVente?.montantTotal)} DH</p>
+                <p style={{margin:0,fontSize:15,fontWeight:800,color:"#1f2937"}}>{safeToFixed(selectedVente?.montantTotal)} DHS</p>
               </div>
             </div>
 
@@ -1799,10 +2075,10 @@ export default function Ventes() {
                           )}
                         </td>
                         <td style={{ padding: 11, textAlign: "center", fontSize: 13 }}>{safeNumber(a?.quantite)}</td>
-                        <td style={{ padding: 11, textAlign: "right", fontSize: 13 }}>{safeToFixed(a?.prixUnitaire)} DH</td>
-                        <td style={{ padding: 11, textAlign: "right", fontSize: 13 }}>{safeToFixed(a?.remise)} DH</td>
+                        <td style={{ padding: 11, textAlign: "right", fontSize: 13 }}>{safeToFixed(a?.prixUnitaire)} DHS</td>
+                        <td style={{ padding: 11, textAlign: "right", fontSize: 13 }}>{safeToFixed(a?.remise)} DHS</td>
                         <td style={{ padding: 11, textAlign: "right", fontWeight: 600, fontSize: 13 }}>
-                          {safeToFixed(safeNumber(a?.prixUnitaire) * safeNumber(a?.quantite) - safeNumber(a?.remise))} DH
+                          {safeToFixed(safeNumber(a?.prixUnitaire) * safeNumber(a?.quantite) - safeNumber(a?.remise))} DHS
                         </td>
                         <td style={{ padding: 11, textAlign: "center" }}>
                           <span style={{background:a?.stockSource === "stock2" ? "linear-gradient(135deg, #10b981, #059669)" : "linear-gradient(135deg, #3b82f6, #2563eb)", color:"white", padding:"3px 7px", borderRadius:10, fontSize:10, fontWeight:600}}>

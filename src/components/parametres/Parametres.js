@@ -482,10 +482,10 @@ export default function Parametres() {
       case "vente_modifiee":
         return `Client: ${details.client || "N/A"}${
           details.hasLots ? ` (${details.nombreLots || 0} lots)` : ""
-        } • ${Number(details.montant || 0).toFixed(2)} DH`;
+        } • ${Number(details.montant || 0).toFixed(2)} DHS`;
 
       case "vente_supprimee":
-        return `Client: ${details.client || "N/A"} • ${Number(details.montant || 0).toFixed(2)} DH (Supprimée)`;
+        return `Client: ${details.client || "N/A"} • ${Number(details.montant || 0).toFixed(2)} DHS (Supprimée)`;
 
       case "achat":
         return `Fournisseur: ${details.fournisseur || "N/A"}${
@@ -493,7 +493,7 @@ export default function Parametres() {
         }`;
 
       case "paiement":
-        return `${details.mode || "Espèces"} - ${details.montant || 0} DH`;
+        return `${details.mode || "Espèces"} - ${details.montant || 0} DHS`;
 
       case "reception_achat": {
         // << corrige le 0 article(s) >>
@@ -1308,7 +1308,7 @@ export default function Parametres() {
                           {!isMobile && (
                             <td style={styles.tableCell}>
                               {a.montant > 0 ? (
-                                <span style={{ color: "#48bb78", fontWeight: 800 }}>{Number(a.montant).toFixed(2)} DH</span>
+                                <span style={{ color: "#48bb78", fontWeight: 800 }}>{Number(a.montant).toFixed(2)} DHS</span>
                               ) : (
                                 <span style={{ color: "#9ca3af" }}>-</span>
                               )}

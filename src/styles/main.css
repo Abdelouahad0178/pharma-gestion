@@ -30,9 +30,7 @@
 }
 
 /* Reset et base */
-* {
-  box-sizing: border-box;
-}
+* { box-sizing: border-box; }
 
 body {
   background: var(--primary-bg);
@@ -52,24 +50,16 @@ h1, h2, h3, h4, h5, h6, .fullscreen-table-title {
   letter-spacing: 0.02em;
   margin: 0;
   padding: 0;
-
   line-height: 1.3;
 }
-
-
 h3 .fullscreen-table-title {
   font-family: 'Inter', Arial, sans-serif;
   font-weight: 800;
   letter-spacing: 0.02em;
   margin: 0;
   padding: 0;
-  
   line-height: 1.3;
 }
-
-
-
-
 .fullscreen-table-title {
   font-size: var(--font-header);
   font-weight: 800;
@@ -122,7 +112,6 @@ h3 .fullscreen-table-title {
   width: calc(100% - 2 * var(--spacing-md));
   max-width: calc(100vw - 2 * var(--spacing-md));
 }
-
 .table-pro-full table, .table-pro table {
   width: 100%;
   border-collapse: separate;
@@ -162,7 +151,6 @@ h3 .fullscreen-table-title {
   background: #223049;
   width: 100%;
 }
-
 .table-pro-full thead,
 .table-pro-full tbody tr,
 .table-pro thead,
@@ -171,7 +159,6 @@ h3 .fullscreen-table-title {
   width: 100%;
   table-layout: fixed;
 }
-
 .table-pro-full td,
 .table-pro td {
   padding: var(--spacing-sm) var(--spacing-xs);
@@ -186,14 +173,13 @@ h3 .fullscreen-table-title {
   word-break: break-word;
   min-width: 100px;
 }
-
 .table-pro-full tbody tr:hover td,
 .table-pro tbody tr:hover td {
   background: #2e415c;
   color: #fff;
 }
 
-/* Boutons responsive */
+/* ===================== BOUTONS (longhands, pas de shorthand border) ===================== */
 .btn,
 .table-pro-full button,
 .table-pro button,
@@ -203,7 +189,12 @@ button,
   padding: var(--spacing-sm) var(--spacing-md);
   margin: var(--spacing-xs) var(--spacing-xs) var(--spacing-xs) 0;
   border-radius: var(--border-radius-small);
-  border: none;
+
+  /* AVANT: border: none;  APRES: longhands cohérents */
+  border-width: 0;
+  border-style: solid;
+  border-color: transparent;
+
   background: linear-gradient(90deg, #3272e0 50%, #61c7ef 100%);
   color: #fff;
   font-weight: 700;
@@ -218,7 +209,6 @@ button,
   text-overflow: ellipsis;
   overflow: hidden;
 }
-
 .btn:hover,
 .table-pro-full button:hover,
 .table-pro button:hover,
@@ -231,35 +221,49 @@ button:hover,
   transform: translateY(-1px);
 }
 
-/* Variantes de boutons */
+/* Variantes de boutons (laisser border en longhands si besoin d’un contour visible) */
 .btn.danger, .btn-neumorph.danger, .table-pro-full button.danger {
   background: linear-gradient(90deg, #ee4e61 60%, #fddada 100%);
   color: #fff;
 }
-
 .btn.danger:hover, .btn-neumorph.danger:hover, .table-pro-full button.danger:hover {
   background: linear-gradient(90deg, #ee4e61 85%, #c94a4a 100%);
   color: #fff;
 }
-
 .btn.print, .btn-neumorph.print, .table-pro-full button.print {
   background: linear-gradient(90deg, #2bd2a6 60%, #6ee9df 100%);
   color: #fff;
 }
-
 .btn.print:hover, .btn-neumorph.print:hover, .table-pro-full button.print:hover {
   background: linear-gradient(90deg, #6ee9df 0%, #2bd2a6 100%);
   color: #fff;
 }
-
 .btn.info {
   background: linear-gradient(90deg, #61c7ef 40%, #3272e0 100%);
   color: #fff;
 }
-
 .btn.success {
   background: linear-gradient(90deg, #2bd2a6 40%, #6ee9df 100%);
   color: #fff;
+}
+
+/* ===== Style spécifique pour le bouton d’historique (évite tout conflit) ===== */
+button[data-role="history-toggle"]{
+  border-width: 1px;
+  border-style: solid;
+  border-color: #a5b4fc;
+  background-color: #a5b4fc; /* pas de shorthand background, volontaire */
+  color: #ffffff;
+  font-weight: 900;
+  padding: 4px 12px;
+  border-radius: 12px;
+  box-shadow: 0 1px 4px rgba(99,102,241,0.25);
+  line-height: 1.1;
+}
+button[data-role="history-toggle"].is-open{
+  border-color: #4f46e5;
+  background-color: #4f46e5;
+  box-shadow: 0 2px 10px rgba(79,70,229,0.35);
 }
 
 /* Formulaires responsive */
@@ -270,9 +274,8 @@ form {
   align-items: center;
   justify-content: flex-start;
   margin-bottom: var(--spacing-md);
-  margin-top:3% ;
+  margin-top:3%;
 }
-
 input, select, textarea,
 .MuiInputBase-root,
 .MuiInputLabel-root,
@@ -291,16 +294,12 @@ input, select, textarea,
   width: clamp(120px, 25vw, 200px);
   max-width: 100%;
 }
-
 input:focus, select:focus, textarea:focus {
   border-color: #56b8e9 !important;
   background: #dfe1e7 !important;
   color: #110e16 !important;
 }
-
-.w-full {
-  width: 100% !important;
-}
+.w-full { width: 100% !important; }
 
 /* Classes utilitaires responsive */
 label {
@@ -312,24 +311,10 @@ label {
 }
 
 /* Scrollbar personnalisée */
-::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
-  background: #1a2535;
-}
-
-::-webkit-scrollbar-thumb {
-  background: #466294;
-  border-radius: 9px;
-}
-
-::-webkit-scrollbar-thumb:hover {
-  background: #5a7ab0;
-}
-
-::-webkit-scrollbar-corner {
-  background: #1a2535;
-}
+::-webkit-scrollbar { width: 8px; height: 8px; background: #1a2535; }
+::-webkit-scrollbar-thumb { background: #466294; border-radius: 9px; }
+::-webkit-scrollbar-thumb:hover { background: #5a7ab0; }
+::-webkit-scrollbar-corner { background: #1a2535; }
 
 /* Status chips */
 .status-chip, .MuiChip-root {
@@ -344,19 +329,16 @@ label {
   display: inline-block;
   white-space: nowrap;
 }
-
 .status-chip.danger {
   background: linear-gradient(90deg,#ee4e61 40%,#fcdada 100%);
   color: #fff;
   border: 1px solid #ee4e61;
 }
-
 .status-chip.success {
   background: linear-gradient(90deg,#2bd2a6 40%,#6ee9df 100%);
   color: #233c29;
   border: 1px solid #2bd2a6;
 }
-
 .status-chip.info {
   background: linear-gradient(90deg,#61c7ef 40%,#3272e0 100%);
   color: #fff;
@@ -366,53 +348,24 @@ label {
 /* Modal overlay */
 .modal-overlay {
   position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
+  top: 0; left: 0; right: 0; bottom: 0;
   background: rgba(0, 0, 0, 0.7);
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  display: flex; align-items: center; justify-content: center;
   z-index: 1000;
   padding: var(--spacing-md);
 }
 
-
-
-
-
 /* ===================== RESPONSIVE BREAKPOINTS ===================== */
-
-
-
-
-
-
-
-
-
 
 /* Desktop Large (> 1400px) */
 @media (min-width: 1400px) {
-  :root {
-    --font-base: 16px;
-    --font-large: 18px;
-    --font-header: 36px;
-  }
-  
-  .table-pro-full tbody,
-  .table-pro tbody {
-    height: calc(100vh - 280px);
-  }
+  :root { --font-base: 16px; --font-large: 18px; --font-header: 36px; }
+  .table-pro-full tbody, .table-pro tbody { height: calc(100vh - 280px); }
 }
 
 /* Desktop (1024px - 1399px) */
 @media (max-width: 1399px) and (min-width: 1024px) {
-  .fullscreen-table-title {
-    padding: var(--spacing-md) var(--spacing-lg) var(--spacing-sm) var(--spacing-lg);
-  }
-  
+  .fullscreen-table-title { padding: var(--spacing-md) var(--spacing-lg) var(--spacing-sm) var(--spacing-lg); }
   .table-pro-full, .table-pro {
     margin: 0 var(--spacing-sm) var(--spacing-md) var(--spacing-sm);
     width: calc(100% - 2 * var(--spacing-sm));
@@ -421,41 +374,24 @@ label {
 
 /* Tablet (768px - 1023px) */
 @media (max-width: 1023px) and (min-width: 768px) {
-  :root {
-    --spacing-md: 10px;
-    --spacing-lg: 16px;
-    --spacing-xl: 20px;
-  }
-  
+  :root { --spacing-md: 10px; --spacing-lg: 16px; --spacing-xl: 20px; }
   .fullscreen-table-title {
     font-size: clamp(20px, 4vw, 28px);
     padding: var(--spacing-md) var(--spacing-md) var(--spacing-sm) var(--spacing-md);
   }
-  
   .table-pro-full, .table-pro {
     margin: 0 var(--spacing-xs) var(--spacing-md) var(--spacing-xs);
     width: calc(100% - 2 * var(--spacing-xs));
     overflow-x: auto;
   }
-  
-  .table-pro-full table, .table-pro table {
-    min-width: 800px;
-  }
-  
+  .table-pro-full table, .table-pro table { min-width: 800px; }
   .paper-card, .MuiPaper-root {
     margin: var(--spacing-sm) var(--spacing-xs) var(--spacing-md) var(--spacing-xs);
     padding: var(--spacing-md) var(--spacing-sm);
     width: calc(100% - 2 * var(--spacing-xs));
   }
-  
-  form {
-    gap: var(--spacing-sm);
-  }
-  
-  .btn,
-  .table-pro-full button,
-  .table-pro button,
-  button {
+  form { gap: var(--spacing-sm); }
+  .btn, .table-pro-full button, .table-pro button, button {
     min-width: clamp(70px, 12vw, 100px);
     padding: var(--spacing-xs) var(--spacing-sm);
     font-size: var(--font-small);
@@ -465,319 +401,140 @@ label {
 /* Mobile Large (480px - 767px) */
 @media (max-width: 767px) and (min-width: 480px) {
   :root {
-    --spacing-xs: 6px;
-    --spacing-sm: 8px;
-    --spacing-md: 12px;
-    --spacing-lg: 16px;
-    --spacing-xl: 20px;
+    --spacing-xs: 6px; --spacing-sm: 8px; --spacing-md: 12px;
+    --spacing-lg: 16px; --spacing-xl: 20px;
   }
-  
   .fullscreen-table-title {
     font-size: clamp(18px, 5vw, 24px);
     padding: var(--spacing-sm) var(--spacing-sm) var(--spacing-xs) var(--spacing-sm);
   }
-  
   .table-pro-full, .table-pro {
     margin: 0 var(--spacing-xs) var(--spacing-sm) var(--spacing-xs);
     width: calc(100% - 2 * var(--spacing-xs));
     overflow-x: auto;
     border-radius: 10px;
   }
-  
-  .table-pro-full table, .table-pro table {
-    min-width: 700px;
-    font-size: 14px;
+  .table-pro-full table, .table-pro table { min-width: 700px; font-size: 14px; }
+  .table-pro-full thead th, .table-pro thead th {
+    padding: var(--spacing-xs) 4px; font-size: 13px; min-width: 80px;
   }
-  
-  .table-pro-full thead th,
-  .table-pro thead th {
-    padding: var(--spacing-xs) 4px;
-    font-size: 13px;
-    min-width: 80px;
+  .table-pro-full td, .table-pro td {
+    padding: var(--spacing-xs) 4px; font-size: 13px; min-width: 80px;
   }
-  
-  .table-pro-full td,
-  .table-pro td {
-    padding: var(--spacing-xs) 4px;
-    font-size: 13px;
-    min-width: 80px;
+  .table-pro-full tbody, .table-pro tbody {
+    height: calc(100vh - 320px); min-height: 180px;
   }
-  
-  .table-pro-full tbody,
-  .table-pro tbody {
-    height: calc(100vh - 320px);
-    min-height: 180px;
-  }
-  
   .paper-card, .MuiPaper-root {
     margin: var(--spacing-xs) var(--spacing-xs) var(--spacing-sm) var(--spacing-xs);
     padding: var(--spacing-sm) var(--spacing-xs);
     width: calc(100% - 2 * var(--spacing-xs));
     border-radius: 10px;
   }
-  
-  form {
-    gap: var(--spacing-xs);
-  }
-  
+  form { gap: var(--spacing-xs); }
   input, select, textarea {
     width: clamp(100px, 30vw, 150px) !important;
     padding: var(--spacing-xs) var(--spacing-sm) !important;
     font-size: 14px !important;
   }
-  
-  .btn,
-  .table-pro-full button,
-  .table-pro button,
-  button {
-    min-width: 60px;
-    padding: var(--spacing-xs) var(--spacing-xs);
-    font-size: 12px;
-    margin: 2px;
+
+  .css-1ygil4i-MuiToolbar-root{ flex-direction: column; }
+  .css-awgou1 {
+    position: relative; display: flex; -webkit-box-align: center; align-items: center;
+    padding-left: 16px; padding-right: 16px; min-height: 56px; flex-direction: column;
   }
-
-.css-1ygil4i-MuiToolbar-root{
-  flex-direction: column;
-}
-
-.css-1ygil4i-MuiToolbar-root {
-  flex-direction: column;
-}
-
-
-
-.css-awgou1 {
-    position: relative;
-    display: flex
-;
-    -webkit-box-align: center;
-    align-items: center;
-    padding-left: 16px;
-    padding-right: 16px;
-    min-height: 56px;
-    flex-direction: column;
-}
-
-
-
 }
 
 /* Mobile Small (< 480px) */
 @media (max-width: 479px) {
   :root {
-    --spacing-xs: 4px;
-    --spacing-sm: 6px;
-    --spacing-md: 8px;
-    --spacing-lg: 12px;
-    --spacing-xl: 16px;
-    --font-base: 13px;
-    --font-small: 11px;
-    --font-large: 14px;
-    --border-radius: 8px;
-    --border-radius-small: 6px;
+    --spacing-xs: 4px; --spacing-sm: 6px; --spacing-md: 8px;
+    --spacing-lg: 12px; --spacing-xl: 16px;
+    --font-base: 13px; --font-small: 11px; --font-large: 14px;
+    --border-radius: 8px; --border-radius-small: 6px;
   }
-  
-  body {
-    overflow-x: hidden;
-  }
-  
-  .fullscreen-table-wrap {
-    padding: 0;
-    overflow-x: hidden;
-  }
-  
+  body { overflow-x: hidden; }
+  .fullscreen-table-wrap { padding: 0; overflow-x: hidden; }
   .fullscreen-table-title {
     font-size: clamp(16px, 6vw, 20px);
     padding: var(--spacing-xs) var(--spacing-xs) var(--spacing-xs) var(--spacing-xs);
-    word-break: break-word;
-    hyphens: auto;
+    word-break: break-word; hyphens: auto;
   }
-  
   .table-pro-full, .table-pro {
     margin: 0 2px var(--spacing-xs) 2px;
     width: calc(100vw - 4px);
     overflow-x: auto;
     border-radius: 6px;
   }
-  
-  .table-pro-full table, .table-pro table {
-    min-width: 600px;
-    font-size: 12px;
+  .table-pro-full table, .table-pro table { min-width: 600px; font-size: 12px; }
+  .table-pro-full thead th, .table-pro thead th {
+    padding: var(--spacing-xs) 2px; font-size: 11px; min-width: 70px; white-space: nowrap;
   }
-  
-  .table-pro-full thead th,
-  .table-pro thead th {
-    padding: var(--spacing-xs) 2px;
-    font-size: 11px;
-    min-width: 70px;
-    white-space: nowrap;
+  .table-pro-full td, .table-pro td {
+    padding: var(--spacing-xs) 2px; font-size: 11px; min-width: 70px;
   }
-  
-  .table-pro-full td,
-  .table-pro td {
-    padding: var(--spacing-xs) 2px;
-    font-size: 11px;
-    min-width: 70px;
+  .table-pro-full tbody, .table-pro tbody {
+    height: calc(100vh - 300px); min-height: 150px;
   }
-  
-  .table-pro-full tbody,
-  .table-pro tbody {
-    height: calc(100vh - 300px);
-    min-height: 150px;
-  }
-  
   .paper-card, .MuiPaper-root {
     margin: var(--spacing-xs) 2px var(--spacing-xs) 2px;
     padding: var(--spacing-xs) 4px;
     width: calc(100vw - 4px);
     border-radius: 6px;
   }
-  
-  form {
-    gap: 4px;
-    flex-direction: column;
-    align-items: stretch;
-  }
-  
-  form > div {
-    width: 100%;
-  }
-  
+  form { gap: 4px; flex-direction: column; align-items: stretch; }
+  form > div { width: 100%; }
   input, select, textarea {
-    width: 100% !important;
-    max-width: none !important;
+    width: 100% !important; max-width: none !important;
     padding: var(--spacing-xs) var(--spacing-xs) !important;
-    font-size: 13px !important;
-    margin-bottom: 4px !important;
+    font-size: 13px !important; margin-bottom: 4px !important;
   }
-  
-  .btn,
-  .table-pro-full button,
-  .table-pro button,
-  button {
-    min-width: 50px;
-    padding: 4px 6px;
-    font-size: 11px;
-    margin: 1px;
-    border-radius: 4px;
+  .btn, .table-pro-full button, .table-pro button, button {
+    min-width: 50px; padding: 4px 6px; font-size: 11px; margin: 1px; border-radius: 4px;
   }
-  
-  .status-chip {
-    font-size: 10px;
-    padding: 2px 6px;
-  }
-  
-  /* Optimisation des actions sur mobile */
-  .table-pro-full td:last-child,
-  .table-pro td:last-child {
-    min-width: 120px;
-    
-  }
-  
-  /* Amélioration du scroll horizontal */
-  .table-pro-full::-webkit-scrollbar,
-  .table-pro::-webkit-scrollbar {
-    height: 6px;
-  }
-  
-  .table-pro-full::-webkit-scrollbar-thumb,
-  .table-pro::-webkit-scrollbar-thumb {
-    background: #466294;
-    border-radius: 3px;
+  .status-chip { font-size: 10px; padding: 2px 6px; }
+  .table-pro-full td:last-child, .table-pro td:last-child { min-width: 120px; }
+
+  .table-pro-full::-webkit-scrollbar, .table-pro::-webkit-scrollbar { height: 6px; }
+  .table-pro-full::-webkit-scrollbar-thumb, .table-pro::-webkit-scrollbar-thumb {
+    background: #466294; border-radius: 3px;
   }
 
-.css-1ygil4i-MuiToolbar-root{
-  flex-direction: column;
-}
-
-
-.css-awgou1 {
-    position: relative;
-    display: flex
-;
-    -webkit-box-align: center;
-    align-items: center;
-    padding-left: 16px;
-    padding-right: 16px;
-    min-height: 56px;
-    flex-direction: column;
-}
-
-
+  .css-1ygil4i-MuiToolbar-root{ flex-direction: column; }
+  .css-awgou1 {
+    position: relative; display: flex; -webkit-box-align: center; align-items: center;
+    padding-left: 16px; padding-right: 16px; min-height: 56px; flex-direction: column;
+  }
 }
 
 /* Très petit mobile (< 320px) */
 @media (max-width: 319px) {
-  .fullscreen-table-title {
-    font-size: 14px;
-    padding: 2px;
-  }
-  
-  .table-pro-full table, .table-pro table {
-    min-width: 500px;
-    font-size: 11px;
-  }
-  
-  .btn,
-  .table-pro-full button,
-  .table-pro button,
-  button {
-    font-size: 10px;
-    padding: 2px 4px;
-    min-width: 40px;
+  .fullscreen-table-title { font-size: 14px; padding: 2px; }
+  .table-pro-full table, .table-pro table { min-width: 500px; font-size: 11px; }
+  .btn, .table-pro-full button, .table-pro button, button {
+    font-size: 10px; padding: 2px 4px; min-width: 40px;
   }
 }
 
 /* Amélioration pour les écrans tactiles */
 @media (hover: none) and (pointer: coarse) {
-  .btn,
-  .table-pro-full button,
-  .table-pro button,
-  button {
-    min-height: 44px; /* Taille minimum recommandée pour le tactile */
-    min-width: 44px;
+  .btn, .table-pro-full button, .table-pro button, button {
+    min-height: 44px; min-width: 44px;
   }
-  
-  input, select, textarea {
-    min-height: 44px !important;
-  }
-  
-  .table-pro-full td,
-  .table-pro td {
-    min-height: 40px;
-  }
+  input, select, textarea { min-height: 44px !important; }
+  .table-pro-full td, .table-pro td { min-height: 40px; }
 }
 
 /* Mode paysage sur mobile */
 @media (max-width: 767px) and (orientation: landscape) {
-  .table-pro-full tbody,
-  .table-pro tbody {
-    height: calc(100vh - 200px);
-    min-height: 120px;
-  }
-  
-  .fullscreen-table-title {
-    padding: var(--spacing-xs) var(--spacing-sm) var(--spacing-xs) var(--spacing-sm);
-  }
+  .table-pro-full tbody, .table-pro tbody { height: calc(100vh - 200px); min-height: 120px; }
+  .fullscreen-table-title { padding: var(--spacing-xs) var(--spacing-sm) var(--spacing-xs) var(--spacing-sm); }
 }
 
-/* Animation et transitions pour une meilleure UX */
+/* Animation et transitions */
 @media (prefers-reduced-motion: no-preference) {
-  .btn,
-  .table-pro-full button,
-  .table-pro button,
-  button {
-    transition: all 0.2s ease-in-out;
-  }
-  
-  .table-pro-full td,
-  .table-pro td {
-    transition: background-color 0.15s ease-in-out;
-  }
-  
-  .paper-card, .MuiPaper-root {
-    transition: box-shadow 0.2s ease-in-out;
-  }
+  .btn, .table-pro-full button, .table-pro button, button { transition: all 0.2s ease-in-out; }
+  .table-pro-full td, .table-pro td { transition: background-color 0.15s ease-in-out; }
+  .paper-card, .MuiPaper-root { transition: box-shadow 0.2s ease-in-out; }
 }
 
 /* High DPI screens */
@@ -790,66 +547,36 @@ label {
     -moz-osx-font-smoothing: grayscale;
   }
 }
-.field{
-  background: #1c0454;
-}
 
-
+.field{ background: #1c0454; }
 
 /* Empêche la sélection et le drag globalement */
-html, body, #root {
-  -webkit-user-select: none;
-  user-select: none;
-}
-img, a, svg {
-  -webkit-user-drag: none;
-  user-drag: none;
-}
+html, body, #root { -webkit-user-select: none; user-select: none; }
+img, a, svg { -webkit-user-drag: none; user-drag: none; }
 
 /* MAIS réactive la sélection dans les champs de saisie */
 input, textarea, [contenteditable="true"] {
   -webkit-user-select: text !important;
   user-select: text !important;
 }
+
 /* BackToTop floating button */
 .backtotop{
-  position: fixed;
-  right: 16px;
-  bottom: 16px;
-  width: 46px;
-  height: 46px;
-  border-radius: 999px;
-  border: 0;
-  cursor: pointer;
-  z-index: 9999;
+  position: fixed; right: 16px; bottom: 16px;
+  width: 46px; height: 46px; border-radius: 999px;
+  border: 0; cursor: pointer; z-index: 9999;
   background: linear-gradient(135deg,#667eea,#764ba2);
-  color: #fff;
-  font-weight: 900;
-  font-size: 20px;
+  color: #fff; font-weight: 900; font-size: 20px;
   box-shadow: 0 18px 40px rgba(0,0,0,.25);
-  display: grid;
-  place-items: center;
-  opacity: 0;
-  transform: translateY(12px) scale(.9);
+  display: grid; place-items: center;
+  opacity: 0; transform: translateY(12px) scale(.9);
   pointer-events: none;
   transition: opacity .2s ease, transform .2s ease, box-shadow .2s ease;
 }
 .backtotop:hover{ box-shadow: 0 22px 50px rgba(0,0,0,.3); }
 .backtotop:active{ transform: translateY(12px) scale(.88); }
-.backtotop.show{
-  opacity: 1;
-  transform: translateY(0) scale(1);
-  pointer-events: auto;
-}
+.backtotop.show{ opacity: 1; transform: translateY(0) scale(1); pointer-events: auto; }
 @media (max-width: 768px){
-  .backtotop{
-    right: 12px;
-    bottom: 12px;
-    width: 44px;
-    height: 44px;
-    font-size: 18px;
-  }
+  .backtotop{ right: 12px; bottom: 12px; width: 44px; height: 44px; font-size: 18px; }
 }
-@media (prefers-reduced-motion: reduce){
-  .backtotop{ transition: none; }
-}
+@media (prefers-reduced-motion: reduce){ .backtotop{ transition: none; } }

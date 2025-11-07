@@ -379,7 +379,7 @@ export const calculateStats = (data) => {
 export const formatDH = (value) => {
   return new Intl.NumberFormat('fr-MA', {
     style: 'currency',
-    currency: 'MAD',
+    currency: 'DHS',
     minimumFractionDigits: 0,
     maximumFractionDigits: 0
   }).format(value || 0);

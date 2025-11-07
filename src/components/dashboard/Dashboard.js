@@ -63,6 +63,7 @@ function inPeriod(dateInput, period, minDate, maxDate) {
     case "semaine": return d >= new Date(now.getFullYear(), now.getMonth(), now.getDate() - 7);
     case "mois":    return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth();
     case "annee":   return d.getFullYear() === now.getFullYear();
+    case "toutes":  return true;
     default:         return true;
   }
 }
@@ -79,7 +80,7 @@ function daysToExp(per) {
 
 function formatDH(n) {
   const v = Number(n) || 0;
-  return `${v.toFixed(2)} DH`;
+  return `${v.toFixed(2)} DHS`;
 }
 
 function norm(s) {
@@ -96,15 +97,14 @@ function isCash(mode) {
 /* =========================
    Nettoyage transferts (affichage)
 ========================= */
-// Retire les tags du nom comme "[TRANSFERT S2]" etc.
 function cleanTransferTagName(name) {
   return String(name || "").replace(/\[transfert.*?\]/gi, "").replace(/\s{2,}/g, " ").trim();
 }
-// Normalise un nom pour une clé Set
+
 function normalizedProductKey(name) {
   return norm(cleanTransferTagName(name));
 }
-// Normalise numéro de lot (utile pour ruptures)
+
 function normalizeLotNumber(lot) {
   if (!lot) return "-";
   return String(lot)
@@ -275,7 +275,7 @@ function getPeriodLabel(period) {
 }
 
 /* =========================
-   🚀 COMPOSANTS OPTIMISÉS
+   COMPOSANTS OPTIMISÉS
 ========================= */
 
 const KPICard = memo(({ 
@@ -324,7 +324,8 @@ export default function Dashboard() {
   const [isMobile, setIsMobile] = useState(false);
   const [isTablet, setIsTablet] = useState(false);
 
-  const [periode, setPeriode] = useState("mois");
+  // 👇 Par défaut: aujourd'hui
+  const [periode, setPeriode] = useState("jour");
   const [dateMin, setDateMin] = useState("");
   const [dateMax, setDateMax] = useState("");
 
@@ -404,7 +405,7 @@ export default function Dashboard() {
     unsubs.push(onSnapshot(qStockEntries, s => setStockEntries(s.docs.map(d => ({ id:d.id, ...d.data() }))), () => setStockEntries([])));
     unsubs.push(onSnapshot(qPaiements, s => setPaiements(s.docs.map(d => ({ id:d.id, ...d.data() }))), () => setPaiements([])));
 
-    toast("Données (temps réel) prêtes ✅");
+    toast("Données (temps réel) prêtes");
 
     return () => unsubs.forEach(u => { try { u && u(); } catch {} });
   }, [loading, user, societeId, toast]);
@@ -460,13 +461,12 @@ export default function Dashboard() {
   const achatsValides = useMemo(() => achats.filter(isValidAchat), [achats]);
 
   const stats = useMemo(() => {
-    const vPer = ventes.filter(v => inPeriod(v.date || v.timestamp, periode, dateMin, dateMax));
+    const vPerAll = ventes.filter(v => inPeriod(v.date || v.timestamp, periode, dateMin, dateMax));
+    const vPer = showAllVentes ? vPerAll : vPerAll.filter(v => isStock1(v));
     const aPer = achatsValides.filter(a => inPeriod(achatDate(a), periode, dateMin, dateMax));
     const pPer = paiements.filter(p => inPeriod(p.date || p.timestamp, periode, dateMin, dateMax));
 
-    const totalVentes = showAllVentes
-      ? vPer.reduce((s,v) => s + computeMontantVenteAll(v), 0)
-      : vPer.reduce((s,v) => s + computeMontantVenteByTag(v, "stock1"), 0);
+    const totalVentes = vPer.reduce((s,v) => s + computeMontantVenteAll(v), 0);
 
     const aUsed = showAllAchats ? aPer : aPer.filter(isStock1);
     const totalAchats = aUsed.reduce((s,a) => s + computeMontantAchat(a), 0);
@@ -478,7 +478,6 @@ export default function Dashboard() {
     // === MEDICAMENTS (KPI) : fusion par NOM, S1+S2, nettoyage des tags transfert ===
     const produitsSet = new Set();
 
-    // 1) Collection "stock" (produit global)
     (Array.isArray(stock) ? stock : []).forEach((item) => {
       const rawName = item?.nom || item?.name || "";
       if (!rawName) return;
@@ -492,12 +491,11 @@ export default function Dashboard() {
       }
     });
 
-    // 2) Collection "stock_entries" (lots) – ne compte que les noms non déjà vus
     (Array.isArray(stockEntries) ? stockEntries : []).forEach((lot) => {
       const rawName = lot?.nom || lot?.name || "";
       if (!rawName) return;
       const key = normalizedProductKey(rawName);
-      if (produitsSet.has(key)) return; // déjà compté via "stock"
+      if (produitsSet.has(key)) return;
 
       const s1 = Number(lot?.stock1) || 0;
       const s2 = Number(lot?.stock2) || 0;
@@ -516,34 +514,52 @@ export default function Dashboard() {
     const caisseDecaissements = pSupplierCash.reduce((s, p) => s + (Number(p?.montant) || 0), 0);
     const caisseSolde = caisseEncaissements - caisseDecaissements;
 
-    // Ruptures & péremptions
+    // RUPTURES & PÉREMPTIONS : quantite > 0 obligatoire
     let rows = [];
+
     (Array.isArray(stock) ? stock : []).forEach((item) => {
       const q = Number(item.quantite) || 0;
+      if (q <= 0) return; // EXCLURE SI QUANTITÉ = 0
+
       const seuil = Number(item.seuil) > 0 ? Number(item.seuil) : DEFAULT_SEUIL;
       const dluo = item.datePeremption ? daysToExp(item.datePeremption) : null;
-      const byQty = (q <= 0) || (q <= seuil);
+      const byQty = q <= seuil;
       const byExp = dluo !== null && dluo <= EXPIRY_THRESHOLD_DAYS;
-      if (byQty || byExp) {
-        rows.push({ type:"Produit", nom: cleanTransferTagName(item.nom || "Produit"), lot:"—", quantite:q, seuil, dluoJours:dluo });
-      }
-    });
-    (Array.isArray(stockEntries) ? stockEntries : []).forEach((lot) => {
-      const q = (Number(lot.stock1 || 0) + Number(lot.stock2 || 0));
-      const seuil = Number(lot.seuil) > 0 ? Number(lot.seuil) : DEFAULT_SEUIL;
-      const dluo = lot.datePeremption ? daysToExp(lot.datePeremption) : null;
-      const byQty = (q <= 0) || (q <= seuil);
-      const byExp = dluo !== null && dluo <= EXPIRY_THRESHOLD_DAYS;
+
       if (byQty || byExp) {
         rows.push({
-          type:"Lot",
-          nom: cleanTransferTagName(lot.nom || "Produit"),
-          lot: normalizeLotNumber(lot.numeroLot || "N/A"),
-          quantite:q, seuil, dluoJours:dluo
+          type: "Produit",
+          nom: cleanTransferTagName(item.nom || "Produit"),
+          lot: "—",
+          quantite: q,
+          seuil,
+          dluoJours: dluo
         });
       }
     });
-    rows.sort((a,b) => {
+
+    (Array.isArray(stockEntries) ? stockEntries : []).forEach((lot) => {
+      const q = (Number(lot.stock1 || 0) + Number(lot.stock2 || 0));
+      if (q <= 0) return; // EXCLURE SI QUANTITÉ = 0
+
+      const seuil = Number(lot.seuil) > 0 ? Number(lot.seuil) : DEFAULT_SEUIL;
+      const dluo = lot.datePeremption ? daysToExp(lot.datePeremption) : null;
+      const byQty = q <= seuil;
+      const byExp = dluo !== null && dluo <= EXPIRY_THRESHOLD_DAYS;
+
+      if (byQty || byExp) {
+        rows.push({
+          type: "Lot",
+          nom: cleanTransferTagName(lot.nom || "Produit"),
+          lot: normalizeLotNumber(lot.numeroLot || "N/A"),
+          quantite: q,
+          seuil,
+          dluoJours: dluo
+        });
+      }
+    });
+
+    rows.sort((a, b) => {
       const ax = (a.dluoJours ?? 999999) <= 0, bx = (b.dluoJours ?? 999999) <= 0;
       if (ax !== bx) return ax ? -1 : 1;
       const as = (a.dluoJours ?? 999999), bs = (b.dluoJours ?? 999999);
@@ -566,7 +582,7 @@ export default function Dashboard() {
     ventes, achatsValides, paiements, stock, stockEntries,
     periode, dateMin, dateMax,
     showAllVentes, showAllAchats, showSalesPayments,
-    computeMontantVenteAll, computeMontantVenteByTag,
+    computeMontantVenteAll,
     computeMontantAchat
   ]);
 
@@ -598,7 +614,7 @@ export default function Dashboard() {
 
   const displayName = userDisplayName(user);
   const displayRole = roleDisplay(role);
-  const initials = (displayName||"U").split(" ").map(p=>p.trim()[0]).filter(Boolean).slice(0,2).join("").toUpperCase();
+  const displayInitials = (displayName||"U").split(" ").map(p=>p.trim()[0]).filter(Boolean).slice(0,2).join("").toUpperCase();
 
   const extraPermissions = isVendeuse() && hasCustomPermissions() ? getExtraPermissions() : [];
   const isAchatsExtended = extraPermissions.includes("voir_achats");
@@ -620,7 +636,7 @@ export default function Dashboard() {
         <div style={styles.header}>
           <div style={styles.chipRow}>
             <div style={styles.chip} title={`${displayRole} – ${displayName}`}>
-              <div style={styles.avatar}>{initials}</div>
+              <div style={styles.avatar}>{displayInitials}</div>
               <div style={{display:"flex",flexDirection:"column"}}>
                 <div style={{fontWeight:800, fontSize:13}}>{displayName}</div>
                 <div style={{fontWeight:700, fontSize:12, opacity:.9}}>
@@ -690,7 +706,7 @@ export default function Dashboard() {
         <div style={styles.content}>
           <div style={styles.grid}>
             <KPICard
-              badge={showAllVentes ? "2" : "1"}  /* 1 = S1, 2 = Tous */
+              badge={showAllVentes ? "2" : "1"}
               emoji="💰"
               value={{ 
                 text: formatDH(stats.totalVentes),
@@ -704,7 +720,7 @@ export default function Dashboard() {
             />
 
             <KPICard
-              badge={showAllAchats ? "2" : "1"}  /* 1 = S1, 2 = Tous */
+              badge={showAllAchats ? "2" : "1"}
               emoji="🛒"
               value={{ 
                 text: formatDH(stats.totalAchats),

@@ -79,7 +79,7 @@ const parseLocalDateTime = (value) => {
   return new Date(y, (m || 1) - 1, d, hh || 0, mm || 0, 0, 0);
 };
 
-const fmtDH = (n) => `${(Number(n) || 0).toFixed(2)} DH`;
+const fmtDH = (n) => `${(Number(n) || 0).toFixed(2)} DHS`;
 const norm = (s) =>
   String(s || "")
     .normalize("NFD")
@@ -2338,7 +2338,7 @@ export default function Paiements() {
               </div>
             ) : (
               <div>
-                <label className="form-label">Montant (DH)</label>
+                <label className="form-label">Montant (DHS)</label>
                 <input
                   className="field"
                   type="number"
