@@ -1,4 +1,6 @@
-// src/components/paiements/Paiements.js - Version enrichie avec Charges + TOTEAUX PAR TABLE
+// src/components/paiements/Paiements.js
+// Version enrichie avec Charges + TOTAUX PAR TABLE + LIEN VENTES (venteId/linkedSaleId) + modePaiement normalisé
+
 import React, { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import { db } from "../../firebase/config";
 import {
@@ -130,6 +132,16 @@ const getModeColor = (mode) => {
   if (m === "prelevement" || m === "prélèvement") return "#14b8a6";
   return "#6b7280";
 };
+
+/** ⭐ Normalisation forte des modes (étiquette + clé canonique) */
+function normalizeMode(label) {
+  const m = norm(label);
+  if (m === "especes" || m === "espèces") return { label: "Espèces", key: "espece" };
+  if (m === "cheque" || m === "chèque") return { label: "Chèque", key: "cheque" };
+  if (m === "traite") return { label: "Traite", key: "traite" };
+  // fallback:
+  return { label: label || "Espèces", key: m || "espece" };
+}
 
 /* ================= 🆕 VALIDATION DES ACHATS ================= */
 function isValidAchat(achat) {
@@ -438,15 +450,11 @@ export default function Paiements() {
         snap.forEach((d) => {
           const data = d.data();
           const mode = norm(data.modePaiement || "");
-          
-          // Exclure les espèces
           const isEspeces = mode === "especes" || mode === "espèces";
-          
           if (mode && !isEspeces) {
             arr.push({ id: d.id, ...data });
           }
         });
-        console.log("✅ Charges Personnels chargées:", arr.length);
         setChargesPersonnels(arr);
       },
       (e) => console.error("❌ Erreur charges personnels:", e)
@@ -466,18 +474,12 @@ export default function Paiements() {
           const data = d.data();
           const mode = norm(data.modePaiement || "");
           const statut = norm(data.statut || "");
-          
-          // Exclure les espèces
           const isEspeces = mode === "especes" || mode === "espèces";
-          
-          // Inclure si : a un mode de paiement NON-ESPÈCES et statut Payé (ou vide qui signifie payé par défaut)
           const isPaid = !statut || statut === "paye" || statut === "payé";
-          
           if (mode && !isEspeces && isPaid) {
             arr.push({ id: d.id, ...data });
           }
         });
-        console.log("✅ Charges Divers chargées:", arr.length);
         setChargesDivers(arr);
       },
       (e) => console.error("❌ Erreur charges divers:", e)
@@ -678,17 +680,28 @@ export default function Paiements() {
     return { montant, byMode };
   }, [filteredChargesDivers]);
 
+  /** ⭐ Met à jour le document (vente/achat) côté statut + (reste pour ventes) */
   const updateDocStatus = useCallback(
     async (docId, newPaidTotal, total) => {
       if (!societeId) return;
       const isFullyPaid = newPaidTotal >= total - 0.01;
       const status = isFullyPaid ? "payé" : "partiel";
       const docRef = doc(db, "societe", societeId, relatedTo, docId);
+
+      const patch = {
+        statutPaiement: status,
+        montantPaye: newPaidTotal,
+        updatedAt: Timestamp.now(),
+      };
+
+      // Pour VENTES on alimente aussi "reste"
+      if (relatedTo === "ventes") {
+        const reste = Math.max(0, Number(total || 0) - Number(newPaidTotal || 0));
+        patch.reste = Number(reste.toFixed(2));
+      }
+
       try {
-        await updateDoc(docRef, {
-          statutPaiement: status,
-          montantPaye: newPaidTotal,
-        });
+        await updateDoc(docRef, patch);
       } catch (e) {
         console.error("Erreur updateDocStatus:", e);
       }
@@ -748,6 +761,7 @@ export default function Paiements() {
     [createInstr]
   );
 
+  /** ⭐ Création paiement : écrit venteId/linkedSaleId + modePaiement normalisé */
   const handleCreatePayment = useCallback(async () => {
     if (!societeId || !user || !selectedDocPay) return;
     const meta = docIndex[selectedDocPay];
@@ -757,7 +771,9 @@ export default function Paiements() {
       let amount = 0;
       let payloadExtra = {};
 
-      if (payMode === "Espèces") {
+      const normMode = normalizeMode(payMode); // => {label:"Espèces", key:"espece"}
+
+      if (norm(payMode) === "especes" || norm(payMode) === "espèces") {
         amount = Number(cashAmount);
         if (!(amount > 0)) return showNote("Montant espèces invalide", "error");
       } else {
@@ -782,22 +798,59 @@ export default function Paiements() {
       if (amount > meta.solde + 0.001)
         return showNote("Montant > solde restant", "error");
 
-      await addDoc(collection(db, "societe", societeId, "paiements"), {
+      const now = new Date();
+      const basePayload = {
         docId: selectedDocPay,
         montant: amount,
-        mode: payMode,
-        type: relatedTo,
-        date: Timestamp.now(),
+        mode: normMode.label,        // "Espèces" | "Chèque" | "Traite"
+        modeKey: normMode.key,       // "espece" | "cheque" | "traite"
+        modePaiement: normMode.key,  // duplicata pour compatibilité ClotureCaisse
+        statut: "payé",
+        type: relatedTo,             // "ventes" | "achats"
+        date: Timestamp.fromDate(now),
+        paidAt: Timestamp.fromDate(now),
         creePar: user.uid,
         creeParEmail: user.email,
         creeParRole: role,
-        creeLe: Timestamp.now(),
+        creeLe: Timestamp.fromDate(now),
         societeId,
+        createdFrom: "Paiements.js",
         ...payloadExtra,
-      });
+      };
 
+      // 🔗 Lier explicitement
+      if (relatedTo === "ventes") {
+        basePayload.venteId = selectedDocPay;
+        basePayload.linkedSaleId = selectedDocPay; // clé alternative souvent utilisée
+      } else {
+        basePayload.achatId = selectedDocPay;
+      }
+
+      await addDoc(collection(db, "societe", societeId, "paiements"), basePayload);
+
+      // Mise à jour du statut/solde (et reste pour ventes)
       const newPaid = (meta.paid || 0) + amount;
       await updateDocStatus(selectedDocPay, newPaid, meta.total);
+
+      // Pour VENTES uniquement : garder un dernier mode côté vente (utile en affichage)
+      if (relatedTo === "ventes") {
+        const reste = Math.max(0, Number(meta.total || 0) - Number(newPaid || 0));
+        const patchVente = {
+          lastPaymentMode: normMode.label,
+          updatedAt: Timestamp.fromDate(now),
+        };
+        patchVente.reste = Number(reste.toFixed(2));
+        if (reste <= 0.001) {
+          patchVente.paidAt = Timestamp.fromDate(now);
+          patchVente.modePaiementFinal = normMode.label;
+        }
+        try {
+          await updateDoc(doc(db, "societe", societeId, "ventes", selectedDocPay), patchVente);
+        } catch (e) {
+          // Non bloquant si la collection s'appelle différemment chez toi
+          console.warn("Patch vente lastPaymentMode/reste non appliqué:", e?.message);
+        }
+      }
 
       setSelectedDocPay("");
       setCashAmount("");
@@ -857,8 +910,12 @@ export default function Paiements() {
       // ✅ reconstruire un Date local sans décalage fuseau
       const newDate = parseLocalDateTime(editPaymentDateTime) || new Date();
 
+      const normMode = normalizeMode(editPaymentMode);
+
       let updateData = {
-        mode: editPaymentMode,
+        mode: normMode.label,
+        modeKey: normMode.key,
+        modePaiement: normMode.key,
         date: Timestamp.fromDate(newDate),
         modifieLe: Timestamp.now(),
         modifiePar: user.uid,
@@ -913,6 +970,15 @@ export default function Paiements() {
       const meta = docIndex[docId];
       if (meta) {
         await updateDocStatus(docId, newPaidTotal, meta.total);
+        // Optionnel: si espèces, mets à jour "lastPaymentMode" sur ventes
+        if (normMode.key === "espece" && relatedTo === "ventes") {
+          try {
+            await updateDoc(doc(db, "societe", societeId, "ventes", docId), {
+              lastPaymentMode: normMode.label,
+              updatedAt: Timestamp.now(),
+            });
+          } catch (e) {}
+        }
       }
 
       showNote("Paiement modifié ✅");
@@ -935,6 +1001,7 @@ export default function Paiements() {
     updateDocStatus,
     handleCancelEditPayment,
     showNote,
+    relatedTo,
   ]);
 
   const addEditInstrument = useCallback(() => {
@@ -1404,7 +1471,7 @@ export default function Paiements() {
         </button>
       </div>
 
-      {/* ========== ONGLET DOCUMENTS (CODE ORIGINAL + TFOOT) ========== */}
+      {/* ========== ONGLET DOCUMENTS ========== */}
       {mainTab === "documents" && (
         <>
           <div className="card" style={{ marginBottom: 16 }}>

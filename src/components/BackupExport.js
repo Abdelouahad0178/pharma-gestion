@@ -2,8 +2,12 @@
 import React, { useState } from 'react';
 import { db } from '../firebase/config';
 import {
-  collection, getDocs, doc, getDoc,
-  query, where, // ⬅️ ajoutés
+  collection,
+  getDocs,
+  doc,
+  getDoc,
+  query,
+  where,
 } from 'firebase/firestore';
 import { useUserRole } from '../contexts/UserRoleContext';
 
@@ -72,6 +76,62 @@ const formatFileSize = (bytes) => {
   return `${parseFloat((bytes / Math.pow(k, i)).toFixed(2))} ${sizes[i]}`;
 };
 
+/* =========================
+   🔎 Fetch helpers
+========================= */
+/**
+ * Lis la collection "stock_entries" de la société en n’exportant
+ * que les articles qui ont réellement du stock.
+ *
+ * Stratégie :
+ *   1) Requête serveur: where('quantite','>',0)
+ *   2) Fallback (anciens docs sans 'quantite') :
+ *      - where('stock1','>',0)
+ *      - where('stock2','>',0)
+ *   3) Merge par id et filtrage de sécurité côté client
+ */
+async function fetchInStockEntries(db, societeId) {
+  const baseCol = collection(db, 'societe', societeId, 'stock_entries');
+  const resultsMap = new Map();
+
+  // 1) quantite > 0
+  try {
+    const q1 = query(baseCol, where('quantite', '>', 0));
+    const snap1 = await getDocs(q1);
+    snap1.forEach(d => resultsMap.set(d.id, { id: d.id, ...d.data() }));
+  } catch (e) {
+    console.warn('⚠️ stock_entries (quantite>0) échoué:', e?.message || e);
+  }
+
+  // 2a) stock1 > 0
+  try {
+    const q2 = query(baseCol, where('stock1', '>', 0));
+    const snap2 = await getDocs(q2);
+    snap2.forEach(d => resultsMap.set(d.id, { id: d.id, ...d.data() }));
+  } catch (e) {
+    console.warn('⚠️ stock_entries (stock1>0) échoué:', e?.message || e);
+  }
+
+  // 2b) stock2 > 0
+  try {
+    const q3 = query(baseCol, where('stock2', '>', 0));
+    const snap3 = await getDocs(q3);
+    snap3.forEach(d => resultsMap.set(d.id, { id: d.id, ...d.data() }));
+  } catch (e) {
+    console.warn('⚠️ stock_entries (stock2>0) échoué:', e?.message || e);
+  }
+
+  // 3) Filtrage de sécurité
+  const rows = Array.from(resultsMap.values()).filter(r => {
+    const q = Number(r?.quantite || 0);
+    const s1 = Number(r?.stock1 || 0);
+    const s2 = Number(r?.stock2 || 0);
+    return (q > 0) || (s1 > 0) || (s2 > 0);
+  });
+
+  return rows;
+}
+
 export default function BackupExport() {
   const { user, societeId, isOwner, role, societeName } = useUserRole();
   const [loading, setLoading] = useState(false);
@@ -107,7 +167,7 @@ export default function BackupExport() {
           exportedByRole: role,
           exportedByName: user.displayName || user.email,
           isOwner: !!isOwner,
-          version: '1.3',
+          version: '1.4',
           appName: 'Pharma Gestion',
           type: 'complete_backup'
         },
@@ -125,18 +185,19 @@ export default function BackupExport() {
       let collections = [];
       if (isOwner || role === 'docteur') {
         collections = [
-          { name: 'achats',        label: '🛒 Achats',            priority: 'high'   },
-          { name: 'ventes',        label: '💰 Ventes',            priority: 'high'   },
-          { name: 'stock',         label: '📦 Stock',             priority: 'high'   },
-          { name: 'devisFactures', label: '📄 Devis & Factures',  priority: 'medium' },
-          { name: 'paiements',     label: '💳 Paiements',         priority: 'medium' },
-          { name: 'retours',       label: '↩️ Retours',           priority: 'low'    },
-          { name: 'parametres',    label: '⚙️ Paramètres',        priority: 'low'    },
+          { name: 'achats',           label: '🛒 Achats',                     priority: 'high',   kind: 'plain' },
+          { name: 'ventes',           label: '💰 Ventes',                     priority: 'high',   kind: 'plain' },
+          // ⬇️ remplacé "stock" par "stock_entries" et filtrage "en stock"
+          { name: 'stock_entries',    label: '📦 Stock (en stock)',           priority: 'high',   kind: 'stock' },
+          { name: 'devisFactures',    label: '📄 Devis & Factures',           priority: 'medium', kind: 'plain' },
+          { name: 'paiements',        label: '💳 Paiements',                  priority: 'medium', kind: 'plain' },
+          { name: 'retours',          label: '↩️ Retours',                    priority: 'low',    kind: 'plain' },
+          { name: 'parametres',       label: '⚙️ Paramètres',                 priority: 'low',    kind: 'plain' },
         ];
       } else {
         collections = [
-          { name: 'ventes',        label: '💰 Ventes',            priority: 'high'   },
-          { name: 'stock',         label: '📦 Stock (lecture)',   priority: 'medium' },
+          { name: 'ventes',           label: '💰 Ventes',                     priority: 'high',   kind: 'plain' },
+          { name: 'stock_entries',    label: '📦 Stock (en stock) (lecture)', priority: 'medium', kind: 'stock' },
         ];
       }
 
@@ -150,30 +211,31 @@ export default function BackupExport() {
         setStatus(`🔄 Export ${coll.label}...`);
 
         try {
-          const ref = collection(db, 'societe', societeId, coll.name);
-          const snap = await getDocs(ref);
+          let rows = [];
 
-          backup.data[coll.name] = [];
-          let count = 0;
+          if (coll.kind === 'stock') {
+            // 🔥 Seulement les articles en stock (stock_entries)
+            rows = await fetchInStockEntries(db, societeId);
+          } else {
+            // Collections "plain"
+            const ref = collection(db, 'societe', societeId, coll.name);
+            const snap = await getDocs(ref);
+            snap.forEach((docSnap) => {
+              rows.push({ id: docSnap.id, ...docSnap.data() });
+            });
+          }
 
-          snap.forEach((docSnap) => {
-            try {
-              const raw = docSnap.data();
-              const clean = normalizeForExport(raw);
-
-              backup.data[coll.name].push({
-                id: docSnap.id,
-                ...clean,
-                _exportedAt: new Date().toISOString(),
-                _collection: coll.name,
-              });
-
-              count++;
-              totalDocuments++;
-            } catch (e) {
-              console.warn(`⚠️ Erreur document ${docSnap.id}:`, e);
-            }
+          backup.data[coll.name] = rows.map((raw) => {
+            const clean = normalizeForExport(raw);
+            return {
+              ...clean,
+              _exportedAt: new Date().toISOString(),
+              _collection: coll.name,
+            };
           });
+
+          const count = rows.length;
+          totalDocuments += count;
 
           backup.statistics.collectionsDetails[coll.name] = {
             label: coll.label,
@@ -181,6 +243,7 @@ export default function BackupExport() {
             priority: coll.priority,
             exported: true,
             exportedAt: new Date().toISOString(),
+            filter: coll.kind === 'stock' ? 'in-stock-only' : undefined,
           };
 
           console.log(`✅ ${coll.label}: ${count} doc(s) exporté(s)`);
@@ -204,7 +267,6 @@ export default function BackupExport() {
       if (isOwner || role === 'docteur') {
         setStatus('🔄 Export utilisateurs...');
         try {
-          // ✅ IMPORTANT : requête filtrée côté serveur pour respecter les règles
           const usersQ = query(collection(db, 'users'), where('societeId', '==', societeId));
           const usersSnap = await getDocs(usersQ);
 
@@ -354,7 +416,7 @@ export default function BackupExport() {
           societeId,
           societeName: societeName || 'Pharmacie',
           exportedBy: user.email,
-          version: '1.3',
+          version: '1.4',
         },
         data: {},
         statistics: {
@@ -363,28 +425,27 @@ export default function BackupExport() {
         },
       };
 
-      const essentials = [
-        { name: 'ventes', label: 'Ventes' },
-        { name: 'stock',  label: 'Stock'  },
-      ];
-
       let totalDocs = 0;
 
-      for (const coll of essentials) {
-        try {
-          const ref = collection(db, 'societe', societeId, coll.name);
-          const snap = await getDocs(ref);
-          quick.data[coll.name] = [];
+      // Ventes (complet)
+      try {
+        const ventesRef = collection(db, 'societe', societeId, 'ventes');
+        const ventesSnap = await getDocs(ventesRef);
+        quick.data.ventes = ventesSnap.docs.map(d => ({ id: d.id, ...normalizeForExport(d.data()) }));
+        totalDocs += quick.data.ventes.length;
+      } catch (e) {
+        console.warn('Erreur ventes:', e);
+        quick.data.ventes = [];
+      }
 
-          snap.forEach((docSnap) => {
-            const clean = normalizeForExport(docSnap.data());
-            quick.data[coll.name].push({ id: docSnap.id, ...clean });
-            totalDocs++;
-          });
-        } catch (err) {
-          console.warn(`Erreur ${coll.name}:`, err);
-          quick.data[coll.name] = [];
-        }
+      // Stock (en stock seulement)
+      try {
+        const rows = await fetchInStockEntries(db, societeId);
+        quick.data.stock_entries = rows.map(r => normalizeForExport(r));
+        totalDocs += quick.data.stock_entries.length;
+      } catch (e) {
+        console.warn('Erreur stock_entries:', e);
+        quick.data.stock_entries = [];
       }
 
       quick.statistics.totalDocuments = totalDocs;
@@ -532,6 +593,7 @@ export default function BackupExport() {
                   <span>{info.label} : </span>
                   <span style={{ fontWeight: 600 }}>
                     {info.exported ? `${info.count} docs ✅` : 'Erreur ❌'}
+                    {info.filter === 'in-stock-only' ? ' (filtré en stock)' : ''}
                   </span>
                 </div>
               ))}
@@ -548,10 +610,10 @@ export default function BackupExport() {
             <h5 style={{ color: '#28a745', marginBottom: 8 }}>💾 Sauvegarde Complète</h5>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 8 }}>
               {((isOwner || role === 'docteur') ? [
-                '🛒 Achats', '💰 Ventes', '📦 Stock',
+                '🛒 Achats', '💰 Ventes', '📦 Stock (en stock)',
                 '📄 Devis/Factures', '💳 Paiements', '↩️ Retours',
                 '⚙️ Paramètres', '👥 Utilisateurs', '🏥 Société'
-              ] : ['💰 Ventes', '📦 Stock (lecture)']).map((item, i) => (
+              ] : ['💰 Ventes', '📦 Stock (en stock) (lecture)']).map((item, i) => (
                 <div key={i} style={{ background: '#34518b', padding: '8px 10px', borderRadius: 6, textAlign: 'center', fontSize: '0.8rem', fontWeight: 500 }}>
                   {item}
                 </div>
@@ -562,7 +624,7 @@ export default function BackupExport() {
           <div>
             <h5 style={{ color: '#17a2b8', marginBottom: 8 }}>🚀 Sauvegarde Rapide</h5>
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-              {['💰 Ventes', '📦 Stock'].map((item, i) => (
+              {['💰 Ventes', '📦 Stock (en stock)'].map((item, i) => (
                 <div key={i} style={{ background: '#0c5460', padding: '8px 12px', borderRadius: 6, fontSize: '0.8rem', fontWeight: 500 }}>
                   {item}
                 </div>
@@ -589,7 +651,7 @@ export default function BackupExport() {
           marginTop: 20, padding: 15, background: '#856404', borderRadius: 8,
           color: '#fff3cd', fontSize: '0.9rem', borderLeft: '4px solid #ffc107'
         }}>
-          ⚠️ <strong>Accès limité :</strong> En tant que vendeuse, vous pouvez exporter uniquement les ventes et le stock.
+          ⚠️ <strong>Accès limité :</strong> En tant que vendeuse, vous pouvez exporter uniquement les ventes et le stock (en stock).
         </div>
       )}
     </div>

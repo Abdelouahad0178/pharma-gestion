@@ -1,5 +1,5 @@
 // src/components/charges/ChargesDivers.js
-// Design moderne aligné avec ChargesPersonnels + Responsive + TEMPS RÉEL
+// Design PRO 2025 — Sidebar Stepper + Résumé collant + TEMPS RÉEL
 import React, { useState, useEffect, useMemo } from 'react';
 import {
   Box,
@@ -17,14 +17,19 @@ import {
   Select,
   FormControl,
   InputLabel,
-  Tabs,
-  Tab,
   Alert,
   Stack,
   useMediaQuery,
   Badge,
   Collapse,
-  Tooltip
+  Tooltip,
+  Stepper,
+  Step,
+  StepLabel,
+  Paper,
+  Avatar,
+  Card,
+  CardContent
 } from '@mui/material';
 import {
   Add as AddIcon,
@@ -38,7 +43,8 @@ import {
   FilterList as FilterListIcon,
   Clear as ClearIcon,
   Close as CloseIcon,
-  AttachMoney as MoneyIcon
+  AttachMoney as MoneyIcon,
+  Inventory2 as InventoryIcon
 } from '@mui/icons-material';
 import { db } from '../../firebase/config';
 import {
@@ -74,7 +80,7 @@ const norm = (s) =>
     .toLowerCase()
     .trim();
 
-// Date helpers (mêmes principes que Dashboard)
+// Date helpers
 function toDate(v) {
   if (!v) return null;
   try {
@@ -97,25 +103,20 @@ function sameLocalDay(a, b = new Date()) {
   );
 }
 
-// Paiements: même détection que dans Dashboard
+// Paiements: même détection que Dashboard
 function isCash(mode) {
   const m = norm(mode);
   return ['especes', 'espèces', 'espece', 'espèce', 'cash', 'liquide'].includes(m);
 }
 function isSalePayment(p) {
   const t = norm(p?.type || p?.relatedTo || p?.for || p?.category);
-  return [
-    'vente','ventes','sale','sales',
-    'reglementclient','reglement_client'
-  ].includes(t);
+  return ['vente','ventes','sale','sales','reglementclient','reglement_client'].includes(t);
 }
 function isSupplierPayment(p) {
   const t = norm(p?.type || p?.relatedTo || p?.for || p?.category);
   return [
-    'achat','achats','fournisseur','fournisseurs',
-    'supplier','suppliers','purchase','purchases',
-    'reglementfournisseur','reglement_fournisseur',
-    'chargepersonnel','chargediverse'
+    'achat','achats','fournisseur','fournisseurs','supplier','suppliers','purchase','purchases',
+    'reglementfournisseur','reglement_fournisseur','chargepersonnel','chargediverse'
   ].includes(t);
 }
 
@@ -129,33 +130,13 @@ async function ensureCaisseDoc(societeId) {
   return ref;
 }
 
-/**
- * Applique un delta sur la caisse et enregistre un mouvement.
- * @param {string} societeId
- * @param {number} delta   (positif = entrée, négatif = sortie)
- * @param {object} meta    métadonnées du mouvement (label, chargeDiversId, etc.)
- */
 async function applyCaisseDelta(societeId, delta, meta = {}) {
   const soldeRef = await ensureCaisseDoc(societeId);
-
-  // Update solde (cumulé)
   await updateDoc(soldeRef, { balance: increment(delta), updatedAt: Timestamp.now() });
-
-  // Historique mouvement
-  const mv = {
-    delta,                              // ex: -500 = sortie
-    type: delta >= 0 ? 'in' : 'out',
-    at: Timestamp.now(),
-    ...meta
-  };
+  const mv = { delta, type: delta >= 0 ? 'in' : 'out', at: Timestamp.now(), ...meta };
   await addDoc(collection(db, 'societe', societeId, 'caisseMovements'), mv);
 }
 
-/**
- * Annule (revert) tous les mouvements de caisse liés à une charge donnée
- * en appliquant le delta inverse de la somme des mouvements, puis supprime les docs.
- * @return {number} totalReverted
- */
 async function revertCaisseMovementsForCharge(societeId, chargeId) {
   const qMov = query(
     collection(db, 'societe', societeId, 'caisseMovements'),
@@ -179,11 +160,6 @@ async function revertCaisseMovementsForCharge(societeId, chargeId) {
   return -sum;
 }
 
-/**
- * Réconcilie la caisse selon le mode/statut/montant d'une charge.
- * - Si mode === 'Espèces' et statut === 'Payé' => sortie de caisse = -montant
- * - Sinon => aucun impact caisse
- */
 async function reconcileCaisseForCharge(societeId, chargeId, form) {
   await revertCaisseMovementsForCharge(societeId, chargeId);
 
@@ -193,7 +169,7 @@ async function reconcileCaisseForCharge(societeId, chargeId, form) {
   const isCashImpact = mode === 'especes' && statut === 'paye';
 
   if (isCashImpact && montant > 0) {
-    const delta = -montant; // sortie de caisse
+    const delta = -montant; // sortie
     await applyCaisseDelta(societeId, delta, {
       label: `Charge diverse: ${form.libelle || ''} (${form.categorie || '-'})`,
       modePaiement: form.modePaiement,
@@ -208,11 +184,11 @@ async function reconcileCaisseForCharge(societeId, chargeId, form) {
 
 export default function ChargesDivers() {
   const { user, societeId } = useUserRole();
-  
+
   // Responsive
   const isMobile = useMediaQuery('(max-width:768px)');
-  const isTablet = useMediaQuery('(min-width:769px) and (max-width:1024px)');
-  const isDesktop = useMediaQuery('(min-width:1025px)');
+  const isTablet = useMediaQuery('(min-width:769px) and (max-width:1200px)');
+  const isDesktop = useMediaQuery('(min-width:1201px)');
 
   const [charges, setCharges] = useState([]);
   const [filteredCharges, setFilteredCharges] = useState([]);
@@ -224,7 +200,10 @@ export default function ChargesDivers() {
 
   const [editingCharge, setEditingCharge] = useState(null);
   const [selectedCharge, setSelectedCharge] = useState(null);
-  const [currentTab, setCurrentTab] = useState(0);
+
+  // Stepper (0→3)
+  const steps = ['Général', 'Fournisseur', 'Document', 'Paiement'];
+  const [activeStep, setActiveStep] = useState(0);
 
   // Filtres
   const [filtersOpen, setFiltersOpen] = useState(false);
@@ -260,12 +239,11 @@ export default function ChargesDivers() {
     statut: 'Payé'
   });
 
-  /* ======== 🟢 Caisse « du jour » alignée sur Dashboard ======== */
+  /* ======== Caisse du JOUR (identique Dashboard) ======== */
   const [caisseToday, setCaisseToday] = useState({ in: 0, out: 0, solde: 0 });
 
   useEffect(() => {
     if (!societeId) return;
-    // On écoute TOUTES les écritures de paiements et on filtre localement "aujourd'hui"
     const qPaiements = query(
       collection(db, 'societe', societeId, 'paiements'),
       orderBy('date', 'desc')
@@ -274,7 +252,6 @@ export default function ChargesDivers() {
       qPaiements,
       (snap) => {
         const all = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-        // Même logique que Dashboard pour la caisse (période = aujourd'hui)
         const pToday = all.filter(p => sameLocalDay(p.date || p.timestamp, new Date()));
 
         const encaissements = pToday
@@ -295,21 +272,7 @@ export default function ChargesDivers() {
     return () => unsub && unsub();
   }, [societeId]);
 
-  /* ======== (Optionnel) ancien solde cumulé — on ne l’affiche plus ======== */
-  // On garde ce listener si tu veux diagnostiquer; mais on n’utilise pas ce solde cumulé côté UI.
-  // const [caisseSoldeGlobal, setCaisseSoldeGlobal] = useState(null);
-  // useEffect(() => {
-  //   if (!societeId) return;
-  //   const soldeRef = doc(db, 'societe', societeId, 'caisse', 'solde');
-  //   const unsub = onSnapshot(
-  //     soldeRef,
-  //     (snap) => setCaisseSoldeGlobal(snap.exists() ? Number(snap.data().balance || 0) : 0),
-  //     (err) => console.error('Listener caisse/solde:', err)
-  //   );
-  //   return () => unsub && unsub();
-  // }, [societeId]);
-
-  /* =================== Charges en TEMPS RÉEL =================== */
+  /* =================== Charges TEMPS RÉEL =================== */
   useEffect(() => {
     if (!user || !societeId) return;
     setLoading(true);
@@ -396,7 +359,7 @@ export default function ChargesDivers() {
       statut: 'Payé'
     });
     setEditingCharge(null);
-    setCurrentTab(0);
+    setActiveStep(0);
   };
 
   /* ============== Statistiques ============== */
@@ -514,7 +477,7 @@ export default function ChargesDivers() {
         updatedBy: user?.uid || null
       };
 
-      // 1) Créer / Mettre à jour la charge
+      // 1) Create/Update
       let chargeId;
       if (editingCharge) {
         await updateDoc(doc(db, 'societe', societeId, 'chargesDivers', editingCharge.id), chargeData);
@@ -525,7 +488,7 @@ export default function ChargesDivers() {
         chargeId = ref.id;
       }
 
-      // 2) Supprimer anciens paiements liés
+      // 2) Remove old linked payments
       const qLinked = query(
         collection(db, 'societe', societeId, 'paiements'),
         where('chargeDiversId', '==', chargeId)
@@ -537,12 +500,11 @@ export default function ChargesDivers() {
         await batch.commit();
       }
 
-      // 3) Créer paiement (lu par Dashboard)
+      // 3) Create new paiement (readable by Dashboard)
       if (formData.modePaiement && montant > 0) {
         const isCashImpact = norm(formData.modePaiement) === 'especes' && norm(formData.statut) === 'paye';
 
         const paiementData = {
-          // ⚠️ Le Dashboard teste "chargediverse"
           type: 'chargediverse',
           category: 'chargediverse',
           relatedTo: 'chargediverse',
@@ -551,7 +513,6 @@ export default function ChargesDivers() {
           montant,
           date: formData.date,
 
-          // Le Dashboard teste isCash() sur ces clés:
           mode: formData.modePaiement,
           paymentMode: formData.modePaiement,
           moyen: formData.modePaiement,
@@ -562,7 +523,6 @@ export default function ChargesDivers() {
           reference: formData.referenceVirement || '',
           fournisseur: formData.fournisseur || '',
 
-          // Indices supplémentaires
           isCashOut: isCashImpact,
           sign: isCashImpact ? -1 : 0,
 
@@ -574,7 +534,7 @@ export default function ChargesDivers() {
         await addDoc(collection(db, 'societe', societeId, 'paiements'), paiementData);
       }
 
-      // 4) 🔥 Caisse (revert + ré-application si espèces+payé) — côté persistance cumulée
+      // 4) Caisse persistée
       await reconcileCaisseForCharge(societeId, chargeId, formData);
 
       handleCloseDialog();
@@ -584,11 +544,11 @@ export default function ChargesDivers() {
     }
   };
 
-  /* =================== Suppression (cascade paiements + caisse) =================== */
+  /* =================== Suppression (cascade) =================== */
   const handleDelete = async (id) => {
     if (!window.confirm('Supprimer cette charge ?')) return;
     try {
-      // supprimer paiements liés
+      // paiements liés
       const qLinked = query(
         collection(db, 'societe', societeId, 'paiements'),
         where('chargeDiversId', '==', id)
@@ -598,7 +558,7 @@ export default function ChargesDivers() {
       snap.docs.forEach(d => batch.delete(d.ref));
       await batch.commit();
 
-      // revert caisse (persistance cumulée)
+      // revert caisse
       await revertCaisseMovementsForCharge(societeId, id);
 
       // supprimer la charge
@@ -609,115 +569,103 @@ export default function ChargesDivers() {
     }
   };
 
-  // Styles modernes
+  // Styles
   const styles = {
     container: {
       minHeight: '100vh',
-      background: 'linear-gradient(135deg, #EEF2FF 0%, #FDF2F8 100%)',
-      padding: isMobile ? '10px' : isTablet ? '20px' : '30px',
+      background: 'linear-gradient(135deg, #F5F7FF 0%, #FDF7FF 100%)',
+      padding: isMobile ? '10px' : '30px',
       fontFamily: 'Inter, Arial, sans-serif'
     },
     mainCard: {
       background: 'white',
-      borderRadius: isMobile ? '15px' : isTablet ? '20px' : '25px',
-      boxShadow: '0 30px 60px rgba(0,0,0,0.15)',
+      borderRadius: 24,
+      boxShadow: '0 30px 60px rgba(0,0,0,0.12)',
       overflow: 'hidden',
       margin: '0 auto',
-      maxWidth: isDesktop ? '1400px' : '100%'
+      maxWidth: 1400
     },
     header: {
-      background: 'linear-gradient(135deg, #4a5568 0%, #2d3748 100%)',
-      padding: isMobile ? '20px 15px' : isTablet ? '30px 20px' : '40px',
-      textAlign: 'center',
+      background: 'linear-gradient(135deg, #1f2937 0%, #111827 100%)',
+      padding: isMobile ? '22px 16px' : '36px 32px',
       color: 'white'
     },
-    title: {
-      fontSize: isMobile ? '1.8em' : isTablet ? '2.2em' : '2.5em',
-      fontWeight: 800,
-      margin: 0
-    },
-    subtitle: {
-      marginTop: '10px',
-      opacity: 0.9,
-      fontSize: isMobile ? '0.9em' : '1em'
-    },
-    content: {
-      padding: isMobile ? '15px' : isTablet ? '25px' : '40px'
-    },
-    statsGrid: {
-      display: 'grid',
-      gridTemplateColumns: isMobile ? '1fr' : isTablet ? 'repeat(2, 1fr)' : 'repeat(4, 1fr)',
-      gap: isMobile ? '15px' : '20px',
-      marginBottom: isMobile ? '20px' : '30px'
-    },
-    statCard: {
-      background: 'linear-gradient(135deg, #f8fafc 0%, #edf2f7 100%)',
-      padding: isMobile ? '15px' : '20px',
-      borderRadius: isMobile ? '10px' : '15px',
-      border: '2px solid #e2e8f0',
-      textAlign: 'center'
-    },
-    statIcon: {
-      fontSize: isMobile ? '2em' : '2.5em',
-      marginBottom: '10px'
-    },
-    statLabel: {
-      color: '#64748b',
-      fontSize: isMobile ? '0.8em' : '0.9em',
-      fontWeight: 600,
-      textTransform: 'uppercase',
-      letterSpacing: '0.5px',
-      marginBottom: '5px'
-    },
-    statValue: {
-      color: '#2d3748',
-      fontSize: isMobile ? '1.5em' : '1.8em',
-      fontWeight: 800
-    },
-    actionBar: {
+    titleRow: {
       display: 'flex',
-      flexDirection: isMobile ? 'column' : 'row',
-      justifyContent: 'space-between',
-      alignItems: isMobile ? 'stretch' : 'center',
-      gap: isMobile ? '10px' : '15px',
-      marginBottom: isMobile ? '20px' : '25px'
+      alignItems: 'center',
+      gap: 12,
+      flexWrap: 'wrap'
     },
+    title: { fontSize: isMobile ? 24 : 28, fontWeight: 900, margin: 0 },
+    subtitle: { marginTop: 6, opacity: 0.85, fontSize: isMobile ? 13 : 14 },
+    chipsRow: {
+      display: 'flex',
+      gap: 8,
+      marginTop: 12,
+      flexWrap: 'wrap'
+    },
+    content: { padding: isMobile ? 16 : 28 },
     button: {
-      background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+      background: 'linear-gradient(135deg, #2563eb 0%, #06b6d4 100%)',
       border: 'none',
-      borderRadius: isMobile ? '8px' : '10px',
-      padding: isMobile ? '12px 16px' : '12px 20px',
+      borderRadius: 12,
+      padding: '12px 18px',
       color: 'white',
-      fontWeight: 700,
+      fontWeight: 800,
       cursor: 'pointer',
-      fontSize: isMobile ? '0.9em' : '1em',
-      transition: 'all 0.3s ease',
-      minHeight: isMobile ? '44px' : 'auto',
-      width: isMobile ? '100%' : 'auto'
+      fontSize: 14,
+      transition: 'all 0.25s ease',
+      minHeight: 44
     },
     filterButton: {
       background: '#f8fafc',
       border: '2px solid #e2e8f0',
-      borderRadius: isMobile ? '8px' : '10px',
-      padding: isMobile ? '12px 16px' : '12px 20px',
-      color: '#2d3748',
-      fontWeight: 700,
+      borderRadius: 12,
+      padding: '12px 16px',
+      color: '#111827',
+      fontWeight: 800,
       cursor: 'pointer',
-      fontSize: isMobile ? '0.9em' : '1em',
-      transition: 'all 0.3s ease',
-      minHeight: isMobile ? '44px' : 'auto'
+      fontSize: 14,
+      transition: 'all 0.25s ease',
+      minHeight: 44
     },
-    chargesGrid: {
-      display: 'grid',
-      gap: isMobile ? '15px' : '20px'
+    statCard: {
+      background: 'linear-gradient(135deg, #f8fafc 0%, #eef2ff 100%)',
+      padding: 18,
+      borderRadius: 16,
+      border: '2px solid #e2e8f0',
+      textAlign: 'center'
     },
     chargeCard: {
       background: 'linear-gradient(135deg, #f8fafc 0%, #ffffff 100%)',
-      padding: isMobile ? '15px' : '20px',
-      borderRadius: isMobile ? '10px' : '15px',
+      padding: 18,
+      borderRadius: 16,
       border: '2px solid #e2e8f0',
-      transition: 'all 0.3s ease',
+      transition: 'transform .15s ease, box-shadow .15s ease',
       cursor: 'pointer'
+    },
+    stepSidebar: {
+      background: 'linear-gradient(180deg, #0b1220 0%, #111827 100%)',
+      color: '#e5e7eb',
+      borderRadius: 16,
+      padding: 16,
+      height: '100%'
+    },
+    stickySummary: {
+      position: 'sticky',
+      top: 0,
+      borderRadius: 16,
+      padding: 16,
+      border: '2px solid #e2e8f0',
+      background: 'linear-gradient(135deg, #ffffff 0%, #f8fafc 100%)'
+    },
+    actionBar: {
+      display: 'flex',
+      gap: 12,
+      flexDirection: isMobile ? 'column' : 'row',
+      alignItems: isMobile ? 'stretch' : 'center',
+      justifyContent: 'space-between',
+      marginBottom: 18
     }
   };
 
@@ -727,7 +675,7 @@ export default function ChargesDivers() {
       <div style={styles.container}>
         <div style={{...styles.mainCard, padding: '40px', textAlign: 'center'}}>
           <div style={{ fontSize: '3em', marginBottom: '20px' }}>⏳</div>
-          <div style={{ fontSize: '1.2em', color: '#64748b', fontWeight: 600 }}>
+          <div style={{ fontSize: '1.2em', color: '#64748b', fontWeight: 700 }}>
             Chargement des charges diverses...
           </div>
         </div>
@@ -740,78 +688,92 @@ export default function ChargesDivers() {
       <div style={styles.mainCard}>
         {/* Header */}
         <div style={styles.header}>
-          <h1 style={styles.title}>💼 Charges Diverses</h1>
+          <div style={styles.titleRow}>
+            <Avatar sx={{ bgcolor: '#1d4ed8', width: 40, height: 40 }}>
+              <InventoryIcon />
+            </Avatar>
+            <h1 style={styles.title}>💼 Charges Diverses</h1>
+          </div>
           <p style={styles.subtitle}>
-            Gestion complète des charges et dépenses diverses
+            Suivi précis des dépenses hors achats/ventes, avec impact caisse en temps réel.
           </p>
 
-          {/* ✅ Solde caisse du JOUR (identique au Dashboard en "Aujourd'hui") */}
-          <p style={{ marginTop: 8, color: caisseToday.solde >= 0 ? '#d1fae5' : '#fecaca', fontWeight: 800 }}>
-            💵 Caisse (AUJOURD'HUI) : {caisseToday.solde.toFixed(2)} DHS
-            <span style={{ fontWeight: 700, opacity: .9 }}>
-              {' '} • IN: {caisseToday.in.toFixed(2)} • OUT: {caisseToday.out.toFixed(2)}
-            </span>
-          </p>
+          {/* KPI Caisse Today */}
+          <div style={styles.chipsRow}>
+            <Chip label={`Caisse (AUJOURD'HUI): ${caisseToday.solde.toFixed(2)} DHS`} sx={{
+              bgcolor: caisseToday.solde >= 0 ? '#064e3b' : '#7f1d1d',
+              color: '#ecfeff',
+              fontWeight: 800
+            }}/>
+            <Chip label={`IN: ${caisseToday.in.toFixed(2)} DHS`} sx={{ bgcolor: '#0f766e', color: 'white', fontWeight: 800 }}/>
+            <Chip label={`OUT: ${caisseToday.out.toFixed(2)} DHS`} sx={{ bgcolor: '#7c2d12', color: 'white', fontWeight: 800 }}/>
+          </div>
         </div>
 
         <div style={styles.content}>
-          {/* Stats Cards */}
-          <div style={styles.statsGrid}>
-            <div style={styles.statCard}>
-              <div style={{...styles.statIcon, color: '#667eea'}}>💰</div>
-              <div style={styles.statLabel}>Total Charges</div>
-              <div style={{...styles.statValue, color: '#667eea'}}>
-                {stats.total.toFixed(2)} DHS
+          {/* Stats */}
+          <Grid container spacing={2} sx={{ mb: 2 }}>
+            <Grid item xs={12} md={3}>
+              <div style={styles.statCard}>
+                <div style={{ fontSize: 14, color: '#64748b', fontWeight: 800, textTransform: 'uppercase', letterSpacing: .5 }}>
+                  Total Charges
+                </div>
+                <div style={{ fontSize: 22, fontWeight: 900, color: '#1e3a8a', marginTop: 4 }}>
+                  {stats.total.toFixed(2)} DHS
+                </div>
               </div>
-            </div>
-            <div style={styles.statCard}>
-              <div style={{...styles.statIcon, color: '#10b981'}}>📊</div>
-              <div style={styles.statLabel}>Entrées</div>
-              <div style={{...styles.statValue, color: '#10b981'}}>
-                {stats.count}
+            </Grid>
+            <Grid item xs={12} md={3}>
+              <div style={styles.statCard}>
+                <div style={{ fontSize: 14, color: '#64748b', fontWeight: 800, textTransform: 'uppercase', letterSpacing: .5 }}>
+                  Entrées
+                </div>
+                <div style={{ fontSize: 22, fontWeight: 900, color: '#065f46', marginTop: 4 }}>
+                  {stats.count}
+                </div>
               </div>
-            </div>
-            <div style={styles.statCard}>
-              <div style={{...styles.statIcon, color: '#3b82f6'}}>✅</div>
-              <div style={styles.statLabel}>Payées</div>
-              <div style={{...styles.statValue, color: '#3b82f6'}}>
-                {stats.payes.toFixed(2)} DHS
+            </Grid>
+            <Grid item xs={12} md={3}>
+              <div style={styles.statCard}>
+                <div style={{ fontSize: 14, color: '#64748b', fontWeight: 800, textTransform: 'uppercase', letterSpacing: .5 }}>
+                  Payées
+                </div>
+                <div style={{ fontSize: 22, fontWeight: 900, color: '#1d4ed8', marginTop: 4 }}>
+                  {stats.payes.toFixed(2)} DHS
+                </div>
               </div>
-            </div>
-            <div style={styles.statCard}>
-              <div style={{...styles.statIcon, color: '#f59e0b'}}>⏳</div>
-              <div style={styles.statLabel}>En attente</div>
-              <div style={{...styles.statValue, color: '#f59e0b'}}>
-                {stats.enAttente.toFixed(2)} DHS
+            </Grid>
+            <Grid item xs={12} md={3}>
+              <div style={styles.statCard}>
+                <div style={{ fontSize: 14, color: '#64748b', fontWeight: 800, textTransform: 'uppercase', letterSpacing: .5 }}>
+                  En attente
+                </div>
+                <div style={{ fontSize: 22, fontWeight: 900, color: '#b45309', marginTop: 4 }}>
+                  {stats.enAttente.toFixed(2)} DHS
+                </div>
               </div>
-            </div>
-          </div>
+            </Grid>
+          </Grid>
 
-          {/* Action Bar */}
+          {/* Actions */}
           <div style={styles.actionBar}>
-            <button
-              style={styles.filterButton}
-              onClick={() => setFiltersOpen(v => !v)}
-            >
+            <button style={styles.filterButton} onClick={() => setFiltersOpen(v => !v)}>
               <Badge badgeContent={activeFiltersCount} color="error">
-                <FilterListIcon /> Filtres
+                <FilterListIcon />&nbsp;FILTRES
               </Badge>
             </button>
-            <button
-              style={styles.button}
-              onClick={() => handleOpenDialog()}
-            >
-              <AddIcon /> Nouvelle charge
+            <button style={styles.button} onClick={() => handleOpenDialog()}>
+              <AddIcon />&nbsp;NOUVELLE CHARGE
             </button>
           </div>
 
           {/* Filtres */}
           <Collapse in={filtersOpen} unmountOnExit>
             <div style={{
-              background: 'linear-gradient(135deg, #f8fafc 0%, #edf2f7 100%)',
-              padding: isMobile ? '15px' : '20px',
-              borderRadius: '10px',
-              marginBottom: '20px',
+              background: 'linear-gradient(135deg, #f8fafc 0%, #eef2ff 100%)',
+              padding: 16,
+              borderRadius: 16,
+              marginBottom: 18,
               border: '2px solid #e2e8f0'
             }}>
               <Grid container spacing={2}>
@@ -887,12 +849,7 @@ export default function ChargesDivers() {
                 </Grid>
                 <Grid item xs={12} md={1}>
                   <button
-                    style={{
-                      ...styles.filterButton,
-                      width: '100%',
-                      minHeight: '40px',
-                      padding: '8px'
-                    }}
+                    style={{ ...styles.filterButton, width: '100%', minHeight: 40, padding: 10 }}
                     onClick={handleResetFilters}
                   >
                     <ClearIcon /> {activeFiltersCount > 0 && `(${activeFiltersCount})`}
@@ -903,577 +860,591 @@ export default function ChargesDivers() {
           </Collapse>
 
           {/* Liste */}
-          <div style={styles.chargesGrid}>
+          <Grid container spacing={2}>
             {filteredCharges.length === 0 ? (
-              <div style={{
-                textAlign: 'center',
-                padding: '60px 20px',
-                color: '#64748b'
-              }}>
-                <div style={{ fontSize: '4em', marginBottom: '20px' }}>📋</div>
-                <div style={{ fontSize: '1.2em', fontWeight: 600 }}>
-                  Aucune charge trouvée
+              <Grid item xs={12}>
+                <div style={{
+                  textAlign: 'center',
+                  padding: '60px 20px',
+                  color: '#64748b',
+                  border: '2px dashed #e2e8f0',
+                  borderRadius: 16
+                }}>
+                  <div style={{ fontSize: '3.2em', marginBottom: 10 }}>📋</div>
+                  <div style={{ fontSize: 18, fontWeight: 800 }}>
+                    Aucune charge trouvée
+                  </div>
+                  <div style={{ marginTop: 6, fontSize: 14 }}>
+                    Cliquez sur “Nouvelle charge” pour commencer
+                  </div>
                 </div>
-                <div style={{ marginTop: '10px', fontSize: '0.9em' }}>
-                  Commencez par ajouter une charge diverse
-                </div>
-              </div>
+              </Grid>
             ) : (
               filteredCharges.map((charge) => (
-                <div
-                  key={charge.id}
-                  style={styles.chargeCard}
-                  onClick={() => handleViewDetails(charge)}
-                >
-                  <div style={{
-                    display: 'flex',
-                    justifyContent: 'space-between',
-                    alignItems: 'start',
-                    marginBottom: '15px',
-                    flexWrap: 'wrap',
-                    gap: '10px'
-                  }}>
-                    <div style={{ flex: 1, minWidth: '200px' }}>
-                      <div style={{
-                        fontSize: isMobile ? '1.1em' : '1.2em',
-                        fontWeight: 800,
-                        color: '#2d3748',
-                        marginBottom: '5px'
-                      }}>
-                        {charge.libelle}
+                <Grid key={charge.id} item xs={12}>
+                  <div
+                    style={styles.chargeCard}
+                    onClick={() => handleViewDetails(charge)}
+                    onMouseEnter={(e) => { e.currentTarget.style.transform = 'translateY(-2px)'; e.currentTarget.style.boxShadow = '0 12px 30px rgba(0,0,0,0.08)'; }}
+                    onMouseLeave={(e) => { e.currentTarget.style.transform = 'none'; e.currentTarget.style.boxShadow = 'none'; }}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+                      <div style={{ display: 'flex', gap: 12, alignItems: 'center', minWidth: 220 }}>
+                        <Avatar sx={{ bgcolor: '#111827' }}><ReceiptIcon /></Avatar>
+                        <div>
+                          <div style={{ fontSize: 16, fontWeight: 900, color: '#111827' }}>{charge.libelle}</div>
+                          <div style={{ fontSize: 12, color: '#64748b', fontWeight: 700 }}>
+                            {charge.date} {charge.fournisseur && `• ${charge.fournisseur}`}
+                          </div>
+                        </div>
                       </div>
-                      <div style={{
-                        fontSize: '0.85em',
-                        color: '#64748b',
-                        fontWeight: 600
-                      }}>
-                        {charge.date} {charge.fournisseur && `• ${charge.fournisseur}`}
-                      </div>
-                    </div>
-                    <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
-                      <Chip
-                        label={charge.categorie || 'N/A'}
-                        size="small"
-                        style={{
-                          background: getCategorieColor(charge.categorie) + '20',
-                          color: getCategorieColor(charge.categorie),
-                          fontWeight: 700,
-                          borderRadius: '20px',
-                          padding: '5px 12px'
-                        }}
-                      />
-                      <Chip
-                        label={charge.statut || 'Payé'}
-                        size="small"
-                        style={{
-                          background: getStatutColor(charge.statut) + '20',
-                          color: getStatutColor(charge.statut),
-                          fontWeight: 700,
-                          borderRadius: '20px',
-                          padding: '5px 12px'
-                        }}
-                      />
-                    </div>
-                  </div>
 
-                  <div style={{
-                    display: 'grid',
-                    gridTemplateColumns: isMobile ? 'repeat(2, 1fr)' : 'repeat(3, 1fr)',
-                    gap: '15px',
-                    marginBottom: '15px',
-                    paddingTop: '15px',
-                    borderTop: '2px solid #e2e8f0'
-                  }}>
-                    <div>
-                      <div style={{
-                        fontSize: '0.75em',
-                        color: '#64748b',
-                        fontWeight: 600,
-                        textTransform: 'uppercase',
-                        marginBottom: '5px'
-                      }}>
-                        Montant
-                      </div>
-                      <div style={{
-                        fontSize: '1.1em',
-                        fontWeight: 800,
-                        color: '#667eea'
-                      }}>
-                        {toFloat(charge.montant).toFixed(2)} DHS
-                      </div>
-                    </div>
-                    <div>
-                      <div style={{
-                        fontSize: '0.75em',
-                        color: '#64748b',
-                        fontWeight: 600,
-                        textTransform: 'uppercase',
-                        marginBottom: '5px'
-                      }}>
-                        Type doc
-                      </div>
-                      <div style={{
-                        fontSize: '0.9em',
-                        fontWeight: 700,
-                        color: '#2d3748'
-                      }}>
-                        {charge.typeDocument || '-'}
-                      </div>
-                    </div>
-                    <div>
-                      <div style={{
-                        fontSize: '0.75em',
-                        color: '#64748b',
-                        fontWeight: 600,
-                        textTransform: 'uppercase',
-                        marginBottom: '5px'
-                      }}>
-                        Paiement
-                      </div>
-                      <div style={{
-                        fontSize: '0.9em',
-                        fontWeight: 700,
-                        color: '#2d3748'
-                      }}>
-                        {charge.modePaiement || '-'}
+                      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                        <Chip
+                          label={charge.categorie || 'N/A'}
+                          size="small"
+                          sx={{
+                            bgcolor: getCategorieColor(charge.categorie) + '20',
+                            color: getCategorieColor(charge.categorie),
+                            fontWeight: 800,
+                            borderRadius: '20px',
+                            px: 1.2
+                          }}
+                        />
+                        <Chip
+                          label={charge.statut || 'Payé'}
+                          size="small"
+                          sx={{
+                            bgcolor: getStatutColor(charge.statut) + '20',
+                            color: getStatutColor(charge.statut),
+                            fontWeight: 800,
+                            borderRadius: '20px',
+                            px: 1.2
+                          }}
+                        />
+                        <Tooltip title="Voir">
+                          <IconButton
+                            onClick={(e) => { e.stopPropagation(); handleViewDetails(charge); }}
+                            size="small"
+                            sx={{ bgcolor: '#1d4ed8', color: 'white', width: 36, height: 36, '&:hover': { bgcolor: '#1e40af' } }}
+                          >
+                            <VisibilityIcon fontSize="small" />
+                          </IconButton>
+                        </Tooltip>
+                        <Tooltip title="Modifier">
+                          <IconButton
+                            onClick={(e) => { e.stopPropagation(); handleOpenDialog(charge); }}
+                            size="small"
+                            sx={{ bgcolor: '#059669', color: 'white', width: 36, height: 36, '&:hover': { bgcolor: '#047857' } }}
+                          >
+                            <EditIcon fontSize="small" />
+                          </IconButton>
+                        </Tooltip>
+                        <Tooltip title="Supprimer">
+                          <IconButton
+                            onClick={(e) => { e.stopPropagation(); handleDelete(charge.id); }}
+                            size="small"
+                            sx={{ bgcolor: '#dc2626', color: 'white', width: 36, height: 36, '&:hover': { bgcolor: '#b91c1c' } }}
+                          >
+                            <DeleteIcon fontSize="small" />
+                          </IconButton>
+                        </Tooltip>
                       </div>
                     </div>
-                  </div>
 
-                  <div style={{
-                    display: 'flex',
-                    justifyContent: 'flex-end',
-                    gap: '10px',
-                    paddingTop: '10px',
-                    borderTop: '2px solid #e2e8f0'
-                  }}>
-                    <Tooltip title="Voir">
-                      <IconButton
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleViewDetails(charge);
-                        }}
-                        size="small"
-                        style={{
-                          background: 'linear-gradient(135deg, #3b82f6 0%, #2563eb 100%)',
-                          color: 'white',
-                          width: '36px',
-                          height: '36px'
-                        }}
-                      >
-                        <VisibilityIcon fontSize="small" />
-                      </IconButton>
-                    </Tooltip>
-                    <Tooltip title="Modifier">
-                      <IconButton
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleOpenDialog(charge);
-                        }}
-                        size="small"
-                        style={{
-                          background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
-                          color: 'white',
-                          width: '36px',
-                          height: '36px'
-                        }}
-                      >
-                        <EditIcon fontSize="small" />
-                      </IconButton>
-                    </Tooltip>
-                    <Tooltip title="Supprimer">
-                      <IconButton
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleDelete(charge.id);
-                        }}
-                        size="small"
-                        style={{
-                          background: 'linear-gradient(135deg, #ef4444 0%, #dc2626 100%)',
-                          color: 'white',
-                          width: '36px',
-                          height: '36px'
-                        }}
-                      >
-                        <DeleteIcon fontSize="small" />
-                      </IconButton>
-                    </Tooltip>
+                    <Divider sx={{ my: 1.5 }} />
+
+                    <Grid container spacing={2}>
+                      <Grid item xs={12} md={4}>
+                        <Card variant="outlined" sx={{ borderRadius: 2 }}>
+                          <CardContent sx={{ py: 1.5 }}>
+                            <Typography variant="caption" sx={{ color: '#64748b', fontWeight: 800, textTransform: 'uppercase' }}>
+                              Montant
+                            </Typography>
+                            <Typography variant="h6" sx={{ fontWeight: 900, color: '#1d4ed8' }}>
+                              {toFloat(charge.montant).toFixed(2)} DHS
+                            </Typography>
+                          </CardContent>
+                        </Card>
+                      </Grid>
+                      <Grid item xs={6} md={4}>
+                        <Card variant="outlined" sx={{ borderRadius: 2 }}>
+                          <CardContent sx={{ py: 1.5 }}>
+                            <Typography variant="caption" sx={{ color: '#64748b', fontWeight: 800, textTransform: 'uppercase' }}>
+                              Type doc
+                            </Typography>
+                            <Typography variant="body1" sx={{ fontWeight: 800 }}>{charge.typeDocument || '-'}</Typography>
+                          </CardContent>
+                        </Card>
+                      </Grid>
+                      <Grid item xs={6} md={4}>
+                        <Card variant="outlined" sx={{ borderRadius: 2 }}>
+                          <CardContent sx={{ py: 1.5 }}>
+                            <Typography variant="caption" sx={{ color: '#64748b', fontWeight: 800, textTransform: 'uppercase' }}>
+                              Paiement
+                            </Typography>
+                            <Typography variant="body1" sx={{ fontWeight: 800 }}>{charge.modePaiement || '-'}</Typography>
+                          </CardContent>
+                        </Card>
+                      </Grid>
+                    </Grid>
                   </div>
-                </div>
+                </Grid>
               ))
             )}
-          </div>
+          </Grid>
         </div>
       </div>
 
-      {/* Dialog Formulaire */}
+      {/* ===== Dialog — NOUVEAU DESIGN ===== */}
       <Dialog
         open={dialogOpen}
         onClose={handleCloseDialog}
         fullScreen={isMobile}
-        maxWidth="md"
+        maxWidth="lg"
         fullWidth
         PaperProps={{
           style: {
-            borderRadius: isMobile ? 0 : '15px',
-            boxShadow: '0 20px 60px rgba(0,0,0,0.3)'
+            borderRadius: isMobile ? 0 : 20,
+            boxShadow: '0 24px 64px rgba(0,0,0,0.35)',
+            overflow: 'hidden'
           }
         }}
       >
-        <DialogTitle style={{
-          background: 'linear-gradient(135deg, #4a5568 0%, #2d3748 100%)',
+        <DialogTitle sx={{
+          background: 'linear-gradient(135deg, #0b1220 0%, #111827 100%)',
           color: 'white',
-          fontWeight: 800,
-          fontSize: isMobile ? '1.3em' : '1.5em',
-          padding: isMobile ? '15px' : '20px',
+          fontWeight: 900,
+          fontSize: isMobile ? 18 : 20,
+          px: isMobile ? 2 : 3,
+          py: isMobile ? 1.5 : 2,
           display: 'flex',
+          alignItems: 'center',
           justifyContent: 'space-between',
-          alignItems: 'center'
+          gap: 1
         }}>
           <span>{editingCharge ? 'Modifier la charge' : 'Nouvelle charge'}</span>
+          <Chip
+            icon={<MoneyIcon sx={{ color: 'inherit' }} />}
+            label={`Caisse (Aujourd'hui): ${caisseToday.solde.toFixed(2)} DHS`}
+            sx={{ bgcolor: '#0f172a', color: '#e2e8f0', fontWeight: 800 }}
+          />
           {isMobile && (
-            <IconButton onClick={handleCloseDialog} style={{ color: 'white' }}>
+            <IconButton onClick={handleCloseDialog} sx={{ color: 'white' }}>
               <CloseIcon />
             </IconButton>
           )}
         </DialogTitle>
 
-        <DialogContent style={{ padding: isMobile ? '15px' : '25px' }}>
-          <Tabs
-            value={currentTab}
-            onChange={(e, v) => setCurrentTab(v)}
-            variant={isMobile ? "scrollable" : "fullWidth"}
-            scrollButtons={isMobile ? "auto" : false}
-            sx={{
-              borderBottom: 2,
-              borderColor: 'divider',
-              mb: 3,
-              '& .MuiTab-root': {
-                textTransform: 'none',
-                fontWeight: 700,
-                fontSize: isMobile ? '0.85em' : '0.95em',
-                minHeight: isMobile ? '44px' : '48px'
-              },
-              '& .Mui-selected': {
-                color: '#667eea !important'
-              },
-              '& .MuiTabs-indicator': {
-                backgroundColor: '#667eea',
-                height: '3px'
-              }
-            }}
-          >
-            <Tab icon={<ReceiptIcon />} iconPosition="start" label="Général" />
-            <Tab icon={<BusinessIcon />} iconPosition="start" label="Fournisseur" />
-            <Tab icon={<DescriptionIcon />} iconPosition="start" label="Document" />
-            <Tab icon={<MoneyIcon />} iconPosition="start" label="Paiement" />
-          </Tabs>
+        <DialogContent sx={{ p: isMobile ? 2 : 3 }}>
+          <Grid container spacing={2}>
+            {/* Sidebar étapes */}
+            <Grid item xs={12} md={3}>
+              <Paper elevation={0} sx={styles.stepSidebar}>
+                <Typography sx={{ fontWeight: 900, mb: 1.5, color: '#e5e7eb' }}>
+                  Étapes
+                </Typography>
+                <Stepper activeStep={activeStep} orientation="vertical" sx={{
+                  '& .MuiStepLabel-label': { color: '#cbd5e1' },
+                  '& .MuiStepIcon-root.Mui-active': { color: '#22d3ee' },
+                  '& .MuiStepIcon-root.Mui-completed': { color: '#10b981' }
+                }}>
+                  {steps.map((label, index) => (
+                    <Step key={label} onClick={() => setActiveStep(index)}>
+                      <StepLabel>
+                        <Typography sx={{ fontWeight: 800, color: index === activeStep ? '#e5e7eb' : '#94a3b8' }}>
+                          {label}
+                        </Typography>
+                      </StepLabel>
+                    </Step>
+                  ))}
+                </Stepper>
+              </Paper>
+            </Grid>
 
-          {/* GÉNÉRAL */}
-          {currentTab === 0 && (
-            <Stack spacing={2} sx={{ mt: 1 }}>
-              <Grid container spacing={2}>
-                <Grid item xs={12} md={6}>
+            {/* Form sections */}
+            <Grid item xs={12} md={6}>
+              {/* Étape 0: Général */}
+              {activeStep === 0 && (
+                <Stack spacing={2}>
                   <FormControl fullWidth size="small">
                     <InputLabel>Catégorie *</InputLabel>
                     <Select
                       value={formData.categorie}
                       onChange={(e) => setFormData({ ...formData, categorie: e.target.value })}
                       label="Catégorie *"
-                      style={{ background: 'white' }}
+                      sx={{ bgcolor: 'white', borderRadius: 2 }}
                     >
                       {['Loyer','Électricité','Eau','Téléphone','Internet','Assurance','Taxes','Fournitures','Maintenance','Transport','Marketing','Formation','Autre'].map(cat => (
                         <MenuItem key={cat} value={cat}>{cat}</MenuItem>
                       ))}
                     </Select>
                   </FormControl>
-                </Grid>
-                <Grid item xs={12} md={6}>
+
+                  <TextField
+                    label="Libellé *"
+                    value={formData.libelle}
+                    onChange={(e) => setFormData({ ...formData, libelle: e.target.value })}
+                    fullWidth
+                    required
+                    size="small"
+                    sx={{ bgcolor: 'white', borderRadius: 2 }}
+                  />
+
+                  <Grid container spacing={2}>
+                    <Grid item xs={12} md={6}>
+                      <TextField
+                        label="Montant *"
+                        type="number"
+                        value={formData.montant}
+                        onChange={(e) => setFormData({ ...formData, montant: e.target.value })}
+                        fullWidth
+                        required
+                        size="small"
+                        sx={{ bgcolor: 'white', borderRadius: 2 }}
+                        InputProps={{
+                          endAdornment: <span style={{ marginLeft: 8, color: '#64748b', fontWeight: 800 }}>DHS</span>
+                        }}
+                      />
+                    </Grid>
+                    <Grid item xs={12} md={6}>
+                      <TextField
+                        label="Date *"
+                        type="date"
+                        value={formData.date}
+                        onChange={(e) => setFormData({ ...formData, date: e.target.value })}
+                        fullWidth
+                        required
+                        size="small"
+                        InputLabelProps={{ shrink: true }}
+                        sx={{ bgcolor: 'white', borderRadius: 2 }}
+                      />
+                    </Grid>
+                  </Grid>
+
                   <FormControl fullWidth size="small">
                     <InputLabel>Statut</InputLabel>
                     <Select
                       value={formData.statut}
                       onChange={(e) => setFormData({ ...formData, statut: e.target.value })}
                       label="Statut"
-                      style={{ background: 'white' }}
+                      sx={{ bgcolor: 'white', borderRadius: 2 }}
                     >
                       {['Payé','En attente','Impayé','Annulé'].map(st => (
                         <MenuItem key={st} value={st}>{st}</MenuItem>
                       ))}
                     </Select>
                   </FormControl>
-                </Grid>
-              </Grid>
 
-              <TextField
-                label="Libellé *"
-                value={formData.libelle}
-                onChange={(e) => setFormData({ ...formData, libelle: e.target.value })}
-                fullWidth
-                required
-                size="small"
-                style={{ background: 'white' }}
-              />
-
-              <Grid container spacing={2}>
-                <Grid item xs={12} md={6}>
                   <TextField
-                    label="Montant *"
-                    type="number"
-                    value={formData.montant}
-                    onChange={(e) => setFormData({ ...formData, montant: e.target.value })}
+                    label="Description"
+                    value={formData.description}
+                    onChange={(e) => setFormData({ ...formData, description: e.target.value })}
                     fullWidth
-                    required
+                    multiline
+                    rows={3}
                     size="small"
-                    style={{ background: 'white' }}
-                    InputProps={{
-                      endAdornment: <span style={{ marginLeft: '8px', color: '#64748b' }}>DHS</span>
-                    }}
+                    sx={{ bgcolor: 'white', borderRadius: 2 }}
+                    placeholder="Décrivez la charge..."
                   />
-                </Grid>
-                <Grid item xs={12} md={6}>
-                  <TextField
-                    label="Date *"
-                    type="date"
-                    value={formData.date}
-                    onChange={(e) => setFormData({ ...formData, date: e.target.value })}
-                    fullWidth
-                    required
-                    size="small"
-                    InputLabelProps={{ shrink: true }}
-                    style={{ background: 'white' }}
-                  />
-                </Grid>
-              </Grid>
-
-              <TextField
-                label="Description"
-                value={formData.description}
-                onChange={(e) => setFormData({ ...formData, description: e.target.value })}
-                fullWidth
-                multiline
-                rows={3}
-                size="small"
-                style={{ background: 'white' }}
-                placeholder="Décrivez la charge..."
-              />
-            </Stack>
-          )}
-
-          {/* FOURNISSEUR */}
-          {currentTab === 1 && (
-            <Stack spacing={2} sx={{ mt: 1 }}>
-              <TextField
-                label="Nom du fournisseur"
-                value={formData.fournisseur}
-                onChange={(e) => setFormData({ ...formData, fournisseur: e.target.value })}
-                fullWidth
-                size="small"
-                style={{ background: 'white' }}
-              />
-
-              <TextField
-                label="Contact"
-                value={formData.contactFournisseur}
-                onChange={(e) => setFormData({ ...formData, contactFournisseur: e.target.value })}
-                fullWidth
-                size="small"
-                style={{ background: 'white' }}
-                placeholder="Téléphone, email..."
-              />
-
-              <TextField
-                label="Adresse"
-                value={formData.adresseFournisseur}
-                onChange={(e) => setFormData({ ...formData, adresseFournisseur: e.target.value })}
-                fullWidth
-                multiline
-                rows={2}
-                size="small"
-                style={{ background: 'white' }}
-              />
-            </Stack>
-          )}
-
-          {/* DOCUMENT */}
-          {currentTab === 2 && (
-            <Stack spacing={2} sx={{ mt: 1 }}>
-              <FormControl fullWidth size="small">
-                <InputLabel>Type de document</InputLabel>
-                <Select
-                  value={formData.typeDocument}
-                  onChange={(e) => setFormData({ ...formData, typeDocument: e.target.value })}
-                  label="Type de document"
-                  style={{ background: 'white' }}
-                >
-                  {['Facture','Facture proforma','Quittance','Reçu','Bon de commande','Bon de livraison','Contrat','Attestation','Ordre de virement','Autre'].map(type => (
-                    <MenuItem key={type} value={type}>{type}</MenuItem>
-                  ))}
-                </Select>
-              </FormControl>
-
-              <Grid container spacing={2}>
-                <Grid item xs={12} md={6}>
-                  <TextField
-                    label="N° Document"
-                    value={formData.numeroDocument}
-                    onChange={(e) => setFormData({ ...formData, numeroDocument: e.target.value })}
-                    fullWidth
-                    size="small"
-                    style={{ background: 'white' }}
-                  />
-                </Grid>
-                <Grid item xs={12} md={6}>
-                  <TextField
-                    label="N° Facture"
-                    value={formData.numeroFacture}
-                    onChange={(e) => setFormData({ ...formData, numeroFacture: e.target.value })}
-                    fullWidth
-                    size="small"
-                    style={{ background: 'white' }}
-                  />
-                </Grid>
-              </Grid>
-
-              <Grid container spacing={2}>
-                <Grid item xs={12} md={6}>
-                  <TextField
-                    label="Date document"
-                    type="date"
-                    value={formData.dateDocument}
-                    onChange={(e) => setFormData({ ...formData, dateDocument: e.target.value })}
-                    fullWidth
-                    size="small"
-                    InputLabelProps={{ shrink: true }}
-                    style={{ background: 'white' }}
-                  />
-                </Grid>
-                <Grid item xs={12} md={6}>
-                  <TextField
-                    label="Date échéance"
-                    type="date"
-                    value={formData.dateEcheance}
-                    onChange={(e) => setFormData({ ...formData, dateEcheance: e.target.value })}
-                    fullWidth
-                    size="small"
-                    InputLabelProps={{ shrink: true }}
-                    style={{ background: 'white' }}
-                  />
-                </Grid>
-              </Grid>
-
-              <TextField
-                label="Pièce jointe (URL)"
-                value={formData.pieceJointe}
-                onChange={(e) => setFormData({ ...formData, pieceJointe: e.target.value })}
-                fullWidth
-                size="small"
-                style={{ background: 'white' }}
-                placeholder="https://..."
-              />
-
-              <TextField
-                label="Notes"
-                value={formData.notes}
-                onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
-                fullWidth
-                multiline
-                rows={3}
-                size="small"
-                style={{ background: 'white' }}
-                placeholder="Notes additionnelles..."
-              />
-            </Stack>
-          )}
-
-          {/* PAIEMENT */}
-          {currentTab === 3 && (
-            <Stack spacing={2} sx={{ mt: 1 }}>
-              <FormControl fullWidth size="small">
-                <InputLabel>Mode de paiement</InputLabel>
-                <Select
-                  value={formData.modePaiement}
-                  onChange={(e) => setFormData({ ...formData, modePaiement: e.target.value })}
-                  label="Mode de paiement"
-                  style={{ background: 'white' }}
-                >
-                  {['Espèces','Chèque','Virement bancaire','Carte bancaire','Prélèvement','Autre'].map(mode => (
-                    <MenuItem key={mode} value={mode}>{mode}</MenuItem>
-                  ))}
-                </Select>
-              </FormControl>
-
-              <TextField
-                label="Référence virement/chèque"
-                value={formData.referenceVirement}
-                onChange={(e) => setFormData({ ...formData, referenceVirement: e.target.value })}
-                fullWidth
-                size="small"
-                style={{ background: 'white' }}
-                placeholder="Ex: CHQ-123456 ou VIR-789012"
-              />
-
-              {norm(formData.modePaiement) === 'especes' && norm(formData.statut) === 'paye' && (
-                <Alert
-                  severity="success"
-                  style={{
-                    background: 'linear-gradient(135deg, #d1fae5 0%, #a7f3d0 100%)',
-                    border: '2px solid #10b981',
-                    borderRadius: '10px'
-                  }}
-                >
-                  ✅ Ce paiement en espèces sera automatiquement déduit de la caisse
-                </Alert>
+                </Stack>
               )}
 
-              <div style={{
-                background: 'linear-gradient(135deg, #f8fafc 0%, #edf2f7 100%)',
-                padding: '15px',
-                borderRadius: '10px',
-                border: '2px solid #e2e8f0',
-                marginTop: '10px'
-              }}>
-                <Typography variant="body2" style={{ fontWeight: 700, marginBottom: '10px', color: '#2d3748' }}>
-                  Récapitulatif
-                </Typography>
-                <Grid container spacing={1}>
-                  <Grid item xs={6}><Typography variant="body2">Montant :</Typography></Grid>
-                  <Grid item xs={6}>
-                    <Typography variant="body2" align="right" style={{ fontWeight: 800, color: '#667eea' }}>
-                      {toFloat(formData.montant).toFixed(2)} DHS
-                    </Typography>
+              {/* Étape 1: Fournisseur */}
+              {activeStep === 1 && (
+                <Stack spacing={2}>
+                  <TextField
+                    label="Nom du fournisseur"
+                    value={formData.fournisseur}
+                    onChange={(e) => setFormData({ ...formData, fournisseur: e.target.value })}
+                    fullWidth
+                    size="small"
+                    sx={{ bgcolor: 'white', borderRadius: 2 }}
+                  />
+                  <TextField
+                    label="Contact"
+                    value={formData.contactFournisseur}
+                    onChange={(e) => setFormData({ ...formData, contactFournisseur: e.target.value })}
+                    fullWidth
+                    size="small"
+                    sx={{ bgcolor: 'white', borderRadius: 2 }}
+                    placeholder="Téléphone, email..."
+                  />
+                  <TextField
+                    label="Adresse"
+                    value={formData.adresseFournisseur}
+                    onChange={(e) => setFormData({ ...formData, adresseFournisseur: e.target.value })}
+                    fullWidth
+                    multiline
+                    rows={2}
+                    size="small"
+                    sx={{ bgcolor: 'white', borderRadius: 2 }}
+                  />
+                  <TextField
+                    label="Notes"
+                    value={formData.notes}
+                    onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
+                    fullWidth
+                    multiline
+                    rows={2}
+                    size="small"
+                    sx={{ bgcolor: 'white', borderRadius: 2 }}
+                    placeholder="Notes internes..."
+                  />
+                </Stack>
+              )}
+
+              {/* Étape 2: Document */}
+              {activeStep === 2 && (
+                <Stack spacing={2}>
+                  <FormControl fullWidth size="small">
+                    <InputLabel>Type de document</InputLabel>
+                    <Select
+                      value={formData.typeDocument}
+                      onChange={(e) => setFormData({ ...formData, typeDocument: e.target.value })}
+                      label="Type de document"
+                      sx={{ bgcolor: 'white', borderRadius: 2 }}
+                    >
+                      {['Facture','Facture proforma','Quittance','Reçu','Bon de commande','Bon de livraison','Contrat','Attestation','Ordre de virement','Autre'].map(type => (
+                        <MenuItem key={type} value={type}>{type}</MenuItem>
+                      ))}
+                    </Select>
+                  </FormControl>
+
+                  <Grid container spacing={2}>
+                    <Grid item xs={12} md={6}>
+                      <TextField
+                        label="N° Document"
+                        value={formData.numeroDocument}
+                        onChange={(e) => setFormData({ ...formData, numeroDocument: e.target.value })}
+                        fullWidth
+                        size="small"
+                        sx={{ bgcolor: 'white', borderRadius: 2 }}
+                      />
+                    </Grid>
+                    <Grid item xs={12} md={6}>
+                      <TextField
+                        label="N° Facture"
+                        value={formData.numeroFacture}
+                        onChange={(e) => setFormData({ ...formData, numeroFacture: e.target.value })}
+                        fullWidth
+                        size="small"
+                        sx={{ bgcolor: 'white', borderRadius: 2 }}
+                      />
+                    </Grid>
                   </Grid>
-                  <Grid item xs={6}><Typography variant="body2">Statut :</Typography></Grid>
-                  <Grid item xs={6}>
-                    <Chip
-                      label={formData.statut}
-                      size="small"
-                      style={{
-                        float: 'right',
-                        background: getStatutColor(formData.statut) + '20',
-                        color: getStatutColor(formData.statut),
-                        fontWeight: 700
+
+                  <Grid container spacing={2}>
+                    <Grid item xs={12} md={6}>
+                      <TextField
+                        label="Date document"
+                        type="date"
+                        value={formData.dateDocument}
+                        onChange={(e) => setFormData({ ...formData, dateDocument: e.target.value })}
+                        fullWidth
+                        size="small"
+                        InputLabelProps={{ shrink: true }}
+                        sx={{ bgcolor: 'white', borderRadius: 2 }}
+                      />
+                    </Grid>
+                    <Grid item xs={12} md={6}>
+                      <TextField
+                        label="Date échéance"
+                        type="date"
+                        value={formData.dateEcheance}
+                        onChange={(e) => setFormData({ ...formData, dateEcheance: e.target.value })}
+                        fullWidth
+                        size="small"
+                        InputLabelProps={{ shrink: true }}
+                        sx={{ bgcolor: 'white', borderRadius: 2 }}
+                      />
+                    </Grid>
+                  </Grid>
+
+                  <TextField
+                    label="Pièce jointe (URL)"
+                    value={formData.pieceJointe}
+                    onChange={(e) => setFormData({ ...formData, pieceJointe: e.target.value })}
+                    fullWidth
+                    size="small"
+                    sx={{ bgcolor: 'white', borderRadius: 2 }}
+                    placeholder="https://..."
+                  />
+                </Stack>
+              )}
+
+              {/* Étape 3: Paiement */}
+              {activeStep === 3 && (
+                <Stack spacing={2}>
+                  <FormControl fullWidth size="small">
+                    <InputLabel>Mode de paiement</InputLabel>
+                    <Select
+                      value={formData.modePaiement}
+                      onChange={(e) => setFormData({ ...formData, modePaiement: e.target.value })}
+                      label="Mode de paiement"
+                      sx={{ bgcolor: 'white', borderRadius: 2 }}
+                    >
+                      {['Espèces','Chèque','Virement bancaire','Carte bancaire','Prélèvement','Autre'].map(mode => (
+                        <MenuItem key={mode} value={mode}>{mode}</MenuItem>
+                      ))}
+                    </Select>
+                  </FormControl>
+
+                  <TextField
+                    label="Référence virement/chèque"
+                    value={formData.referenceVirement}
+                    onChange={(e) => setFormData({ ...formData, referenceVirement: e.target.value })}
+                    fullWidth
+                    size="small"
+                    sx={{ bgcolor: 'white', borderRadius: 2 }}
+                    placeholder="Ex: CHQ-123456 ou VIR-789012"
+                  />
+
+                  {norm(formData.modePaiement) === 'especes' && norm(formData.statut) === 'paye' && (
+                    <Alert
+                      severity="success"
+                      sx={{
+                        background: 'linear-gradient(135deg, #d1fae5 0%, #a7f3d0 100%)',
+                        border: '2px solid #10b981',
+                        borderRadius: 2
                       }}
-                    />
+                    >
+                      ✅ Ce paiement en espèces sera <strong>déduit de la caisse</strong>
+                    </Alert>
+                  )}
+
+                  <Paper elevation={0} sx={{ p: 2, borderRadius: 2, border: '2px solid #e2e8f0', background: '#fafafa' }}>
+                    <Typography variant="body2" sx={{ fontWeight: 900, mb: 1, color: '#111827' }}>
+                      Récapitulatif de l’étape
+                    </Typography>
+                    <Grid container spacing={1}>
+                      <Grid item xs={6}><Typography variant="body2">Montant :</Typography></Grid>
+                      <Grid item xs={6}>
+                        <Typography variant="body2" align="right" sx={{ fontWeight: 900, color: '#1d4ed8' }}>
+                          {toFloat(formData.montant).toFixed(2)} DHS
+                        </Typography>
+                      </Grid>
+                      <Grid item xs={6}><Typography variant="body2">Statut :</Typography></Grid>
+                      <Grid item xs={6} sx={{ textAlign: 'right' }}>
+                        <Chip
+                          label={formData.statut}
+                          size="small"
+                          sx={{
+                            bgcolor: getStatutColor(formData.statut) + '20',
+                            color: getStatutColor(formData.statut),
+                            fontWeight: 800
+                          }}
+                        />
+                      </Grid>
+                    </Grid>
+                  </Paper>
+                </Stack>
+              )}
+
+              {/* Navigation étapes */}
+              <Stack direction="row" spacing={1.5} sx={{ mt: 2 }}>
+                <button
+                  onClick={() => setActiveStep((s) => Math.max(0, s - 1))}
+                  style={{
+                    ...styles.filterButton,
+                    opacity: activeStep === 0 ? 0.6 : 1,
+                    cursor: activeStep === 0 ? 'not-allowed' : 'pointer'
+                  }}
+                  disabled={activeStep === 0}
+                >
+                  ⬅️ Précédent
+                </button>
+                <button
+                  onClick={() => setActiveStep((s) => Math.min(3, s + 1))}
+                  style={{
+                    ...styles.button,
+                    opacity: activeStep === steps.length - 1 ? 0.6 : 1,
+                    cursor: activeStep === steps.length - 1 ? 'not-allowed' : 'pointer'
+                  }}
+                  disabled={activeStep === steps.length - 1}
+                >
+                  Suivant ➡️
+                </button>
+              </Stack>
+            </Grid>
+
+            {/* Résumé collant */}
+            <Grid item xs={12} md={3}>
+              <div style={styles.stickySummary}>
+                <Typography sx={{ fontWeight: 900, mb: 1.5, color: '#111827' }}>
+                  Résumé
+                </Typography>
+
+                <Stack spacing={1.2}>
+                  <Chip
+                    icon={<ReceiptIcon />}
+                    label={formData.categorie || 'Catégorie'}
+                    sx={{
+                      bgcolor: getCategorieColor(formData.categorie) + '20',
+                      color: getCategorieColor(formData.categorie),
+                      fontWeight: 900
+                    }}
+                  />
+                  <Typography variant="body2" sx={{ color: '#334155', fontWeight: 800 }}>
+                    {formData.libelle || 'Libellé…'}
+                  </Typography>
+
+                  <Divider />
+
+                  <Grid container spacing={1}>
+                    <Grid item xs={6}><Typography variant="caption" sx={{ color: '#64748b', fontWeight: 800 }}>Montant</Typography></Grid>
+                    <Grid item xs={6} sx={{ textAlign: 'right' }}>
+                      <Typography variant="body1" sx={{ fontWeight: 900, color: '#1d4ed8' }}>
+                        {toFloat(formData.montant || 0).toFixed(2)} DHS
+                      </Typography>
+                    </Grid>
+
+                    <Grid item xs={6}><Typography variant="caption" sx={{ color: '#64748b', fontWeight: 800 }}>Date</Typography></Grid>
+                    <Grid item xs={6} sx={{ textAlign: 'right' }}>
+                      <Typography variant="body2" sx={{ fontWeight: 800 }}>{formData.date || '-'}</Typography>
+                    </Grid>
+
+                    <Grid item xs={6}><Typography variant="caption" sx={{ color: '#64748b', fontWeight: 800 }}>Statut</Typography></Grid>
+                    <Grid item xs={6} sx={{ textAlign: 'right' }}>
+                      <Chip
+                        label={formData.statut}
+                        size="small"
+                        sx={{
+                          bgcolor: getStatutColor(formData.statut) + '20',
+                          color: getStatutColor(formData.statut),
+                          fontWeight: 800
+                        }}
+                      />
+                    </Grid>
+
+                    <Grid item xs={6}><Typography variant="caption" sx={{ color: '#64748b', fontWeight: 800 }}>Paiement</Typography></Grid>
+                    <Grid item xs={6} sx={{ textAlign: 'right' }}>
+                      <Typography variant="body2" sx={{ fontWeight: 800 }}>
+                        {formData.modePaiement || '-'}
+                      </Typography>
+                    </Grid>
                   </Grid>
-                </Grid>
+
+                  {norm(formData.modePaiement) === 'especes' && norm(formData.statut) === 'paye' && (
+                    <Alert severity="info" sx={{ mt: 1 }}>
+                      💰 Impact caisse : <strong>sortie</strong> de {toFloat(formData.montant || 0).toFixed(2)} DHS
+                    </Alert>
+                  )}
+                </Stack>
               </div>
-            </Stack>
-          )}
+            </Grid>
+          </Grid>
         </DialogContent>
 
-        <DialogActions style={{
-          padding: isMobile ? '15px' : '20px',
-          gap: '10px',
+        <DialogActions sx={{
+          px: isMobile ? 2 : 3,
+          py: isMobile ? 1.5 : 2,
+          gap: 1.5,
           background: '#f8fafc',
           borderTop: '2px solid #e2e8f0'
         }}>
           <button
-            style={{
-              ...styles.filterButton,
-              flex: isMobile ? 1 : 'none',
-              minWidth: isMobile ? 'auto' : '120px'
-            }}
+            style={{ ...styles.filterButton, minWidth: isMobile ? 'auto' : 140 }}
             onClick={handleCloseDialog}
           >
             Annuler
@@ -1481,20 +1452,19 @@ export default function ChargesDivers() {
           <button
             style={{
               ...styles.button,
-              flex: isMobile ? 1 : 'none',
-              minWidth: isMobile ? 'auto' : '120px',
+              minWidth: isMobile ? 'auto' : 160,
               opacity: (!formData.categorie || !formData.libelle || !formData.montant) ? 0.5 : 1,
               cursor: (!formData.categorie || !formData.libelle || !formData.montant) ? 'not-allowed' : 'pointer'
             }}
             onClick={handleSave}
             disabled={!formData.categorie || !formData.libelle || !formData.montant}
           >
-            {editingCharge ? 'Modifier' : 'Enregistrer'}
+            {editingCharge ? 'Enregistrer les modifications' : 'Enregistrer'}
           </button>
         </DialogActions>
       </Dialog>
 
-      {/* Dialog Détails */}
+      {/* Dialog Détails (inchangé, densifié) */}
       <Dialog
         open={detailsDialogOpen}
         onClose={() => setDetailsDialogOpen(false)}
@@ -1503,59 +1473,56 @@ export default function ChargesDivers() {
         fullWidth
         PaperProps={{
           style: {
-            borderRadius: isMobile ? 0 : '15px',
+            borderRadius: isMobile ? 0 : 16,
             boxShadow: '0 20px 60px rgba(0,0,0,0.3)'
           }
         }}
       >
-        <DialogTitle style={{
-          background: 'linear-gradient(135deg, #4a5568 0%, #2d3748 100%)',
+        <DialogTitle sx={{
+          background: 'linear-gradient(135deg, #0b1220 0%, #111827 100%)',
           color: 'white',
-          fontWeight: 800,
-          fontSize: isMobile ? '1.3em' : '1.5em',
-          padding: isMobile ? '15px' : '20px',
+          fontWeight: 900,
+          fontSize: isMobile ? 18 : 20,
+          px: isMobile ? 2 : 3,
+          py: isMobile ? 1.5 : 2,
           display: 'flex',
           justifyContent: 'space-between',
           alignItems: 'center'
         }}>
           <span>Détails de la charge</span>
           {isMobile && (
-            <IconButton onClick={() => setDetailsDialogOpen(false)} style={{ color: 'white' }}>
+            <IconButton onClick={() => setDetailsDialogOpen(false)} sx={{ color: 'white' }}>
               <CloseIcon />
             </IconButton>
           )}
         </DialogTitle>
 
-        <DialogContent style={{ padding: isMobile ? '15px' : '25px' }}>
+        <DialogContent sx={{ p: isMobile ? 2 : 3 }}>
           {selectedCharge && (
             <Box sx={{ mt: 1 }}>
               <Stack direction="row" spacing={1} sx={{ mb: 2 }}>
                 <Chip
                   label={selectedCharge.categorie || 'N/A'}
-                  style={{
-                    background: getCategorieColor(selectedCharge.categorie) + '20',
+                  sx={{
+                    bgcolor: getCategorieColor(selectedCharge.categorie) + '20',
                     color: getCategorieColor(selectedCharge.categorie),
-                    fontWeight: 800,
-                    padding: '8px 12px',
-                    borderRadius: '20px'
+                    fontWeight: 900
                   }}
                 />
                 <Chip
                   label={selectedCharge.statut || 'Payé'}
-                  style={{
-                    background: getStatutColor(selectedCharge.statut) + '20',
+                  sx={{
+                    bgcolor: getStatutColor(selectedCharge.statut) + '20',
                     color: getStatutColor(selectedCharge.statut),
-                    fontWeight: 800,
-                    padding: '8px 12px',
-                    borderRadius: '20px'
+                    fontWeight: 900
                   }}
                 />
               </Stack>
 
-              <Typography variant="h6" style={{ fontWeight: 800, marginBottom: '5px', color: '#2d3748' }}>
+              <Typography variant="h6" sx={{ fontWeight: 900, mb: .5, color: '#111827' }}>
                 {selectedCharge.libelle}
               </Typography>
-              <Typography variant="caption" style={{ color: '#64748b', fontWeight: 600 }}>
+              <Typography variant="caption" sx={{ color: '#64748b', fontWeight: 700 }}>
                 {selectedCharge.date}
               </Typography>
 
@@ -1563,31 +1530,31 @@ export default function ChargesDivers() {
 
               <Grid container spacing={2}>
                 <Grid item xs={6}>
-                  <Typography variant="caption" style={{ color: '#64748b', fontWeight: 600 }}>Montant</Typography>
-                  <Typography variant="h6" style={{ fontWeight: 800, color: '#667eea' }}>
+                  <Typography variant="caption" sx={{ color: '#64748b', fontWeight: 800 }}>Montant</Typography>
+                  <Typography variant="h6" sx={{ fontWeight: 900, color: '#1d4ed8' }}>
                     {toFloat(selectedCharge.montant).toFixed(2)} DHS
                   </Typography>
                 </Grid>
                 <Grid item xs={6}>
-                  <Typography variant="caption" style={{ color: '#64748b', fontWeight: 600 }}>Catégorie</Typography>
-                  <Typography variant="body2" style={{ fontWeight: 700 }}>{selectedCharge.categorie}</Typography>
+                  <Typography variant="caption" sx={{ color: '#64748b', fontWeight: 800 }}>Catégorie</Typography>
+                  <Typography variant="body2" sx={{ fontWeight: 800 }}>{selectedCharge.categorie}</Typography>
                 </Grid>
               </Grid>
 
               {selectedCharge.fournisseur && (
                 <>
                   <Divider sx={{ my: 2 }} />
-                  <Typography variant="subtitle2" style={{ fontWeight: 800, marginBottom: '10px', color: '#2d3748' }}>
+                  <Typography variant="subtitle2" sx={{ fontWeight: 900, mb: 1, color: '#111827' }}>
                     Fournisseur
                   </Typography>
-                  <Typography variant="body2" style={{ fontWeight: 700 }}>{selectedCharge.fournisseur}</Typography>
+                  <Typography variant="body2" sx={{ fontWeight: 800 }}>{selectedCharge.fournisseur}</Typography>
                   {selectedCharge.contactFournisseur && (
-                    <Typography variant="body2" style={{ marginTop: '5px', fontWeight: 700 }}>
+                    <Typography variant="body2" sx={{ mt: .5, fontWeight: 800 }}>
                       Contact : {selectedCharge.contactFournisseur}
                     </Typography>
                   )}
                   {selectedCharge.adresseFournisseur && (
-                    <Typography variant="body2" style={{ marginTop: '5px', fontWeight: 700 }}>
+                    <Typography variant="body2" sx={{ mt: .5, fontWeight: 800 }}>
                       Adresse : {selectedCharge.adresseFournisseur}
                     </Typography>
                   )}
@@ -1597,31 +1564,31 @@ export default function ChargesDivers() {
               {selectedCharge.typeDocument && (
                 <>
                   <Divider sx={{ my: 2 }} />
-                  <Typography variant="subtitle2" style={{ fontWeight: 800, marginBottom: '10px', color: '#2d3748' }}>
+                  <Typography variant="subtitle2" sx={{ fontWeight: 900, mb: 1, color: '#111827' }}>
                     Document
                   </Typography>
-                  <Typography variant="body2" style={{ fontWeight: 700 }}>Type : {selectedCharge.typeDocument}</Typography>
+                  <Typography variant="body2" sx={{ fontWeight: 800 }}>Type : {selectedCharge.typeDocument}</Typography>
                   {selectedCharge.numeroFacture && (
-                    <Typography variant="body2" style={{ marginTop: '5px', fontWeight: 700 }}>
+                    <Typography variant="body2" sx={{ mt: .5, fontWeight: 800 }}>
                       N° Facture : {selectedCharge.numeroFacture}
                     </Typography>
                   )}
                   {selectedCharge.numeroDocument && (
-                    <Typography variant="body2" style={{ marginTop: '5px', fontWeight: 700 }}>
+                    <Typography variant="body2" sx={{ mt: .5, fontWeight: 800 }}>
                       N° Document : {selectedCharge.numeroDocument}
                     </Typography>
                   )}
-                  <Typography variant="body2" style={{ marginTop: '5px', fontWeight: 700 }}>
+                  <Typography variant="body2" sx={{ mt: .5, fontWeight: 800 }}>
                     Date : {selectedCharge.dateDocument || '-'}
                   </Typography>
                   {selectedCharge.dateEcheance && (
-                    <Typography variant="body2" style={{ marginTop: '5px', fontWeight: 700 }}>
+                    <Typography variant="body2" sx={{ mt: .5, fontWeight: 800 }}>
                       Échéance : {selectedCharge.dateEcheance}
                     </Typography>
                   )}
                   {selectedCharge.pieceJointe && (
-                    <Typography variant="body2" style={{ marginTop: '5px', fontWeight: 700 }}>
-                      Fichier : <a href={selectedCharge.pieceJointe} target="_blank" rel="noopener noreferrer" style={{ color: '#667eea' }}>Voir</a>
+                    <Typography variant="body2" sx={{ mt: .5, fontWeight: 800 }}>
+                      Fichier : <a href={selectedCharge.pieceJointe} target="_blank" rel="noopener noreferrer" style={{ color: '#1d4ed8', fontWeight: 900 }}>Voir</a>
                     </Typography>
                   )}
                 </>
@@ -1630,21 +1597,17 @@ export default function ChargesDivers() {
               {selectedCharge.modePaiement && (
                 <>
                   <Divider sx={{ my: 2 }} />
-                  <Typography variant="subtitle2" style={{ fontWeight: 800, marginBottom: '10px', color: '#2d3748' }}>
+                  <Typography variant="subtitle2" sx={{ fontWeight: 900, mb: 1, color: '#111827' }}>
                     Paiement
                   </Typography>
-                  <Typography variant="body2" style={{ fontWeight: 700 }}>Mode : {selectedCharge.modePaiement}</Typography>
+                  <Typography variant="body2" sx={{ fontWeight: 800 }}>Mode : {selectedCharge.modePaiement}</Typography>
                   {selectedCharge.referenceVirement && (
-                    <Typography variant="body2" style={{ marginTop: '5px', fontWeight: 700 }}>
+                    <Typography variant="body2" sx={{ mt: .5, fontWeight: 800 }}>
                       Référence : {selectedCharge.referenceVirement}
                     </Typography>
                   )}
                   {norm(selectedCharge.modePaiement) === 'especes' && norm(selectedCharge.statut) === 'paye' && (
-                    <Alert severity="info" sx={{ mt: 1 }} style={{
-                      background: 'linear-gradient(135deg, #dbeafe 0%, #bfdbfe 100%)',
-                      border: '2px solid #60a5fa',
-                      borderRadius: '10px'
-                    }}>
+                    <Alert severity="info" sx={{ mt: 1 }}>
                       💰 Ce montant a été déduit de la caisse
                     </Alert>
                   )}
@@ -1654,37 +1617,34 @@ export default function ChargesDivers() {
               {selectedCharge.description && (
                 <>
                   <Divider sx={{ my: 2 }} />
-                  <Typography variant="subtitle2" style={{ fontWeight: 800, marginBottom: '10px', color: '#2d3748' }}>
+                  <Typography variant="subtitle2" sx={{ fontWeight: 900, mb: 1, color: '#111827' }}>
                     Description
                   </Typography>
-                  <Typography variant="body2" style={{ fontWeight: 600 }}>{selectedCharge.description}</Typography>
+                  <Typography variant="body2" sx={{ fontWeight: 700 }}>{selectedCharge.description}</Typography>
                 </>
               )}
 
               {selectedCharge.notes && (
                 <>
                   <Divider sx={{ my: 2 }} />
-                  <Typography variant="subtitle2" style={{ fontWeight: 800, marginBottom: '10px', color: '#2d3748' }}>
+                  <Typography variant="subtitle2" sx={{ fontWeight: 900, mb: 1, color: '#111827' }}>
                     Notes
                   </Typography>
-                  <Typography variant="body2" style={{ fontWeight: 600 }}>{selectedCharge.notes}</Typography>
+                  <Typography variant="body2" sx={{ fontWeight: 700 }}>{selectedCharge.notes}</Typography>
                 </>
               )}
             </Box>
           )}
         </DialogContent>
 
-        <DialogActions style={{
-          padding: isMobile ? '15px' : '20px',
+        <DialogActions sx={{
+          px: isMobile ? 2 : 3,
+          py: isMobile ? 1.5 : 2,
           background: '#f8fafc',
           borderTop: '2px solid #e2e8f0'
         }}>
           <button
-            style={{
-              ...styles.button,
-              width: isMobile ? '100%' : 'auto',
-              minWidth: '120px'
-            }}
+            style={{ ...styles.button, background: 'linear-gradient(135deg, #4b5563 0%, #111827 100%)' }}
             onClick={() => setDetailsDialogOpen(false)}
           >
             Fermer

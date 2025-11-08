@@ -1,5 +1,5 @@
 // src/components/caisse/ClotureCaisse.js
-import React, { useEffect, useMemo, useState, useCallback } from "react";
+import React, { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import {
   collection,
   doc,
@@ -8,9 +8,11 @@ import {
   orderBy,
   getDoc,
   setDoc,
-  updateDoc,
   addDoc,
   limit,
+  deleteDoc,
+  Timestamp,
+  serverTimestamp,
 } from "firebase/firestore";
 import { db } from "../../firebase/config";
 import { useUserRole } from "../../contexts/UserRoleContext";
@@ -18,7 +20,10 @@ import { useUserRole } from "../../contexts/UserRoleContext";
 /* ================= Utils ================= */
 
 const toNum = (v) => {
-  const n = Number(typeof v === "string" ? v.replace(/\s/g, "").replace(",", ".") : v);
+  if (v == null) return 0;
+  if (typeof v === "number") return Number.isFinite(v) ? v : 0;
+  const s = String(v).trim().replace(/\s/g, "").replace(",", ".");
+  const n = Number(s);
   return Number.isFinite(n) ? n : 0;
 };
 const round2 = (x) => Math.round(x * 100) / 100;
@@ -76,17 +81,14 @@ const norm = (s) =>
     .normalize("NFD")
     .replace(/\p{Diacritic}/gu, "");
 
-/** espèces strict (tolérant aux variantes) */
 const isCash = (mode) => {
   const m = norm(mode);
   return ["cash", "espece", "especes", "esp", "liquide", "liquides"].includes(m);
 };
-/** statut PAYÉ strict */
 const isPaidStrict = (statut) => {
   const s = norm(statut);
   return s === "paye" || s === "payé" || s === "paid" || s === "regle" || s === "réglé";
 };
-/** vente de stock1/stock2 ? */
 const comesFromStock1or2 = (v) => {
   const candidates = [
     v?.stockSource, v?.sourceStock, v?.stockFrom, v?.entrepot, v?.depot, v?.magasin, v?.origineStock,
@@ -103,17 +105,14 @@ const comesFromStock1or2 = (v) => {
   }
 
   const ok = new Set([
-    "stock1", "stock 1", "s1", "stk1", "magasin1", "store1", "rayon1", "front1",
-    "stock2", "stock 2", "s2", "stk2", "magasin2", "store2", "rayon2", "front2"
+    "stock1","stock 1","s1","stk1","magasin1","store1","rayon1","front1",
+    "stock2","stock 2","s2","stk2","magasin2","store2","rayon2","front2"
   ]);
-  const bad = new Set(["stock0", "stk0", "reserve", "magasin0", "wh", "warehouse", "back", "arriere", "arrière"]);
-
+  const bad = new Set(["stock0","stk0","reserve","magasin0","wh","warehouse","back","arriere","arrière"]);
   if (candidates.some((c) => bad.has(c))) return false;
   if (candidates.some((c) => ok.has(c))) return true;
   return false;
 };
-
-/** vente retour/avoir ? */
 const isReturnOrNegativeSale = (v) => {
   const motif = norm(v?.motif || v?.typeOperation || v?.operation || "");
   if (motif.includes("retour") || motif.includes("avoir")) return true;
@@ -133,11 +132,25 @@ function todayId(date = new Date()) {
 }
 
 const diffMs = (a, b) => Math.abs((a?.getTime?.() || 0) - (b?.getTime?.() || 0));
-const linksToSale = (p) => ["venteId", "saleId", "idVente", "refVente"].some((k) => !!p?.[k]);
 
-/* ============ Helpers causes (historique) ============ */
+const saleIdFrom = (obj) => {
+  const keys = [
+    "venteId","saleId","idVente","refVente","linkedSaleId","venteRef","venteID","vente_id","sale_id"
+  ];
+  for (const k of keys) {
+    const v = obj?.[k];
+    if (typeof v === "string" && v.trim()) return v.trim();
+  }
+  try {
+    const meta = obj?.meta || obj?.metadata || obj?.extra || {};
+    for (const k of keys) {
+      const v = meta?.[k];
+      if (typeof v === "string" && v.trim()) return v.trim();
+    }
+  } catch {}
+  return null;
+};
 
-/** Transforme une cause (string | object) en chaîne lisible */
 function prettyCause(c) {
   if (typeof c === "string") return c;
   if (c && typeof c === "object") {
@@ -146,25 +159,19 @@ function prettyCause(c) {
     const amt = Number.isFinite(c.amount) ? ` ${toNum(c.amount).toFixed(2)} DHS` : "";
     return `${cause}${dir}${amt}`.trim();
   }
-  try {
-    return JSON.stringify(c);
-  } catch {
-    return String(c);
-  }
+  try { return JSON.stringify(c); } catch { return String(c); }
 }
-
-/** Normalise le tableau "causes" (pour anciens enregistrements) */
 function normalizeCauses(causes) {
   if (!Array.isArray(causes)) return [];
   return causes.map(prettyCause);
 }
 
 /* =========================================================
-   Clôture de caisse — AGRÉGATION ventes espèces stock1+stock2
-   + paiements non liés à une vente
-   + charges (payé+espèces)
-   + anti-doublons & heures réelles
-   + ▶/▼ détail des ventes avec remises (via remiseTotal de Ventes.js)
+   Clôture de caisse — compatible avec tes règles Firestore
+   - AUCUNE update sur societe/{sid}/closures/{todayId}
+   - create pour valider (avec createdAt: serverTimestamp())
+   - delete le même jour pour annuler (sameDay(resource.data.createdAt))
+   - brouillons dans closuresDrafts (libre)
 ========================================================= */
 
 export default function ClotureCaisse() {
@@ -172,59 +179,81 @@ export default function ClotureCaisse() {
 
   const [ops, setOps] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [physicalCash, setPhysicalCash] = useState("");
-  const physical = toNum(physicalCash);
+
+  // ===== Brouillon local (dans closuresDrafts)
+  const [physicalCashInput, setPhysicalCashInput] = useState("");
+  const physical = toNum(physicalCashInput);
 
   const [closure, setClosure] = useState(null);
   const [closureHistory, setClosureHistory] = useState([]);
   const [busy, setBusy] = useState(false);
-  const [activeTab, setActiveTab] = useState("today"); // "today" ou "history"
+  const [activeTab, setActiveTab] = useState("today");
   const [expandedDay, setExpandedDay] = useState(null);
 
-  // ventes du jour avec remises
+  // Détails remises (agrégé)
   const [ventesRemises, setVentesRemises] = useState([]);
   const [expandRemises, setExpandRemises] = useState(false);
+
+  // IDs des ventes déjà comptées aujourd’hui (espèces directes)
+  const countedSaleIdsRef = useRef(new Set());
+  // Cache des ventes lues
+  const saleCacheRef = useRef(new Map()); // saleId -> saleData/null
 
   const closureDocRef = useMemo(() => {
     if (!societeId) return null;
     return doc(db, "societe", societeId, "closures", todayId());
   }, [societeId]);
 
-  // État clôture & préremplissage du solde physique existant
+  const draftDocRef = useMemo(() => {
+    if (!societeId) return null;
+    return doc(db, "societe", societeId, "closuresDrafts", todayId());
+  }, [societeId]);
+
+  /* ====== Helpers remises (fusion/déduplication) ====== */
+  const upsertRemises = useCallback((prev, incoming) => {
+    const map = new Map();
+    for (const r of prev) map.set(r.id, r);
+    for (const r of incoming) {
+      const existing = map.get(r.id);
+      if (!existing) {
+        map.set(r.id, r);
+      } else {
+        const ta = toDateObj(existing.at)?.getTime() || 0;
+        const tb = toDateObj(r.at)?.getTime() || 0;
+        if (tb >= ta) map.set(r.id, r);
+      }
+    }
+    return Array.from(map.values()).sort(
+      (a, b) => (toDateObj(b.at)?.getTime() || 0) - (toDateObj(a.at)?.getTime() || 0)
+    );
+  }, []);
+
+  // ===== État "closure" du jour (si validée)
   useEffect(() => {
     if (!closureDocRef) return;
     return onSnapshot(closureDocRef, (snap) => {
       if (snap.exists()) {
         const data = { id: snap.id, ...snap.data() };
         setClosure(data);
-        if (typeof data.physicalCash === "number") {
-          setPhysicalCash(String(data.physicalCash));
-        }
+        // remplir champ physique à l’écran depuis le doc validé (lecture seule)
+        if (typeof data.physicalCash === "number") setPhysicalCashInput(String(data.physicalCash));
       } else {
         setClosure(null);
       }
     });
   }, [closureDocRef]);
 
-  // Historique des clôtures (30 derniers jours) — normaliser causes
+  // ===== Historique des clôtures (30 derniers jours)
   useEffect(() => {
     if (!societeId) return;
     return onSnapshot(
-      query(
-        collection(db, "societe", societeId, "closures"),
-        orderBy("dateId", "desc"),
-        limit(30)
-      ),
+      query(collection(db, "societe", societeId, "closures"), orderBy("dateId", "desc"), limit(30)),
       (snap) => {
         const history = [];
         snap.forEach((d) => {
           if (d.id !== todayId()) {
             const raw = d.data() || {};
-            const normed = {
-              id: d.id,
-              ...raw,
-              causes: normalizeCauses(raw.causes || []), // 🛡️ évite l’objet en React child
-            };
+            const normed = { id: d.id, ...raw, causes: normalizeCauses(raw.causes || []) };
             history.push(normed);
           }
         });
@@ -233,13 +262,26 @@ export default function ClotureCaisse() {
     );
   }, [societeId]);
 
-  // Écoutes collections
+  // ===== Brouillon du jour (dans closuresDrafts) — lecture/écriture
+  useEffect(() => {
+    if (!draftDocRef) return;
+    return onSnapshot(draftDocRef, (snap) => {
+      if (snap.exists()) {
+        const d = snap.data() || {};
+        if (typeof d.physicalCash === "number" && !closure) {
+          setPhysicalCashInput(String(d.physicalCash));
+        }
+      }
+    });
+  }, [draftDocRef, closure]);
+
+  // ===== Écoutes collections pour construire les opérations du jour
   useEffect(() => {
     if (!societeId) return;
     setLoading(true);
     const unsubs = [];
 
-    // 1) VENTES (espèces) — AGRÉGÉES stock1+stock2 + collecte remises
+    /* 1) VENTES (espèces directes, S1+S2) + remises */
     unsubs.push(
       onSnapshot(
         query(collection(db, "societe", societeId, "ventes"), orderBy("date", "desc")),
@@ -247,7 +289,8 @@ export default function ClotureCaisse() {
           let totalCashStock12 = 0;
           let lastDate = null;
           let count = 0;
-          const remises = [];
+          const remisesDirectes = [];
+          const countedIds = new Set();
 
           snap.forEach((d) => {
             const v = d.data() || {};
@@ -260,18 +303,13 @@ export default function ClotureCaisse() {
             const mode = v.modePaiement || v.mode || v.moyen;
             if (!isPaidStrict(statut) || !isCash(mode)) return;
 
-            // ✅ Montant net prioritaire (déjà après remise) — vient de Ventes.js
+            // Montant net (déjà après remise)
             let amount = 0;
-            if (typeof v.montantTotal === "number") {
-              amount = v.montantTotal;
-            } else if (typeof v.totalTTC === "number") {
-              amount = v.totalTTC;
-            } else if (typeof v.total === "number") {
-              amount = v.total;
-            } else if (v.montant) {
-              amount = toNum(v.montant);
-            } else if (Array.isArray(v.articles) && v.articles.length > 0) {
-              // Fallback net : somme (qty*prix - remiseLigne), sans remise globale additionnelle
+            if (typeof v.montantTotal === "number") amount = v.montantTotal;
+            else if (typeof v.totalTTC === "number") amount = v.totalTTC;
+            else if (typeof v.total === "number") amount = v.total;
+            else if (v.montant) amount = toNum(v.montant);
+            else if (Array.isArray(v.articles) && v.articles.length > 0) {
               const subtotal = v.articles.reduce((s, art) => {
                 const qty = Number(art?.quantite) || 0;
                 const prix = Number(art?.prixUnitaire ?? art?.prix) || 0;
@@ -280,17 +318,17 @@ export default function ClotureCaisse() {
               }, 0);
               amount = subtotal;
             }
-
             amount = Math.max(0, toNum(amount));
             if (amount <= 0) return;
 
-            // Détails remises — lire directement remiseTotal si présent
+            // Remise globale
             const remiseTotal = Number(v.remiseTotal) || 0;
             if (remiseTotal > 0.0001) {
-              const brut = round2(amount + remiseTotal); // net + remise
+              const brut = round2(amount + remiseTotal);
               const pct = brut > 0 ? round2((remiseTotal / brut) * 100) : 0;
-              remises.push({
+              remisesDirectes.push({
                 id: d.id,
+                type: "Vente directe",
                 at: at || v.date || v.createdAt || new Date(),
                 client: v.client || v.nomClient || v.name || "-",
                 brut,
@@ -300,10 +338,13 @@ export default function ClotureCaisse() {
               });
             }
 
+            countedIds.add(d.id);
             totalCashStock12 += amount;
             count += 1;
             if (!lastDate || toDateObj(at) > lastDate) lastDate = toDateObj(at);
           });
+
+          countedSaleIdsRef.current = countedIds;
 
           const arr = [];
           if (totalCashStock12 > 0) {
@@ -317,23 +358,28 @@ export default function ClotureCaisse() {
               refId: `agg-${todayId()}`,
             });
           }
-          setVentesRemises(remises.sort((a, b) => (toDateObj(b.at)?.getTime() || 0) - (toDateObj(a.at)?.getTime() || 0)));
+
+          setVentesRemises(remisesDirectes.sort((a, b) => (toDateObj(b.at)?.getTime() || 0) - (toDateObj(a.at)?.getTime() || 0)));
           setOps((prev) => mergeAndDedupe(prev, arr, "ventesAgg"));
           setLoading(false);
         },
         () => {
           setOps((prev) => removeSource(prev, "ventesAgg"));
           setVentesRemises([]);
+          countedSaleIdsRef.current = new Set();
         }
       )
     );
 
-    // 2) PAIEMENTS (ignorer tout ce qui est lié à une vente)
+    /* 2) PAIEMENTS (inclut règlements de crédits en espèces + remises issues des ventes à crédit) */
     unsubs.push(
       onSnapshot(
         query(collection(db, "societe", societeId, "paiements"), orderBy("date", "desc")),
-        (snap) => {
+        async (snap) => {
           const arr = [];
+          const creditRemises = [];
+          const fetches = [];
+
           snap.forEach((d) => {
             const p = d.data() || {};
             const at = getBestDate(p);
@@ -344,45 +390,81 @@ export default function ClotureCaisse() {
 
             const t = norm(p.type);
             const op = norm(p.operation || p.sens || "");
-            const amount = round2(Math.abs(toNum(p.montant)));
+            const statut = p.statut || p.status;
+            const amount = round2(Math.abs(toNum(p.montant ?? p.total ?? 0)));
+            if (amount <= 0) return;
 
-            if (linksToSale(p)) return;
+            const saleId = saleIdFrom(p);
+
+            // Règlement d'une vente à crédit, payé en espèces aujourd'hui
+            if (saleId && isPaidStrict(statut) && isCash(mode)) {
+              if (!countedSaleIdsRef.current.has(saleId)) {
+                arr.push({
+                  at,
+                  amount,
+                  direction: "in",
+                  mode,
+                  source: "paiements",
+                  cause: "Règlement de crédit (espèces)",
+                  refId: d.id,
+                });
+
+                const cached = saleCacheRef.current.get(saleId);
+                if (cached !== undefined) {
+                  if (cached) {
+                    const r = buildRemiseRowFromSale(cached, at, saleId);
+                    if (r) creditRemises.push(r);
+                  }
+                } else {
+                  fetches.push(
+                    getDoc(doc(db, "societe", societeId, "ventes", saleId))
+                      .then((snapSale) => {
+                        const data = snapSale.exists() ? { id: snapSale.id, ...snapSale.data() } : null;
+                        saleCacheRef.current.set(saleId, data);
+                        if (data) {
+                          const r = buildRemiseRowFromSale(data, at, saleId);
+                          if (r) creditRemises.push(r);
+                        }
+                      })
+                      .catch(() => saleCacheRef.current.set(saleId, null))
+                  );
+                }
+              }
+              return;
+            }
+
+            // Paiements isolés
             const isVentePayment = t.includes("vente") || t === "vente" || t === "ventes";
             const isRefund = op.includes("rembourse");
             if (isVentePayment && !isRefund) return;
 
             let direction = "in";
             let cause = "Règlement client (espèces)";
-
-            if (t.includes("achat")) {
-              direction = "out"; cause = "Achat (espèces)";
-            } else if (t.includes("fournisseur")) {
-              direction = "out"; cause = "Règlement fournisseur (espèces)";
-            } else if (t.includes("charge")) {
-              direction = "out"; cause = "Charge (espèces)";
-            }
+            if (t.includes("achat")) { direction = "out"; cause = "Achat (espèces)"; }
+            else if (t.includes("fournisseur")) { direction = "out"; cause = "Règlement fournisseur (espèces)"; }
+            else if (t.includes("charge")) { direction = "out"; cause = "Charge (espèces)"; }
             if (isRefund) { direction = "out"; cause = "Remboursement client (espèces)"; }
-
             if (!t && op === "sortie") direction = "out";
             if (!t && op === "entree") direction = "in";
 
-            arr.push({
-              at,
-              amount,
-              direction,
-              mode,
-              source: "paiements",
-              cause,
-              refId: d.id,
-            });
+            arr.push({ at, amount, direction, mode, source: "paiements", cause, refId: d.id });
           });
+
+          if (fetches.length) {
+            try { await Promise.all(fetches); } catch {}
+          }
+
           setOps((prev) => mergeAndDedupe(prev, arr, "paiements"));
+
+          if (creditRemises.length) {
+            setVentesRemises((prev) => upsertRemises(prev, creditRemises));
+          }
         },
         () => setOps((prev) => removeSource(prev, "paiements"))
       )
     );
 
-    // 3) CHARGES PERSONNELS (sorties espèces)
+    /* 3) CHARGES PERSONNELS (sorties espèces) */
     unsubs.push(
       onSnapshot(
         query(collection(db, "societe", societeId, "chargesPersonnels"), orderBy("updatedAt", "desc")),
@@ -404,13 +486,8 @@ export default function ClotureCaisse() {
             if (amount <= 0) return;
 
             arr.push({
-              at,
-              amount,
-              direction: "out",
-              mode,
-              source: "chargesPersonnels",
-              cause: "Charge personnel (espèces)",
-              refId: d.id,
+              at, amount, direction: "out", mode,
+              source: "chargesPersonnels", cause: "Charge personnel (espèces)", refId: d.id,
             });
           });
           setOps((prev) => mergeAndDedupe(prev, arr, "chargesPersonnels"));
@@ -419,7 +496,7 @@ export default function ClotureCaisse() {
       )
     );
 
-    // 4) CHARGES DIVERS (sorties espèces)
+    /* 4) CHARGES DIVERS (sorties espèces) */
     unsubs.push(
       onSnapshot(
         query(collection(db, "societe", societeId, "chargesDivers"), orderBy("updatedAt", "desc")),
@@ -440,13 +517,8 @@ export default function ClotureCaisse() {
             const lib = c.libelle || c.description || c.titre || c.title || "Charge diverse";
 
             arr.push({
-              at,
-              amount,
-              direction: "out",
-              mode,
-              source: "chargesDivers",
-              cause: `${lib} (espèces)`,
-              refId: d.id,
+              at, amount, direction: "out", mode,
+              source: "chargesDivers", cause: `${lib} (espèces)`, refId: d.id,
             });
           });
           setOps((prev) => mergeAndDedupe(prev, arr, "chargesDivers"));
@@ -456,7 +528,43 @@ export default function ClotureCaisse() {
     );
 
     return () => unsubs.forEach((u) => u && u());
-  }, [societeId]);
+  }, [societeId, upsertRemises]);
+
+  /* ====== Remise à partir d'une vente (pour crédits réglés) ====== */
+  function buildRemiseRowFromSale(v, at, saleId) {
+    let net = 0;
+    if (typeof v.montantTotal === "number") net = v.montantTotal;
+    else if (typeof v.totalTTC === "number") net = v.totalTTC;
+    else if (typeof v.total === "number") net = v.total;
+    else if (v.montant) net = toNum(v.montant);
+    else if (Array.isArray(v.articles) && v.articles.length > 0) {
+      const subtotal = v.articles.reduce((s, art) => {
+        const qty = Number(art?.quantite) || 0;
+        const prix = Number(art?.prixUnitaire ?? art?.prix) || 0;
+        const remiseLigne = Number(art?.remise) || 0;
+        return s + (qty * prix - remiseLigne);
+      }, 0);
+      net = subtotal;
+    }
+    net = Math.max(0, toNum(net));
+
+    const remiseTotal = Number(v.remiseTotal) || 0;
+    if (remiseTotal <= 0.0001) return null;
+
+    const brut = round2(net + remiseTotal);
+    const pct = brut > 0 ? round2((remiseTotal / brut) * 100) : 0;
+
+    return {
+      id: `credit-${saleId}`,
+      type: "Crédit réglé",
+      at: at || v.date || v.createdAt || new Date(),
+      client: v.client || v.nomClient || v.name || "-",
+      brut,
+      remise: round2(remiseTotal),
+      net: round2(net),
+      pct,
+    };
+  }
 
   /* ================== Dé-duplication & priorités ================== */
 
@@ -514,13 +622,18 @@ export default function ClotureCaisse() {
 
   const ecart = useMemo(() => round2(physical - totals.solde), [physical, totals.solde]);
 
-  /* ================= Draft auto-save for current day ================= */
+  /* ================= Draft auto-save (dans closuresDrafts) ================= */
 
-  // Draft totals, ops summary when ops/totals change (if not validated)
+  const summarizeCauses = (arr) => {
+    const map = {};
+    arr.forEach((o) => { map[o.cause] = (map[o.cause] || 0) + 1; });
+    return Object.keys(map).map((k) => `${k} ×${map[k]}`);
+  };
+
+  // Enregistrer le brouillon (autorisé par règle par défaut /{sub=**})
   useEffect(() => {
-    if (!closureDocRef || closure?.status === "validated" || loading || busy || ops.length === 0) return;
-
-    setDoc(closureDocRef, {
+    if (!draftDocRef || loading || ops.length === 0) return;
+    const payload = {
       dateId: todayId(),
       totals,
       count: ops.length,
@@ -533,68 +646,58 @@ export default function ClotureCaisse() {
         source: o.source,
         refId: o.refId,
       })),
-      updatedAt: new Date(),
-    }, { merge: true }).catch((e) => console.error("[draft totals] ", e));
-  }, [ops, totals, closureDocRef, loading, busy, closure?.status]);
-
-  // Draft physicalCash when changed (if not validated)
-  useEffect(() => {
-    if (!closureDocRef || closure?.status === "validated" || busy || !physicalCash) return;
-
-    updateDoc(closureDocRef, {
       physicalCash: physical,
       updatedAt: new Date(),
-    }).catch((e) => console.error("[draft physical] ", e));
-  }, [physical, closureDocRef, busy, closure?.status, physicalCash]);
+      createdAt: Timestamp.now(), // brouillon: libre
+    };
+    setDoc(draftDocRef, payload, { merge: true }).catch((e) =>
+      console.error("[draft save] ", e)
+    );
+  }, [ops, totals, physical, draftDocRef, loading]);
 
   /* ================= Actions: Valider / Annuler ================= */
 
-  const validated = closure?.status === "validated";
-
-  const summarizeCauses = (arr) => {
-    const map = {};
-    arr.forEach((o) => {
-      map[o.cause] = (map[o.cause] || 0) + 1;
-    });
-    return Object.keys(map).map((k) => `${k} ×${map[k]}`);
-  };
+  const validated = !!closure;
 
   const handleValidate = useCallback(async () => {
     if (!closureDocRef) return;
     setBusy(true);
     try {
       const snap = await getDoc(closureDocRef);
-      if (snap.exists() && snap.data()?.status === "validated") {
+      if (snap.exists()) {
         alert("La clôture du jour est déjà validée.");
         return;
       }
-      await setDoc(
-        closureDocRef,
-        {
-          status: "validated",
-          dateId: todayId(),
-          totals,
-          count: ops.length,
-          causes: summarizeCauses(ops), // écrit des chaînes (pas d’objets)
-          validatedAt: new Date(),
-          validatedBy: user?.email || user?.uid || "system",
-          physicalCash: physical,
-          ecart,
-          sample: ops.slice(0, 50).map((o) => ({
-            at: toDateObj(o.at)?.getTime() || null,
-            direction: o.direction,
-            amount: toNum(o.amount),
-            cause: o.cause,
-            source: o.source,
-            refId: o.refId,
-          })),
-        },
-        { merge: true }
-      );
+
+      // CREATE (conforme aux règles) — createdAt = serverTimestamp() pour sameDay(resource.data.createdAt)
+      const payload = {
+        status: "validated",
+        dateId: todayId(),
+        totals,
+        count: ops.length,
+        causes: summarizeCauses(ops),
+        validatedAt: serverTimestamp(),
+        validatedBy: user?.email || user?.uid || "system",
+        physicalCash: physical,
+        ecart,
+        sample: ops.slice(0, 50).map((o) => ({
+          at: toDateObj(o.at)?.getTime() || null,
+          direction: o.direction,
+          amount: toNum(o.amount),
+          cause: o.cause,
+          source: o.source,
+          refId: o.refId,
+        })),
+        // IMPORTANT pour la règle delete: sameDay(resource.data.createdAt)
+        createdAt: serverTimestamp(),
+      };
+
+      await setDoc(closureDocRef, payload);
+
       try {
         await addDoc(collection(db, "societe", societeId, "caisseMovementsHistory"), {
           dateId: todayId(),
-          at: new Date(),
+          at: serverTimestamp(),
           action: "validate",
           totals,
           physical,
@@ -602,6 +705,7 @@ export default function ClotureCaisse() {
           by: user?.email || user?.uid || "system",
         });
       } catch {}
+
       alert("✅ Clôture validée avec succès !");
     } catch (e) {
       console.error("[validate] ", e);
@@ -618,23 +722,23 @@ export default function ClotureCaisse() {
     setBusy(true);
     try {
       const snap = await getDoc(closureDocRef);
-      if (!snap.exists() || snap.data()?.status !== "validated") {
+      if (!snap.exists()) {
         alert("Aucune validation à annuler pour aujourd'hui.");
         return;
       }
-      await updateDoc(closureDocRef, {
-        status: "canceled",
-        canceledAt: new Date(),
-        canceledBy: user?.email || user?.uid || "system",
-      });
+
+      // Règles: delete autorisé le même jour si sameDay(resource.data.createdAt)
+      await deleteDoc(closureDocRef);
+
       try {
         await addDoc(collection(db, "societe", societeId, "caisseMovementsHistory"), {
           dateId: todayId(),
-          at: new Date(),
+          at: serverTimestamp(),
           action: "cancel_validation",
           by: user?.email || user?.uid || "system",
         });
       } catch {}
+
       alert("✅ Validation annulée avec succès !");
     } catch (e) {
       console.error("[cancel validate] ", e);
@@ -659,7 +763,7 @@ export default function ClotureCaisse() {
         </div>
       </div>
 
-      {/* Tabs Navigation */}
+      {/* Tabs */}
       <div style={styles.tabsContainer}>
         <button
           onClick={() => setActiveTab("today")}
@@ -684,8 +788,8 @@ export default function ClotureCaisse() {
         <TodayView
           totals={totals}
           physical={physical}
-          physicalCash={physicalCash}
-          setPhysicalCash={setPhysicalCash}
+          physicalCashInput={physicalCashInput}
+          setPhysicalCashInput={setPhysicalCashInput}
           ecart={ecart}
           validated={validated}
           busy={busy}
@@ -713,8 +817,8 @@ export default function ClotureCaisse() {
 function TodayView({
   totals,
   physical,
-  physicalCash,
-  setPhysicalCash,
+  physicalCashInput,
+  setPhysicalCashInput,
   ecart,
   validated,
   busy,
@@ -726,6 +830,24 @@ function TodayView({
   expandRemises,
   setExpandRemises,
 }) {
+  // accepte . et ,
+  const handleCashChange = (e) => {
+    const raw = e.target.value;
+    const cleaned = raw.replace(/[^0-9 ,.\-]/g, "");
+    setPhysicalCashInput(cleaned);
+  };
+  const handleCashKeyDown = (e) => {
+    if (e.key === ",") {
+      e.preventDefault();
+      const el = e.currentTarget;
+      const start = el.selectionStart ?? el.value.length;
+      const end = el.selectionEnd ?? el.value.length;
+      const next = el.value.slice(0, start) + "." + el.value.slice(end);
+      setPhysicalCashInput(next);
+      setTimeout(() => el.setSelectionRange(start + 1, start + 1), 0);
+    }
+  };
+
   return (
     <div style={styles.content}>
       {validated && (
@@ -754,16 +876,16 @@ function TodayView({
             <span style={styles.cashTitle}>Caisse Physique Comptée</span>
           </div>
           <input
-            type="number"
-            step="0.01"
+            type="text"
             inputMode="decimal"
-            value={physicalCash}
-            onChange={(e) => setPhysicalCash(e.target.value)}
-            placeholder="Ex: 1520.00"
+            pattern="[0-9]*[.,]?[0-9]*"
+            value={physicalCashInput}
+            onChange={handleCashChange}
+            onKeyDown={handleCashKeyDown}
+            placeholder="Ex: 1520,00 ou 1520.00"
             style={styles.cashInput}
             disabled={validated}
           />
-          <div style={styles.cashHint}>Entrez le montant compté dans la caisse</div>
         </div>
 
         <div style={styles.ecartCard(ecart)}>
@@ -772,8 +894,7 @@ function TodayView({
             <span style={styles.ecartTitle}>Écart</span>
           </div>
           <div style={styles.ecartValue(ecart)}>
-            {ecart >= 0 ? "+" : ""}
-            {ecart.toFixed(2)} DHS
+            {ecart >= 0 ? "+" : ""}{ecart.toFixed(2)} DHS
           </div>
           <div style={styles.ecartLabel}>
             {ecart === 0 ? "Parfait ! Aucun écart" : ecart > 0 ? "Excédent dans la caisse" : "Manque dans la caisse"}
@@ -795,7 +916,7 @@ function TodayView({
             onClick={handleCancelValidation}
             disabled={busy}
             style={styles.btnCancel(busy)}
-            title="Annuler la validation de la clôture"
+            title="Annuler la validation de la clôture (suppression autorisée le même jour)"
           >
             <span style={styles.btnIcon}>↩️</span>
             {busy ? "Annulation..." : "Annuler la validation"}
@@ -861,7 +982,7 @@ function TodayView({
                               <button
                                 type="button"
                                 onClick={() => setExpandRemises((v) => !v)}
-                                title="Afficher les ventes avec remises"
+                                title="Afficher les ventes avec remises (ventes directes + crédits réglés)"
                                 style={styles.detailsBtn(expandRemises)}
                               >
                                 {expandRemises ? "▼ Détails remises" : "▶ Détails remises"}
@@ -890,7 +1011,7 @@ function TodayView({
                                     width: "100%",
                                     borderCollapse: "separate",
                                     borderSpacing: 0,
-                                    minWidth: 700,
+                                    minWidth: 780,
                                     background: "white",
                                     borderWidth: 1,
                                     borderStyle: "solid",
@@ -903,10 +1024,11 @@ function TodayView({
                                     <tr style={{ background: "#f3f4f6" }}>
                                       <th style={subTh}>Heure</th>
                                       <th style={subTh}>Client</th>
-                                      <th style={subTh}>Brut</th>
-                                      <th style={subTh}>Remise</th>
-                                      <th style={subTh}>Net</th>
-                                      <th style={subTh}>% Remise</th>
+                                      <th style={subTh}>Type</th>
+                                      <th style={subThRight}>Brut</th>
+                                      <th style={subThRight}>Remise</th>
+                                      <th style={subThRight}>Net</th>
+                                      <th style={subThRight}>% Remise</th>
                                     </tr>
                                   </thead>
                                   <tbody>
@@ -914,6 +1036,9 @@ function TodayView({
                                       <tr key={r.id} style={{ borderBottom: "1px solid #f1f5f9", background: idx % 2 ? "#ffffff" : "#fafafa" }}>
                                         <td style={subTd}>{fmtTime(r.at)}</td>
                                         <td style={{ ...subTd, fontWeight: 600 }}>{String(r.client || "-")}</td>
+                                        <td style={{ ...subTd, fontSize: 12, opacity: 0.8 }}>
+                                          {r.type || "Vente directe"}
+                                        </td>
                                         <td style={subTdRight}>{r.brut.toFixed(2)} DHS</td>
                                         <td style={{ ...subTdRight, color: "#b91c1c", fontWeight: 700 }}>- {r.remise.toFixed(2)} DHS</td>
                                         <td style={{ ...subTdRight, color: "#065f46", fontWeight: 700 }}>{r.net.toFixed(2)} DHS</td>
@@ -929,7 +1054,7 @@ function TodayView({
                                       const pct   = tBrut > 0 ? (tRem / tBrut) * 100 : 0;
                                       return (
                                         <tr style={{ background: "#f9fafb", fontWeight: 800 }}>
-                                          <td style={subTf} colSpan={2}>TOTAL</td>
+                                          <td style={subTf} colSpan={3}>TOTAL</td>
                                           <td style={subTfRight}>{tBrut.toFixed(2)} DHS</td>
                                           <td style={{ ...subTfRight, color: "#b91c1c" }}>- {tRem.toFixed(2)} DHS</td>
                                           <td style={{ ...subTfRight, color: "#065f46" }}>{tNet.toFixed(2)} DHS</td>
@@ -1014,9 +1139,9 @@ function HistoryView({ closureHistory, expandedDay, setExpandedDay }) {
 
 function HistoryCard({ day, expanded, onToggle }) {
   const isValidated = day.status === "validated";
-  const isCanceled = day.status === "canceled";
+  const isCanceled = day.status === "canceled"; // (pas utilisé ici, laissé pour compat)
 
-  const causesSafe = normalizeCauses(day.causes || []); // 🛡️ affichage sûr
+  const causesSafe = normalizeCauses(day.causes || []);
 
   return (
     <div style={styles.historyCard}>
@@ -1077,8 +1202,7 @@ function HistoryCard({ day, expanded, onToggle }) {
                   day.ecart === 0 ? "#10b981" : day.ecart > 0 ? "#3b82f6" : "#ef4444"
                 )}
               >
-                {day.ecart >= 0 ? "+" : ""}
-                {day.ecart?.toFixed?.(2) || "0.00"} DHS
+                {day.ecart >= 0 ? "+" : ""}{day.ecart?.toFixed?.(2) || "0.00"} DHS
               </div>
             </div>
           </div>
@@ -1144,7 +1268,6 @@ const styles = {
   cashIcon: { fontSize: 20 },
   cashTitle: { fontWeight: 800 },
   cashInput: { width: "100%", borderWidth: 1, borderStyle: "solid", borderColor: "#e5e7eb", borderRadius: 10, padding: "10px 12px", fontWeight: 800, fontSize: 16 },
-  cashHint: { fontSize: 12, color: "#6b7280", marginTop: 6 },
 
   ecartCard: (ecart) => ({ borderWidth: 1, borderStyle: "solid", borderColor: "#e5e7eb", borderRadius: 12, padding: 12, background: ecart === 0 ? "#ecfeff" : ecart > 0 ? "#eff6ff" : "#fff7ed" }),
   ecartHeader: { display: "flex", alignItems: "center", gap: 8, marginBottom: 8 },
@@ -1263,6 +1386,7 @@ const styles = {
 
 /* Sous-table remises: mini styles */
 const subTh = { textAlign: "left", padding: "8px 10px", borderBottom: "2px solid #e5e7eb", fontWeight: 800, fontSize: 12, color: "#64748b" };
+const subThRight = { ...subTh, textAlign: "right" };
 const subTd = { padding: "8px 10px", fontSize: 13, color: "#111827" };
 const subTdRight = { ...subTd, textAlign: "right", fontWeight: 800 };
 const subTf = { padding: "10px 10px", borderTop: "2px solid #e5e7eb", color: "#111827" };
@@ -1277,13 +1401,7 @@ function StatCard({ icon, label, value, color, bgColor, highlighted, isCount }) 
         <span style={{ fontSize: 18 }}>{icon}</span>
         <span style={{ fontWeight: 800, color: "#111827" }}>{label}</span>
       </div>
-      <div
-        style={{
-          fontWeight: 900,
-          color: highlighted ? "#111827" : color,
-          fontSize: isCount ? 18 : 20,
-        }}
-      >
+      <div style={{ fontWeight: 900, color: highlighted ? "#111827" : color, fontSize: isCount ? 18 : 20 }}>
         {isCount ? value : `${Number(value || 0).toFixed(2)} DHS`}
       </div>
     </div>
@@ -1301,9 +1419,7 @@ function formatDateLong(d) {
   try {
     const dt = toDateObj(d) || new Date();
     return dt.toLocaleDateString("fr-FR", { weekday: "long", year: "numeric", month: "long", day: "numeric" });
-  } catch {
-    return "-";
-  }
+  } catch { return "-"; }
 }
 function formatDateTime(d) {
   const dt = toDateObj(d);

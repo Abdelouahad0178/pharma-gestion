@@ -17,6 +17,7 @@ import {
   setDoc,
   runTransaction,
   addDoc,
+  updateDoc,
 } from "firebase/firestore";
 
 const ITEMS_PER_PAGE = 50;
@@ -442,7 +443,6 @@ const Pagination = memo(({ currentPage, totalPages, onPageChange }) => {
     </div>
   );
 });
-
 Pagination.displayName = "Pagination";
 
 /* 🆕 ===================== COMPOSANT VENTE ROW MÉMOÏSÉ ===================== */
@@ -454,7 +454,8 @@ const VenteRow = memo(({
   onViewDetails,
   onEdit,
   onPrint,
-  onDelete
+  onDelete,
+  onSyncPaiement
 }) => {
   const total =
     vente.montantTotal ||
@@ -491,7 +492,14 @@ const VenteRow = memo(({
       </td>
       <td style={{ padding: 16, borderRight: "1px solid #f1f5f9" }}>
         <div style={{ fontWeight: 600, fontSize: 15, color: "#1f2937", marginBottom: 3 }}>{vente.client}</div>
-        <div style={{ fontSize: 11, color: "#6b7280", background: "#f8fafc", padding: "2px 7px", borderRadius: 8, display: "inline-block" }}>{vente.modePaiement || "Espèces"}</div>
+        <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+          <div style={{ fontSize: 11, color: "#6b7280", background: "#f8fafc", padding: "2px 7px", borderRadius: 8, display: "inline-block" }}>{vente.modePaiement || "Espèces"}</div>
+          {safeNumber(vente.montantPaye) > 0 && (
+            <div title="Montant payé cumulé" style={{ fontSize: 10, color: "#166534", background: "#dcfce7", padding: "2px 7px", borderRadius: 8 }}>
+              payé: {safeToFixed(vente.montantPaye)} DH
+            </div>
+          )}
+        </div>
       </td>
       <td style={{ padding: 16, textAlign: "center", borderRight: "1px solid #f1f5f9" }}>
         <div style={{ fontSize: 13, fontWeight: 600, color: "#374151" }}>{formatDateSafe(vente.date)}</div>
@@ -517,17 +525,17 @@ const VenteRow = memo(({
         <div style={{ fontSize: 15, fontWeight: 700, color: "#16a34a" }}>{safeToFixed(total)} DHS</div>
       </td>
       <td style={{ padding: 16, textAlign: "center" }}>
-        <div style={{ display: "flex", gap: 8, justifyContent: "center" }}>
+        <div style={{ display: "flex", gap: 8, justifyContent: "center", flexWrap: "wrap" }}>
           <span onClick={() => onViewDetails(vente)} style={{ cursor: "pointer", fontSize: 17 }} title="Voir les détails">👁️</span>
           <span onClick={() => onEdit(vente)} style={{ cursor: "pointer", fontSize: 17 }} title="Modifier">✏️</span>
           <span onClick={() => onPrint(vente)} style={{ cursor: "pointer", fontSize: 17 }} title="Imprimer">🖨️</span>
           <span onClick={() => onDelete(vente)} style={{ cursor: "pointer", fontSize: 17 }} title="Supprimer (stock restauré auto)">🗑️</span>
+          <span onClick={() => onSyncPaiement(vente)} style={{ cursor: "pointer", fontSize: 17 }} title="Resynchroniser statut et mode depuis les paiements">🔄</span>
         </div>
       </td>
     </tr>
   );
 });
-
 VenteRow.displayName = "VenteRow";
 
 /* ======================================================
@@ -786,7 +794,6 @@ export default function Ventes() {
       if (!item.barcode) item.barcode = findAnyBarcode(lot);
     });
 
-    // 🆕 FILTRE : Ne garder que les médicaments avec quantiteTotal > 0
     return Array.from(map.values())
       .filter((m) => m.quantiteTotal > 0)
       .sort((a, b) => a.nom.localeCompare(b.nom));
@@ -1186,7 +1193,7 @@ Le stock sera automatiquement restauré pour tous les articles de cette vente.`)
     try {
       await ensureMembership(user, societeId);
 
-      // ✅ CORRECTION : Faire TOUTES les lectures AVANT la transaction
+      // ✅ TOUTES les lectures AVANT la transaction
       const arts = vente.articles || [];
       
       // 1️⃣ Préparer toutes les lectures de lots
@@ -1219,7 +1226,7 @@ Le stock sera automatiquement restauré pour tous les articles de cette vente.`)
         paiementsPromise
       ]);
 
-      // 4️⃣ Maintenant faire la transaction avec SEULEMENT des écritures
+      // 4️⃣ Transaction (écritures seulement)
       await runTransaction(db, async (transaction) => {
         // Restaurer le stock pour chaque lot
         lotReads.forEach(({ lotRef, lotSnap, article }) => {
@@ -1283,7 +1290,7 @@ Le stock sera automatiquement restauré pour tous les articles de cette vente.`)
     } finally {
       setIsSaving(false);
     }
-  }, [societeId, beepSuccess, beepError, user, logActivity, active]);
+  }, [societeId, beepSuccess, beepError, user, active, logActivity]);
 
   const handleViewDetails = useCallback((vente) => {
     if (!active) return;
@@ -1396,7 +1403,7 @@ Le stock sera automatiquement restauré pour tous les articles de cette vente.`)
     setShowFinalizationSection(false);
   }, []);
 
-  /* ===================== Scan (douchette) seulement si actif ===================== */
+  /* ===================== Scan (douchette) ===================== */
   const onBarcodeDetected = useCallback((barcode) => {
     if (!active) return;
     try {
@@ -1460,6 +1467,66 @@ Le stock sera automatiquement restauré pour tous les articles de cette vente.`)
     window.addEventListener("keydown", onKeyDown);
     return () => { window.removeEventListener("keydown", onKeyDown); clearTimeout(state.timer); };
   }, [onBarcodeDetected, active]);
+
+  /* ===================== 🆕 Sync Paiements → Vente ===================== */
+  const syncPaiementFromPaiements = useCallback(async (vente) => {
+    if (!active || !societeId) return;
+    try {
+      const snap = await getDocs(
+        query(
+          collection(db, "societe", societeId, "paiements"),
+          where("type", "==", "ventes"),
+          where("docId", "==", vente.id),
+          orderBy("date", "desc")
+        )
+      );
+
+      let totalPaye = 0;
+      let lastMode = "";
+      let lastPaidAt = null;
+
+      const rows = [];
+      snap.forEach((d) => rows.push({ id: d.id, ...d.data() }));
+
+      rows.forEach((p) => {
+        totalPaye += safeNumber(p.montant);
+      });
+
+      if (rows.length > 0) {
+        const last = rows[0];
+        lastMode = (last.mode || "").trim();
+        lastPaidAt = last.date || Timestamp.now();
+      }
+
+      const total = safeNumber(vente.montantTotal);
+      const EPS = 0.01;
+      let statut = "impayé";
+      if (totalPaye >= total - EPS && total > 0) statut = "payé";
+      else if (totalPaye > EPS && totalPaye < total - EPS) statut = "partiel";
+
+      const updates = {
+        statutPaiement: statut,
+        montantPaye: totalPaye,
+        lastPaidMode: lastMode || null,
+        lastPaidAt: lastPaidAt || Timestamp.now(),
+        updatedAt: Timestamp.now(),
+      };
+
+      // Règle métier : si la vente devient "payé" et que le dernier paiement est en "Espèces", forcer modePaiement = "Espèces"
+      if (statut === "payé" && String(lastMode).toLowerCase().includes("esp")) {
+        updates.modePaiement = "Espèces";
+      }
+
+      await updateDoc(doc(db, "societe", societeId, "ventes", vente.id), updates);
+
+      setSuccess(`Statut synchronisé (${statut}${updates.modePaiement ? " • " + updates.modePaiement : ""})`);
+      setTimeout(() => setSuccess(""), 2000);
+    } catch (e) {
+      console.error("Sync paiement → vente:", e);
+      setError("Impossible de resynchroniser depuis les paiements.");
+      setTimeout(() => setError(""), 2500);
+    }
+  }, [societeId, active]);
 
   /* ===================== Rendu ===================== */
   if (waiting) {
@@ -1748,7 +1815,7 @@ Le stock sera automatiquement restauré pour tous les articles de cette vente.`)
                         <th style={{ padding: 10, textAlign: "left", fontWeight: 600, fontSize: 12 }}>Produit / Traçabilité</th>
                         <th style={{ padding: 10, textAlign: "center", fontWeight: 600, fontSize: 12 }}>Qté</th>
                         <th style={{ padding: 10, textAlign: "right", fontWeight: 600, fontSize: 12 }}>Prix unit.</th>
-                        <th style={{ padding: 10, textAlign: "right", fontWeight: 600, fontSize: 12 }}>Remise</th>
+                        <th style={{ padding: 10, textAlign:  "right", fontWeight: 600, fontSize: 12 }}>Remise</th>
                         <th style={{ padding: 10, textAlign: "right", fontWeight: 600, fontSize: 12 }}>Total</th>
                         <th style={{ padding: 10, textAlign: "center", fontWeight: 600, fontSize: 12, width: 60 }}>Action</th>
                       </tr>
@@ -1950,7 +2017,7 @@ Le stock sera automatiquement restauré pour tous les articles de cette vente.`)
                 <th style={{ padding: 16, textAlign:  "center", fontWeight: 700, fontSize: 13, borderRight: "1px solid rgba(255,255,255,0.1)" }}>ARTICLES / STOCK / SYNC</th>
                 <th style={{ padding: 16, textAlign: "center", fontWeight: 700, fontSize: 13, borderRight: "1px solid rgba(255,255,255,0.1)" }}>STATUT</th>
                 <th style={{ padding: 16, textAlign: "right", fontWeight: 700, fontSize: 13, borderRight: "1px solid rgba(255,255,255,0.1)" }}>TOTAL</th>
-                <th style={{ padding: 16, textAlign: "center", fontWeight: 700, fontSize: 13, width: 220 }}>ACTIONS</th>
+                <th style={{ padding: 16, textAlign: "center", fontWeight: 700, fontSize: 13, width: 260 }}>ACTIONS</th>
               </tr>
             </thead>
             <tbody>
@@ -1978,6 +2045,7 @@ Le stock sera automatiquement restauré pour tous les articles de cette vente.`)
                     onEdit={handleEditVente}
                     onPrint={handlePrintVente}
                     onDelete={handleDeleteVente}
+                    onSyncPaiement={syncPaiementFromPaiements}
                   />
                 ))
               )}
@@ -2036,6 +2104,12 @@ Le stock sera automatiquement restauré pour tous les articles de cette vente.`)
                 <h4 style={{margin:"0 0 4px",color:"#065f46",fontSize:13,fontWeight:600}}>Total</h4>
                 <p style={{margin:0,fontSize:15,fontWeight:800,color:"#1f2937"}}>{safeToFixed(selectedVente?.montantTotal)} DHS</p>
               </div>
+              {safeNumber(selectedVente?.montantPaye) > 0 && (
+                <div style={{background:"linear-gradient(135deg,#dcfce7,#bbf7d0)",borderRadius:12,padding:14}}>
+                  <h4 style={{margin:"0 0 4px",color:"#166534",fontSize:13,fontWeight:700}}>Payé</h4>
+                  <p style={{margin:0,fontSize:15,fontWeight:800,color:"#166534"}}>{safeToFixed(selectedVente?.montantPaye)} DHS</p>
+                </div>
+              )}
             </div>
 
             <h3 style={{margin:"0 0 10px",fontSize:"clamp(15px, 2.2vw, 18px)",fontWeight:600,color:"#374151"}}>
@@ -2111,6 +2185,8 @@ Le stock sera automatiquement restauré pour tous les articles de cette vente.`)
             </div>
 
             <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", flexWrap: "wrap" }}>
+              <button onClick={() => { syncPaiementFromPaiements(selectedVente); }}
+                      style={{background:"linear-gradient(135deg,#059669,#10b981)",color:"white",border:"none",padding:"9px 16px",borderRadius:9,fontSize:13,fontWeight:700,cursor:"pointer"}}>🔄 Sync paiement</button>
               <button onClick={() => { setShowDetails(false); handleEditVente?.(selectedVente); }}
                       style={{background:"linear-gradient(135deg,#f59e0b,#d97706)",color:"white",border:"none",padding:"9px 16px",borderRadius:9,fontSize:13,fontWeight:600,cursor:"pointer"}}>Modifier</button>
               <button onClick={() => { setShowDetails(false); handlePrintVente?.(selectedVente); }}
