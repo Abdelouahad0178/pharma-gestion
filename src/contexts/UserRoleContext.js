@@ -1,5 +1,5 @@
-// src/contexts/UserRoleContext.js — VERSION AVEC AUTO-PROVISION (setDoc d'abord)
-// Logique inversée : la vendeuse a TOUS les droits par défaut (sauf retraits explicites)
+// src/contexts/UserRoleContext.js — VERSION SANS OVERRIDES
+// Logique inversée conservée : la vendeuse a TOUS les droits par défaut (sauf retraits explicites)
 
 import React, {
   createContext,
@@ -10,13 +10,7 @@ import React, {
   useMemo,
 } from "react";
 import { getAuth, onAuthStateChanged } from "firebase/auth";
-import {
-  doc,
-  getDoc,
-  onSnapshot,
-  setDoc,
-  serverTimestamp,
-} from "firebase/firestore";
+import { doc, getDoc, onSnapshot } from "firebase/firestore";
 import { db, disableFirestoreNetwork, enableFirestoreNetwork } from "../firebase/config";
 
 import permissions, {
@@ -32,41 +26,6 @@ export function useUserRole() {
     throw new Error("useUserRole doit être utilisé dans un UserRoleProvider");
   }
   return context;
-}
-
-/* ============================================================
-   AUTO-PROVISION : crée/patch users/{uid} sans lecture préalable
-   (moins d'évaluations de règles -> moins d'erreurs 403)
-============================================================ */
-async function ensureUserDoc(firebaseUser) {
-  if (!firebaseUser?.uid) return null;
-
-  const ref = doc(db, "users", firebaseUser.uid);
-  const defaults = {
-    role: "docteur",        // ou "vendeuse" si tu préfères
-    societeId: null,        // pourra être rempli ensuite via l'UI
-    isOwner: false,
-    active: true,
-    locked: false,
-    deleted: false,
-    email: firebaseUser.email || null,
-    displayName: firebaseUser.displayName || null,
-    removedPermissions: [],
-    createdAt: serverTimestamp(),   // si doc existait déjà, Firestore garde l’ancienne valeur
-    updatedAt: serverTimestamp(),
-  };
-
-  // 1) Écrire d’abord (CREATE ou UPDATE “soi-même”) — autorisé par tes règles
-  await setDoc(ref, defaults, { merge: true });
-
-  // 2) Lire ensuite (maintenant que le doc existe/est patché)
-  try {
-    const snap = await getDoc(ref);
-    return snap.exists() ? snap.data() : defaults;
-  } catch (e) {
-    console.error("[ensureUserDoc] getDoc after setDoc failed:", e);
-    return defaults; // on continue quand même avec des valeurs sûres
-  }
 }
 
 export function UserRoleProvider({ children }) {
@@ -100,9 +59,6 @@ export function UserRoleProvider({ children }) {
   const currentRoleRef = useRef(null);
   const currentUserRef = useRef(null);
 
-  // Flag: on autorise l’accès pendant l’auto-provision
-  const [provisioning, setProvisioning] = useState(false);
-
   // Utilitaire : reset réseau si "Target ID already exists"
   const tryRecoverWatchError = async (err) => {
     const msg = String(err?.message || "");
@@ -111,7 +67,9 @@ export function UserRoleProvider({ children }) {
         await disableFirestoreNetwork();
         await new Promise((resolve) => setTimeout(resolve, 100));
         await enableFirestoreNetwork();
-      } catch { /* noop */ }
+      } catch {
+        /* noop */
+      }
     }
   };
 
@@ -145,13 +103,10 @@ export function UserRoleProvider({ children }) {
         setPaymentWarning(null);
         setSocieteName(null);
         setRemovedPermissions([]);
-        setProvisioning(false);
-
         currentUserIdRef.current = null;
         currentSocieteIdRef.current = null;
         currentRoleRef.current = null;
         currentUserRef.current = null;
-
         setLoading(false);
         return;
       }
@@ -165,22 +120,19 @@ export function UserRoleProvider({ children }) {
       currentUserIdRef.current = firebaseUser.uid;
 
       try {
-        // 👉 Auto-provision AVANT d’écouter le doc
-        setProvisioning(true);
-        await ensureUserDoc(firebaseUser);
-        setProvisioning(false);
-
         const userRef = doc(db, "users", firebaseUser.uid);
 
         userUnsubRef.current = onSnapshot(
           userRef,
           (snap) => {
+            let base;
+
             if (snap.exists()) {
               const data = snap.data() || {};
               const userRole = (data.role || "vendeuse").toLowerCase();
 
               const normalizedRemoved = normalizePermissions(data.removedPermissions || []);
-              const applied = {
+              base = {
                 uid: firebaseUser.uid,
                 email: firebaseUser.email || "",
                 displayName: firebaseUser.displayName || "",
@@ -193,36 +145,21 @@ export function UserRoleProvider({ children }) {
                 adminPopup: data.adminPopup || null,
                 paymentWarning: data.paymentWarning || null,
                 removedPermissions: normalizedRemoved,
-                // champs auth
+                // on conserve les champs du user auth
                 ...firebaseUser,
               };
-
-              // Répercute dans les states
-              setRole(applied.role || null);
-              setSocieteId(applied.societeId || null);
-              setIsLocked(!!applied.locked);
-              setIsDeleted(!!applied.deleted);
-              setIsOwner(!!applied.isOwner);
-              setIsActive(applied.active !== false);
-              setAdminPopup(applied.adminPopup || null);
-              setPaymentWarning(applied.paymentWarning || null);
-              setRemovedPermissions(normalizePermissions(applied.removedPermissions || []));
-
-              currentRoleRef.current = applied.role || null;
-              currentUserRef.current = applied;
-              setUser(applied);
-              setLoading(false);
             } else {
-              // Course condition rare : reprovision + laisser entrer
-              console.info(`[UserRoleContext] Doc utilisateur manquant -> fallback "docteur" + provisioning`);
-              setProvisioning(true);
-              ensureUserDoc(firebaseUser).finally(() => setProvisioning(false));
+              // Document utilisateur absent → valeurs par défaut DOCTEUR
+              const defaultRole = "docteur";
+              console.warn(
+                `[UserRoleContext] Pas de document pour ${firebaseUser.uid} - Rôle par défaut: ${defaultRole}`
+              );
 
-              const applied = {
+              base = {
                 uid: firebaseUser.uid,
                 email: firebaseUser.email || "",
                 displayName: firebaseUser.displayName || "",
-                role: "docteur",
+                role: defaultRole,
                 societeId: null,
                 locked: false,
                 deleted: false,
@@ -233,25 +170,29 @@ export function UserRoleProvider({ children }) {
                 removedPermissions: [],
                 ...firebaseUser,
               };
-
-              setRole(applied.role);
-              setSocieteId(applied.societeId);
-              setIsLocked(false);
-              setIsDeleted(false);
-              setIsOwner(false);
-              setIsActive(true);
-              setRemovedPermissions([]);
-              currentRoleRef.current = applied.role;
-              currentUserRef.current = applied;
-              setUser(applied);
-              setLoading(false);
             }
+
+            // Répercute dans les states (plus d'overrides)
+            setRole(base.role || null);
+            setSocieteId(base.societeId || null);
+            setIsLocked(!!base.locked);
+            setIsDeleted(!!base.deleted);
+            setIsOwner(!!base.isOwner);
+            setIsActive(base.active !== false);
+            setAdminPopup(base.adminPopup || null);
+            setPaymentWarning(base.paymentWarning || null);
+            setRemovedPermissions(normalizePermissions(base.removedPermissions || []));
+
+            currentRoleRef.current = base.role || null;
+            currentUserRef.current = base;
+            setUser(base);
+            setLoading(false);
           },
           async (error) => {
             console.error("[UserRoleContext] Erreur listener user:", error);
 
-            // Fallback docteur + accès autorisé
-            const applied = {
+            // Fallback docteur (sans override)
+            const base = {
               uid: firebaseUser.uid,
               email: firebaseUser.email || "",
               displayName: firebaseUser.displayName || "",
@@ -266,26 +207,28 @@ export function UserRoleProvider({ children }) {
               removedPermissions: [],
               ...firebaseUser,
             };
-            setRole(applied.role);
-            setSocieteId(applied.societeId);
-            setIsLocked(false);
-            setIsDeleted(false);
-            setIsOwner(false);
-            setIsActive(true);
-            setRemovedPermissions([]);
-            currentRoleRef.current = applied.role;
-            currentUserRef.current = applied;
-            setUser(applied);
+
+            setRole(base.role);
+            setSocieteId(base.societeId || null);
+            setIsLocked(!!base.locked);
+            setIsDeleted(!!base.deleted);
+            setIsOwner(!!base.isOwner);
+            setIsActive(base.active !== false);
+            setAdminPopup(base.adminPopup || null);
+            setPaymentWarning(base.paymentWarning || null);
+            setRemovedPermissions(normalizePermissions(base.removedPermissions || []));
+            currentRoleRef.current = base.role;
+            currentUserRef.current = base;
+            setUser(base);
             setLoading(false);
 
             await tryRecoverWatchError(error);
           }
         );
       } catch (e) {
-        console.error("[UserRoleContext] Erreur attachement/provision:", e);
+        console.error("[UserRoleContext] Erreur attachement listener:", e);
 
-        // Fallback docteur + accès autorisé
-        const applied = {
+        const base = {
           uid: firebaseUser.uid,
           email: firebaseUser.email || "",
           displayName: firebaseUser.displayName || "",
@@ -300,16 +243,19 @@ export function UserRoleProvider({ children }) {
           removedPermissions: [],
           ...firebaseUser,
         };
-        setRole(applied.role);
-        setSocieteId(applied.societeId);
-        setIsLocked(false);
-        setIsDeleted(false);
-        setIsOwner(false);
-        setIsActive(true);
-        setRemovedPermissions([]);
-        currentRoleRef.current = applied.role;
-        currentUserRef.current = applied;
-        setUser(applied);
+
+        setRole(base.role);
+        setSocieteId(base.societeId || null);
+        setIsLocked(!!base.locked);
+        setIsDeleted(!!base.deleted);
+        setIsOwner(!!base.isOwner);
+        setIsActive(base.active !== false);
+        setAdminPopup(base.adminPopup || null);
+        setPaymentWarning(base.paymentWarning || null);
+        setRemovedPermissions(normalizePermissions(base.removedPermissions || []));
+        currentRoleRef.current = base.role;
+        currentUserRef.current = base;
+        setUser(base);
         setLoading(false);
 
         await tryRecoverWatchError(e);
@@ -351,7 +297,18 @@ export function UserRoleProvider({ children }) {
             const data = snap.data();
             setSocieteName(data?.nom || data?.name || "Société");
           } else {
-            setSocieteName("Société inconnue");
+            try {
+              const oldRef = doc(db, "societes", societeId);
+              const oldSnap = await getDoc(oldRef);
+              if (oldSnap.exists()) {
+                const d = oldSnap.data();
+                setSocieteName(d?.nom || d?.name || "Société");
+              } else {
+                setSocieteName("Société inconnue");
+              }
+            } catch {
+              setSocieteName("Société inconnue");
+            }
           }
         },
         async (err) => {
@@ -387,9 +344,6 @@ export function UserRoleProvider({ children }) {
   }, [role, isOwner, removedPermissions]);
 
   const can = (permission) => {
-    // 👉 Autoriser pendant provisioning pour ne pas bloquer l’entrée
-    if (provisioning) return true;
-
     if (isDeleted || !user || !authReady) return false;
     if (isLocked && !isOwner) return false;
     if (!isActive && !isOwner) return false;
@@ -472,9 +426,6 @@ export function UserRoleProvider({ children }) {
   const refreshCustomPermissions = refreshRemovedPermissions;
 
   const canAccessApp = () => {
-    // 👉 Autoriser pendant provisioning (pas de blocage à l’entrée)
-    if (provisioning) return true;
-
     if (!user || !authReady) return false;
     if (isDeleted) return false;
     if (!isActive && !isOwner) return false;
@@ -523,7 +474,6 @@ export function UserRoleProvider({ children }) {
   };
 
   const getBlockMessage = () => {
-    if (provisioning) return "Initialisation de votre profil...";
     if (!user || !authReady) return "Connexion en cours...";
     if (isDeleted) return "Ce compte a été supprimé par l'administrateur";
     if (!isActive && !isOwner) return "Compte désactivé par l'administrateur";
@@ -565,10 +515,6 @@ export function UserRoleProvider({ children }) {
 
   const getPermissionMessages = () => {
     const messages = [];
-    if (provisioning) {
-      messages.push({ type: "info", text: "Initialisation de votre profil..." });
-      return messages;
-    }
     if (!authReady) {
       messages.push({ type: "info", text: "Vérification des permissions en cours..." });
       return messages;

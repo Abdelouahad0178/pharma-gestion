@@ -249,7 +249,7 @@ export default function Clients(){
         box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
         max-width: 95vw;
         width: 1000px;
-        max-height: 90vh;
+        max-height: 60vh;
         display: flex;
         flex-direction: column;
         border: 1px solid rgba(99, 102, 241, 0.2);
@@ -411,7 +411,7 @@ export default function Clients(){
 
         .modal-card {
           padding: 16px;
-          max-height: 85vh;
+          max-height: 60vh;
         }
 
         .tab-button {
@@ -451,7 +451,7 @@ export default function Clients(){
 
         .modal-card {
           padding: 12px;
-          max-height: 80vh;
+          max-height: 60vh;
         }
 
         .table-grid {
@@ -1073,7 +1073,7 @@ export default function Clients(){
                   <div>
                     <label className="form-label">Téléphone (WhatsApp)</label>
                     <input className="form-input" value={form.clientPhone}
-                      onChange={(e)=>setForm(f=>({...f,clientPhone:e.target.value}))} placeholder="Ex: +2126..." />
+                      onChange={(e)=>setForm(f=>({...f,clientPhone:e.target.value}))} placeholder="Ex: 06..." />
                   </div>
                 </div>
 
