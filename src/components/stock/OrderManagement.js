@@ -14,6 +14,7 @@ import {
   orderBy,
   onSnapshot,
   Timestamp,
+  writeBatch,
 } from "firebase/firestore";
 
 /* ======================================================
@@ -46,6 +47,11 @@ const safeParseDate = (dateInput) => {
   }
 };
 
+const formatDateSafe = (dateInput) => {
+  const d = safeParseDate(dateInput);
+  return d ? d.toLocaleDateString("fr-FR") : "";
+};
+
 const normalize = (s) =>
   String(s || "")
     .normalize("NFD")
@@ -55,6 +61,42 @@ const normalize = (s) =>
 
 const encodeWhatsAppText = (t) => encodeURIComponent(t);
 const normalizePhoneForWa = (num) => (num || "").replace(/\D/g, "");
+
+/* ======================================================
+  Normalisation Stock (comme dans Ventes.js)
+====================================================== */
+const STOCK_KEYS = [
+  "stock",
+  "stockSource",
+  "originStock",
+  "stockId",
+  "stockName",
+  "stock_label",
+  "depot",
+  "magasin",
+  "source",
+];
+
+const normalizeStockValue = (val) => {
+  if (val === undefined || val === null) return "unknown";
+  if (typeof val === "number") return val === 1 ? "stock1" : val === 2 ? "stock2" : "unknown";
+  const raw = String(val).toLowerCase().replace(/[\s_\-]/g, "");
+  if (["stock1", "s1", "magasin1", "depot1", "principal", "primary", "p", "m1", "1"].includes(raw))
+    return "stock1";
+  if (["stock2", "s2", "magasin2", "depot2", "secondaire", "secondary", "s", "m2", "2"].includes(raw))
+    return "stock2";
+  return "unknown";
+};
+
+const pickDocStock = (docData) => {
+  for (const k of STOCK_KEYS) {
+    if (docData?.[k] !== undefined) {
+      const tag = normalizeStockValue(docData[k]);
+      if (tag !== "unknown") return tag;
+    }
+  }
+  return "stock1";
+};
 
 /* ======================================================
   Détection transfert (on exclut des ventes)
@@ -88,6 +130,9 @@ function extractArticleLot(a) {
 function extractArticleQty(a) {
   const q = a?.quantite ?? a?.qte ?? a?.qty ?? a?.quantity ?? a?.Quantite ?? a?.Qte ?? a?.Quantity ?? 0;
   return safeNumber(q, 0);
+}
+function extractArticleStock(a) {
+  return pickDocStock(a);
 }
 function looksLikeArticle(obj) {
   if (!obj || typeof obj !== "object") return false;
@@ -139,15 +184,29 @@ export default function OrderManagement() {
   const [searchText, setSearchText] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
 
+  // 🆕 État pour l'envoi WhatsApp en cours
+  const [sendingWhatsApp, setSendingWhatsApp] = useState(false);
+
+  // 🆕 Gestion des commerciaux
+  const [commerciaux, setCommerciaux] = useState({});
+  const [showCommercialModal, setShowCommercialModal] = useState(false);
+  const [selectedFournisseurForCommercial, setSelectedFournisseurForCommercial] = useState("");
+  const [newCommercialNom, setNewCommercialNom] = useState("");
+  const [newCommercialTel, setNewCommercialTel] = useState("");
+  const [showCommercialSelect, setShowCommercialSelect] = useState("");
+  const [selectedCommercial, setSelectedCommercial] = useState("");
+
   const ORDER_STATUS_COLL = "order_status";
   const DISMISSED_COLL = "order_dismissed";
   const MANUAL_LINES_COLL = "order_manual_lines";
+  const COMMERCIAUX_COLL = "fournisseur_commerciaux";
 
   const ventesListenerRef = useRef(null);
   const stockListenerRef = useRef(null);
   const orderStatusListenerRef = useRef(null);
   const manualLinesListenerRef = useRef(null);
   const dismissedListenerRef = useRef(null);
+  const commerciauxListenerRef = useRef(null);
 
   const isProcessingRef = useRef(false);
 
@@ -182,17 +241,19 @@ export default function OrderManagement() {
       query(collection(db, "societe", societeId, "stock_entries"), orderBy("nom")),
       (snapshot) => {
         const stockData = [];
+        const achatIdx = {};
         snapshot.forEach((docx) => {
           const data = docx.data();
-          const q = Math.max(0, safeNumber(data.quantite));
-          const s1 = Math.min(q, Math.max(0, safeNumber(data.stock1, q)));
-          const s2 = Math.max(0, q - s1);
-          stockData.push({ id: docx.id, ...data, quantite: s1 + s2, stock1: s1, stock2: s2 });
+          stockData.push({ id: docx.id, ...data });
+          const k = normalize(data.nom || "");
+          if (k) achatIdx[k] = data;
         });
         setLots(stockData);
+        setAchatsIndex(achatIdx);
       },
       (err) => {
         console.error("Erreur listener stock:", err);
+        setError("Erreur de synchronisation avec le stock");
       }
     );
   }, [societeId]);
@@ -201,26 +262,12 @@ export default function OrderManagement() {
     if (!societeId || orderStatusListenerRef.current) return;
     orderStatusListenerRef.current = onSnapshot(
       collection(db, "societe", societeId, ORDER_STATUS_COLL),
-      (snap) => {
-        const obj = {};
-        snap.forEach((d) => {
-          const st = d.data() || {};
-          obj[d.id] = {
-            sent: !!st.sent,
-            validated: !!st.validated,
-            sentAt: st.sentAt || null,
-            validatedAt: st.validatedAt || null,
-            frozenOps: Array.isArray(st.frozenOps) ? st.frozenOps : [],
-            frozenQuantity: st.frozenQuantity || 0,
-            frozenDate: st.frozenDate || null,
-            frozenRemise: st.frozenRemise || 0,
-            frozenUrgent: !!st.frozenUrgent,
-            frozenName: st.frozenName || null,
-            frozenLot: st.frozenLot || null,
-            frozenSupplier: st.frozenSupplier || null,
-          };
+      (snapshot) => {
+        const statusMap = {};
+        snapshot.forEach((docx) => {
+          statusMap[docx.id] = docx.data();
         });
-        setLineStatus(obj);
+        setLineStatus(statusMap);
       },
       (err) => {
         console.error("Erreur listener order_status:", err);
@@ -231,131 +278,88 @@ export default function OrderManagement() {
   const setupManualLinesListener = useCallback(() => {
     if (!societeId || manualLinesListenerRef.current) return;
     manualLinesListenerRef.current = onSnapshot(
-      query(collection(db, "societe", societeId, MANUAL_LINES_COLL), orderBy("createdAt", "desc")),
-      (snap) => {
-        const arr = [];
-        snap.forEach((d) => {
-          const x = d.data() || {};
-          arr.push({
-            ...x,
-            key: x.key || d.id,
-            manualId: d.id,
-            isManual: true,
-          });
+      collection(db, "societe", societeId, MANUAL_LINES_COLL),
+      (snapshot) => {
+        const lines = [];
+        snapshot.forEach((docx) => {
+          lines.push({ id: docx.id, ...docx.data() });
         });
-        setManualLines(arr);
+        setManualLines(lines);
       },
       (err) => {
-        console.error("Erreur listener order_manual_lines:", err);
+        console.error("Erreur listener manual_lines:", err);
       }
     );
   }, [societeId]);
 
-  const setupDismissedOpsListener = useCallback(() => {
+  const setupDismissedListener = useCallback(() => {
     if (!societeId || dismissedListenerRef.current) return;
     dismissedListenerRef.current = onSnapshot(
       collection(db, "societe", societeId, DISMISSED_COLL),
-      (snap) => {
-        const s = new Set();
-        snap.forEach((d) => {
-          const data = d.data();
-          if (data?.dismissed) s.add(d.id);
+      (snapshot) => {
+        const set = new Set();
+        snapshot.forEach((docx) => {
+          set.add(docx.id);
         });
-        setDismissedOps(s);
+        setDismissedOps(set);
       },
       (err) => {
-        console.error("Erreur listener order_dismissed:", err);
+        console.error("Erreur listener dismissed:", err);
       }
     );
   }, [societeId]);
 
-  const fetchFournisseurs = useCallback(async () => {
-    if (!societeId) {
-      setFournisseurs([]);
-      return;
-    }
+  const setupCommerciauxListener = useCallback(() => {
+    if (!societeId || commerciauxListenerRef.current) return;
+    commerciauxListenerRef.current = onSnapshot(
+      collection(db, "societe", societeId, COMMERCIAUX_COLL),
+      (snapshot) => {
+        const comMap = {};
+        snapshot.forEach((docx) => {
+          const data = docx.data();
+          const fName = data.fournisseur || "";
+          if (!comMap[fName]) comMap[fName] = [];
+          comMap[fName].push({ id: docx.id, ...data });
+        });
+        setCommerciaux(comMap);
+      },
+      (err) => {
+        console.error("Erreur listener commerciaux:", err);
+      }
+    );
+  }, [societeId]);
+
+  const loadFournisseurs = useCallback(async () => {
+    if (!societeId) return;
     try {
       const snap = await getDocs(collection(db, "societe", societeId, "fournisseurs"));
       const arr = [];
-      snap.forEach((d) => {
-        const data = d.data();
-        arr.push({
-          id: d.id,
-          nom: data.nom || "—",
-          commerciaux: Array.isArray(data.commerciaux) ? data.commerciaux : [],
-        });
+      snap.forEach((docx) => {
+        arr.push({ id: docx.id, ...docx.data() });
       });
-      arr.sort((a, b) => a.nom.localeCompare(b.nom));
       setFournisseurs(arr);
     } catch (e) {
-      console.error(e);
-      setFournisseurs([]);
-    }
-  }, [societeId]);
-
-  const fetchAchatsIndex = useCallback(async () => {
-    if (!societeId) {
-      setAchatsIndex({});
-      return;
-    }
-    try {
-      const snap = await getDocs(collection(db, "societe", societeId, "achats"));
-      const idx = {};
-      snap.forEach((d) => {
-        const a = d.data();
-        if (isTransferOperation(a)) return;
-        const fr = (a.fournisseur || a.fournisseurNom || "").trim();
-        const articles = Array.isArray(a.articles) ? a.articles : [];
-        articles.forEach((art) => {
-          const nom = (extractArticleName(art) || "").trim();
-          const lot = (extractArticleLot(art) || "").trim();
-          if (!nom) return;
-          const k1 = normalize(nom);
-          if (fr && !idx[k1]) idx[k1] = fr;
-          if (lot) {
-            const k2 = `${normalize(nom)}|${normalize(lot)}`;
-            if (fr && !idx[k2]) idx[k2] = fr;
-          }
-        });
-      });
-      setAchatsIndex(idx);
-    } catch (e) {
-      console.error(e);
-      setAchatsIndex({});
+      console.error("Erreur chargement fournisseurs:", e);
     }
   }, [societeId]);
 
   useEffect(() => {
-    if (!waiting) {
-      setupVentesListener();
-      setupStockListener();
-      setupOrderStatusListener();
-      setupManualLinesListener();
-      setupDismissedOpsListener();
-      fetchFournisseurs();
-      fetchAchatsIndex();
-    }
+    if (waiting) return;
+    setupVentesListener();
+    setupStockListener();
+    setupOrderStatusListener();
+    setupManualLinesListener();
+    setupDismissedListener();
+    setupCommerciauxListener();
+    loadFournisseurs();
+
     return () => {
-      if (ventesListenerRef.current) {
-        ventesListenerRef.current();
-        ventesListenerRef.current = null;
-      }
-      if (stockListenerRef.current) {
-        stockListenerRef.current();
-        stockListenerRef.current = null;
-      }
-      if (orderStatusListenerRef.current) {
-        orderStatusListenerRef.current();
-        orderStatusListenerRef.current = null;
-      }
-      if (manualLinesListenerRef.current) {
-        manualLinesListenerRef.current();
-        manualLinesListenerRef.current = null;
-      }
-      if (dismissedListenerRef.current) {
-        dismissedListenerRef.current();
-        dismissedListenerRef.current = null;
-      }
+      ventesListenerRef.current?.();
+      stockListenerRef.current?.();
+      orderStatusListenerRef.current?.();
+      manualLinesListenerRef.current?.();
+      dismissedListenerRef.current?.();
+      commerciauxListenerRef.current?.();
     };
   }, [
     waiting,
@@ -363,1180 +367,955 @@ export default function OrderManagement() {
     setupStockListener,
     setupOrderStatusListener,
     setupManualLinesListener,
-    setupDismissedOpsListener,
-    fetchFournisseurs,
-    fetchAchatsIndex,
+    setupDismissedListener,
+    setupCommerciauxListener,
+    loadFournisseurs,
   ]);
 
-  /* ================== INDEX FOURNISSEURS ================== */
-
-  const lotSupplierIndex = useMemo(() => {
-    const idx = {};
-    (lots || []).forEach((lot) => {
-      const fr = (lot.fournisseur || "").trim();
-      if (!fr) return;
-      const kNom = normalize(lot.nom);
-      if (kNom && !idx[kNom]) idx[kNom] = fr;
-      const kLot = lot.numeroLot ? `${normalize(lot.nom)}|${normalize(lot.numeroLot)}` : null;
-      if (kLot && !idx[kLot]) idx[kLot] = fr;
-    });
-    return idx;
-  }, [lots]);
-
-  const findSupplierName = useCallback(
-    (nomArt, lotArt) => {
-      const k2 = lotArt ? `${normalize(nomArt)}|${normalize(lotArt)}` : null;
-      if (k2 && lotSupplierIndex[k2]) return lotSupplierIndex[k2];
-      if (k2 && achatsIndex[k2]) return achatsIndex[k2];
-      const k1 = normalize(nomArt);
-      if (lotSupplierIndex[k1]) return lotSupplierIndex[k1];
-      if (achatsIndex[k1]) return achatsIndex[k1];
-      const partialMatchLot = Object.keys(lotSupplierIndex).find(
-        (key) => key.includes(k1) || k1.includes(key.split("|")[0])
-      );
-      if (partialMatchLot) return lotSupplierIndex[partialMatchLot];
-      const partialMatchAchat = Object.keys(achatsIndex).find(
-        (key) => key.includes(k1) || k1.includes(key.split("|")[0])
-      );
-      if (partialMatchAchat) return achatsIndex[partialMatchAchat];
-      return "";
-    },
-    [lotSupplierIndex, achatsIndex]
-  );
-
-  const findSupplierRecord = useCallback(
-    (supplierName) => {
-      if (!supplierName) return null;
-      const n = normalize(supplierName);
-      return fournisseurs.find((f) => normalize(f.nom) === n) || null;
-    },
-    [fournisseurs]
-  );
-
-  const makeKey = (nomArt, lotArt) => `${normalize(nomArt)}|${normalize(lotArt || "-")}`;
-
-  /* ================== AGRÉGATION VENTES → LIGNES À COMMANDER ================== */
-
-  const ventesAggregate = useMemo(() => {
-    const acc = {};
-    (ventes || []).forEach((v) => {
-      if (isTransferOperation(v)) return;
-      const rows = extractVenteArticles(v);
-      rows.forEach((a, idx) => {
-        const opId = `${v.id}#${idx}`;
-        if (dismissedOps.has(opId)) return;
-        const nomA = (extractArticleName(a) || "").trim();
-        if (!nomA) return;
-        const lotA = (extractArticleLot(a) || "").trim();
-        let q = extractArticleQty(a);
-        if (!Number.isFinite(q) || q <= 0) q = 1;
-
-        const key = makeKey(nomA, lotA);
-
-        if (!acc[key]) {
-          const frName = findSupplierName(nomA, lotA);
-          acc[key] = {
-            key,
-            nom: nomA,
-            numeroLot: lotA || "-",
-            fournisseur: frName || "",
-            quantite: 0,
-            sourceOps: new Set(),
-          };
-        } else if (!acc[key].fournisseur) {
-          const frName = findSupplierName(nomA, lotA);
-          if (frName) acc[key].fournisseur = frName;
-        }
-        acc[key].quantite += q;
-        acc[key].sourceOps.add(opId);
-      });
-    });
-
-    const out = {};
-    Object.keys(acc).forEach((k) => {
-      out[k] = { ...acc[k], sourceOps: Array.from(acc[k].sourceOps) };
-    });
-    return out;
-  }, [ventes, dismissedOps, findSupplierName]);
-
-  const normalizeLotNumber = (lot) => {
-    if (!lot) return "-";
-    return lot
-      .replace(/\[TRANSFERT\s+S\d+\]/gi, "")
-      .replace(/-S\d+$/i, "")
-      .replace(/-TRANSFERT.*$/i, "")
-      .trim() || "-";
-  };
-
+  /* ================== 🆕 AFFICHAGE AUTOMATIQUE DE TOUTES LES VENTES ================== */
   useEffect(() => {
     if (isProcessingRef.current) return;
     isProcessingRef.current = true;
 
-    const fromSales = Object.values(ventesAggregate);
+    try {
+      const rows = [];
+      
+      // 🆕 Afficher TOUTES les ventes automatiquement (pas seulement les manquants)
+      ventes.forEach((v) => {
+        const articles = extractVenteArticles(v);
+        articles.forEach((a, idx) => {
+          const opId = `${v.id}#${idx}`;
+          if (dismissedOps.has(opId)) return;
 
-    const lockedProductKeys = new Set();
-    const allFrozenOps = new Set();
+          const nom = extractArticleName(a);
+          const lot = extractArticleLot(a);
+          const qty = extractArticleQty(a);
+          const stockSource = extractArticleStock(a);
 
-    Object.entries(lineStatus).forEach(([key, status]) => {
-      if (status.sent || status.validated) {
-        const [productPart] = key.split("|supplement");
-        const normalizedProduct = productPart.replace(/\|copy-.*/, "").replace(/\|manual-.*/, "");
-        lockedProductKeys.add(normalizedProduct);
-        if (Array.isArray(status.frozenOps)) {
-          status.frozenOps.forEach((op) => allFrozenOps.add(op));
-        }
-      }
-    });
+          if (!nom || qty <= 0) return;
 
-    const allLines = [];
-    const processedKeys = new Set();
-    const supplementCounts = new Map();
+          // Rechercher les infos du produit dans le stock
+          const found = lots.find(
+            (l) =>
+              normalize(l.nom || "") === normalize(nom) &&
+              (!lot || normalize(l.numeroLot || "") === normalize(lot))
+          );
 
-    fromSales.forEach((x) => {
-      const normalizedLot = normalizeLotNumber(x.numeroLot);
-      const productKey = `${normalize(x.nom)}|${normalize(normalizedLot)}`;
-      const hasLockedLine = lockedProductKeys.has(productKey);
-      const newOps = (x.sourceOps || []).filter((op) => !allFrozenOps.has(op) && !dismissedOps.has(op));
-
-      if (newOps.length > 0) {
-        let newQty = 0;
-        newOps.forEach((opId) => {
-          const [venteId, idxStr] = opId.split("#");
-          const vente = ventes.find((v) => v.id === venteId);
-          if (!vente) return;
-          const articles = extractVenteArticles(vente);
-          const art = articles[Number(idxStr)];
-          if (!art) return;
-          newQty += extractArticleQty(art);
-        });
-
-        if (hasLockedLine) {
-          const supplementCount = supplementCounts.get(productKey) || 0;
-          const versionNumber = supplementCount + 1;
-          supplementCounts.set(productKey, versionNumber);
-          const supplementKey = `${x.key}|supplement-v${versionNumber}-${Date.now()}`;
-
-          allLines.push({
-            key: supplementKey,
-            nom: x.nom,
-            numeroLot: x.numeroLot,
-            fournisseur: x.fournisseur,
-            quantite: newQty,
+          // 🆕 Ajouter TOUTES les ventes (même si en stock)
+          rows.push({
+            key: opId,
+            nom,
+            lot: lot || found?.numeroLot || "",
+            quantite: qty,
+            fournisseur: found?.fournisseur || a?.fournisseur || "",
+            achat: found || null,
+            stockSource,
             date: todayISO(),
             remise: 0,
             urgent: false,
-            sourceOps: newOps,
-            isNewAfterSent: true,
-            supplementVersion: versionNumber,
+            venteId: v.id,
+            venteDate: v.date,
+            client: v.client || "",
           });
-          processedKeys.add(supplementKey);
-        } else {
-          allLines.push({
-            key: x.key,
-            nom: x.nom,
-            numeroLot: x.numeroLot,
-            fournisseur: x.fournisseur || "",
-            quantite: newQty,
-            date: todayISO(),
-            remise: 0,
-            urgent: false,
-            sourceOps: newOps,
-            isNewAfterSent: false,
-          });
-          processedKeys.add(x.key);
-        }
-      }
-    });
-
-    Object.entries(lineStatus).forEach(([key, status]) => {
-      if ((status.sent || status.validated) && !processedKeys.has(key)) {
-        const [baseKey] = key.split("|supplement");
-        const baseData = ventesAggregate[baseKey];
-
-        const nom = status.frozenName || baseData?.nom || "Produit";
-        const lot = status.frozenLot || baseData?.numeroLot || "-";
-        const fournisseur = status.frozenSupplier || baseData?.fournisseur || "";
-
-        allLines.push({
-          key,
-          nom,
-          numeroLot: lot,
-          fournisseur,
-          quantite: status.frozenQuantity || 0,
-          date: status.frozenDate || todayISO(),
-          remise: status.frozenRemise || 0,
-          urgent: status.frozenUrgent || false,
-          sourceOps: status.frozenOps || [],
-          isNewAfterSent: false,
         });
-      }
-    });
-
-    const manualPending = (manualLines || []).filter((ml) => {
-      const st = lineStatus[ml.key] || {};
-      return !st?.sent && !st?.validated;
-    });
-
-    const newStateCandidate = [...allLines, ...manualPending];
-
-    setToOrder((prev) => {
-      const previousManual = prev.filter(
-        (l) =>
-          l.isManual &&
-          !(lineStatus[l.key]?.sent || lineStatus[l.key]?.validated) &&
-          !newStateCandidate.find((x) => x.key === l.key)
-      );
-      const newState = [...newStateCandidate, ...previousManual];
-
-      setTimeout(() => {
-        isProcessingRef.current = false;
-      }, 50);
-
-      return newState;
-    });
-  }, [ventesAggregate, lineStatus, ventes, dismissedOps, manualLines]);
-
-  useEffect(() => {
-    setToOrder((prev) =>
-      prev.filter((line) => {
-        if (!Array.isArray(line.sourceOps) || line.sourceOps.length === 0) return true;
-        return line.sourceOps.some((opId) => {
-          const venteId = opId.split("#")[0];
-          return ventes.some((v) => v.id === venteId);
-        });
-      })
-    );
-  }, [ventes]);
-
-  /* ================== GROUPES PAR FOURNISSEUR ================== */
-
-  const groups = useMemo(() => {
-    const g = {};
-    (toOrder || []).forEach((x) => {
-      const sup = (x.fournisseur || "").trim() || "Fournisseur inconnu";
-      if (!g[sup]) g[sup] = [];
-      g[sup].push(x);
-    });
-    return g;
-  }, [toOrder]);
-
-  useEffect(() => {
-    setGroupCommercial((prev) => {
-      const next = { ...prev };
-      let hasChanges = false;
-
-      Object.keys(groups).forEach((supName) => {
-        const rec = findSupplierRecord(supName);
-        if (!rec) return;
-        const list = rec.commerciaux || [];
-        if (list.length === 1 && !next[rec.id]) {
-          next[rec.id] = normalizePhoneForWa(list[0].telephone || "");
-          hasChanges = true;
-        }
       });
 
-      return hasChanges ? next : prev;
+      // Ajouter les lignes manuelles
+      manualLines.forEach((ml) => {
+        rows.push({
+          key: ml.id,
+          nom: ml.nom || "",
+          lot: ml.numeroLot || "",
+          quantite: safeNumber(ml.quantite),
+          fournisseur: ml.fournisseur || "",
+          achat: null,
+          stockSource: ml.stockSource || "stock1",
+          date: ml.date || todayISO(),
+          remise: safeNumber(ml.remise),
+          urgent: !!ml.urgent,
+          isManual: true,
+        });
+      });
+
+      setToOrder(rows);
+    } finally {
+      isProcessingRef.current = false;
+    }
+  }, [ventes, lots, manualLines, dismissedOps]);
+
+  /* ================== GROUPEMENT PAR FOURNISSEUR ================== */
+  useEffect(() => {
+    const grouped = {};
+    toOrder.forEach((line) => {
+      const fName = line.fournisseur || "Sans fournisseur";
+      if (!grouped[fName]) grouped[fName] = [];
+      grouped[fName].push(line);
     });
-  }, [groups, findSupplierRecord]);
+    setGroupCommercial(grouped);
+  }, [toOrder]);
 
   /* ================== ACTIONS LIGNES ================== */
-
-  const setLineStatusPartial = useCallback(
-    (key, patch) => {
-      if (!societeId) return;
-      const ref = doc(db, "societe", societeId, ORDER_STATUS_COLL, key);
-      const payload = {
-        ...(patch.sent !== undefined ? { sent: !!patch.sent } : {}),
-        ...(patch.validated !== undefined ? { validated: !!patch.validated } : {}),
-        ...(patch.sentAt ? { sentAt: patch.sentAt } : {}),
-        ...(patch.validatedAt ? { validatedAt: patch.validatedAt } : {}),
-        ...(Array.isArray(patch.frozenOps) ? { frozenOps: patch.frozenOps } : {}),
-        ...(patch.frozenQuantity !== undefined ? { frozenQuantity: patch.frozenQuantity } : {}),
-        ...(patch.frozenDate !== undefined ? { frozenDate: patch.frozenDate } : {}),
-        ...(patch.frozenRemise !== undefined ? { frozenRemise: patch.frozenRemise } : {}),
-        ...(patch.frozenUrgent !== undefined ? { frozenUrgent: patch.frozenUrgent } : {}),
-        ...(patch.frozenName !== undefined ? { frozenName: patch.frozenName } : {}),
-        ...(patch.frozenLot !== undefined ? { frozenLot: patch.frozenLot } : {}),
-        ...(patch.frozenSupplier !== undefined ? { frozenSupplier: patch.frozenSupplier } : {}),
-        updatedAt: Timestamp.now(),
-      };
-      setDoc(ref, payload, { merge: true }).catch((e) => console.error(e));
-    },
-    [societeId]
-  );
-
-  const clearLineStatus = useCallback(
-    (key) => {
-      if (!societeId) return;
-      deleteDoc(doc(db, "societe", societeId, ORDER_STATUS_COLL, key)).catch(() => {});
-    },
-    [societeId]
-  );
-
-  const persistDismissOps = useCallback(
-    async (opIds = []) => {
-      if (!societeId || !opIds.length) return;
-      await Promise.all(
-        opIds.map((id) =>
-          setDoc(
-            doc(db, "societe", societeId, DISMISSED_COLL, id),
-            { dismissed: true, at: Timestamp.now() },
-            { merge: true }
-          ).catch(() => {})
-        )
-      );
-    },
-    [societeId]
-  );
-
   const setLineField = useCallback(
-    (key, field, val) => {
-      setToOrder((prev) => prev.map((l) => (l.key === key ? { ...l, [field]: val } : l)));
-      const ml = manualLines.find((m) => m.key === key);
-      if (ml?.manualId && societeId) {
-        setDoc(
-          doc(db, "societe", societeId, MANUAL_LINES_COLL, ml.manualId),
-          { [field]: val, updatedAt: Timestamp.now() },
-          { merge: true }
-        ).catch(() => {});
+    async (key, field, value) => {
+      const line = toOrder.find((l) => l.key === key);
+      if (!line) return;
+
+      if (line.isManual) {
+        try {
+          await updateDoc(doc(db, "societe", societeId, MANUAL_LINES_COLL, key), {
+            [field]: value,
+          });
+        } catch (e) {
+          console.error("Erreur setLineField manual:", e);
+        }
+      } else {
+        setToOrder((prev) =>
+          prev.map((l) => {
+            if (l.key === key) return { ...l, [field]: value };
+            return l;
+          })
+        );
       }
     },
-    [manualLines, societeId]
+    [toOrder, societeId]
   );
-
-  const duplicateLine = useCallback((key) => {
-    setToOrder((prev) => {
-      const l = prev.find((x) => x.key === key);
-      if (!l) return prev;
-      const copy = {
-        ...l,
-        key: `${l.key}#copy-${Date.now()}`,
-        date: todayISO(),
-        remise: 0,
-        urgent: false,
-        sourceOps: [],
-        isNewAfterSent: false,
-        isManual: l.isManual || false,
-      };
-      return [...prev, copy];
-    });
-  }, []);
 
   const removeLine = useCallback(
     async (line) => {
-      const key = line.key;
-      const ops = Array.isArray(line.sourceOps) ? line.sourceOps : [];
-
-      if (ops.length) await persistDismissOps(ops);
-
-      if (line.isManual && line.manualId && societeId) {
-        await deleteDoc(doc(db, "societe", societeId, MANUAL_LINES_COLL, line.manualId)).catch(() => {});
+      if (line.isManual) {
+        try {
+          await deleteDoc(doc(db, "societe", societeId, MANUAL_LINES_COLL, line.key));
+          setSuccess("Ligne manuelle supprimée");
+        } catch (e) {
+          console.error("Erreur suppression ligne manuelle:", e);
+          setError("Erreur lors de la suppression");
+        }
+      } else {
+        try {
+          await setDoc(doc(db, "societe", societeId, DISMISSED_COLL, line.key), {
+            dismissed: true,
+            timestamp: Timestamp.now(),
+          });
+          setSuccess("Ligne ignorée");
+        } catch (e) {
+          console.error("Erreur dismiss:", e);
+          setError("Erreur lors de l'opération");
+        }
       }
-
-      clearLineStatus(key);
-
-      setToOrder((prev) => prev.filter((l) => l.key !== key));
-      setSuccess("Ligne supprimée.");
-      setTimeout(() => setSuccess(""), 1200);
     },
-    [persistDismissOps, clearLineStatus, societeId]
+    [societeId]
   );
 
-  /* ================== FOURNISSEURS & COMMERCIAUX ================== */
+  const duplicateLine = useCallback(
+    async (key) => {
+      const line = toOrder.find((l) => l.key === key);
+      if (!line) return;
 
-  const ensureSupplierDoc = useCallback(
-    async (supplierName) => {
-      if (!supplierName || supplierName === "Fournisseur inconnu") return null;
-      let rec = findSupplierRecord(supplierName);
-      if (rec) return rec;
       try {
-        const ref = await addDoc(collection(db, "societe", societeId, "fournisseurs"), {
-          nom: supplierName.trim(),
-          commerciaux: [],
+        await addDoc(collection(db, "societe", societeId, MANUAL_LINES_COLL), {
+          nom: line.nom,
+          numeroLot: line.lot,
+          quantite: line.quantite,
+          fournisseur: line.fournisseur,
+          stockSource: line.stockSource,
+          date: line.date,
+          remise: line.remise || 0,
+          urgent: line.urgent || false,
           createdAt: Timestamp.now(),
         });
-        await fetchFournisseurs();
-        return (
-          fournisseurs.find((f) => normalize(f.nom) === normalize(supplierName)) || {
-            id: ref.id,
-            nom: supplierName.trim(),
-            commerciaux: [],
-          }
-        );
+        setSuccess("Ligne dupliquée");
       } catch (e) {
-        console.error(e);
-        setError("Impossible de créer le fournisseur.");
-        return null;
+        console.error("Erreur duplication:", e);
+        setError("Erreur lors de la duplication");
       }
     },
-    [societeId, fournisseurs, fetchFournisseurs, findSupplierRecord]
+    [toOrder, societeId]
   );
 
-  const handleCommercialSelectChange = useCallback(
-    async (supplierName, telRaw) => {
-      const tel = normalizePhoneForWa(telRaw);
-      let rec = findSupplierRecord(supplierName) || (await ensureSupplierDoc(supplierName));
-      if (!rec) {
-        setError("Fournisseur introuvable.");
-        return;
-      }
-      setGroupCommercial((p) => ({ ...p, [rec.id]: tel }));
-    },
-    [findSupplierRecord, ensureSupplierDoc]
-  );
-
-  const addCommercial = useCallback(
-    async (supplierName) => {
-      const rec0 = (await ensureSupplierDoc(supplierName)) || findSupplierRecord(supplierName);
-      if (!rec0) {
-        setError("Fournisseur introuvable.");
-        return;
-      }
-      const nomCom = window.prompt("Nom du commercial :");
-      if (!nomCom) return;
-      const telRaw = window.prompt("Numéro WhatsApp (ex: +2126...):");
-      if (!telRaw) return;
-      const tel = normalizePhoneForWa(telRaw);
-      if (!tel) {
-        setError("Numéro WhatsApp invalide.");
-        return;
-      }
-      try {
-        await fetchFournisseurs();
-        let rec = findSupplierRecord(supplierName) || rec0;
-        if (!rec) {
-          setError("Fournisseur introuvable après création.");
-          return;
-        }
-        const newList = [...(rec.commerciaux || []), { nom: nomCom.trim(), telephone: tel }];
-        await updateDoc(doc(db, "societe", societeId, "fournisseurs", rec.id), {
-          commerciaux: newList,
-        });
-        await fetchFournisseurs();
-        setGroupCommercial((p) => ({ ...p, [rec.id]: tel }));
-        setSuccess("Commercial ajouté");
-        setTimeout(() => setSuccess(""), 1500);
-      } catch (e) {
-        console.error(e);
-        setError("Impossible d'ajouter le commercial");
-      }
-    },
-    [societeId, ensureSupplierDoc, findSupplierRecord, fetchFournisseurs]
-  );
-
-  const deleteCommercial = useCallback(
-    async (supplierName, commercialIndex) => {
-      const rec = findSupplierRecord(supplierName);
-      if (!rec) {
-        setError("Fournisseur introuvable.");
-        return;
-      }
-      const commercial = rec.commerciaux[commercialIndex];
-      if (!window.confirm(`Supprimer le commercial "${commercial.nom}" ?`)) return;
+  const deleteLinePermanently = useCallback(
+    async (lineKey) => {
+      if (!window.confirm("⚠️ Supprimer définitivement cette ligne ?")) return;
 
       try {
-        const newList = rec.commerciaux.filter((_, idx) => idx !== commercialIndex);
-        await updateDoc(doc(db, "societe", societeId, "fournisseurs", rec.id), {
-          commerciaux: newList,
+        const batch = writeBatch(db);
+
+        // Supprimer le statut
+        const statusRef = doc(db, "societe", societeId, ORDER_STATUS_COLL, lineKey);
+        batch.delete(statusRef);
+
+        // Marquer comme dismissed
+        const dismissedRef = doc(db, "societe", societeId, DISMISSED_COLL, lineKey);
+        batch.set(dismissedRef, {
+          dismissed: true,
+          deletedAt: Timestamp.now(),
         });
-        await fetchFournisseurs();
-        if (groupCommercial[rec.id] === normalizePhoneForWa(commercial.telephone)) {
-          setGroupCommercial((p) => {
-            const next = { ...p };
-            delete next[rec.id];
-            return next;
-          });
-        }
-        setSuccess(`Commercial "${commercial.nom}" supprimé`);
-        setTimeout(() => setSuccess(""), 1500);
+
+        await batch.commit();
+        setSuccess("Ligne supprimée définitivement");
       } catch (e) {
-        console.error(e);
-        setError("Impossible de supprimer le commercial");
+        console.error("Erreur suppression:", e);
+        setError("Erreur lors de la suppression");
       }
     },
-    [societeId, findSupplierRecord, fetchFournisseurs, groupCommercial]
-  );
-
-  const buildWhatsAppMessage = useCallback((supplierName, lines, commercialName) => {
-    const header = `BON DE COMMANDE — ${supplierName}\nCommercial: ${commercialName || "—"}\nDate: ${new Date().toLocaleString("fr-FR")}\n`;
-    const body = lines
-      .map((l, i) => {
-        const urgent = l.urgent ? " (URGENT)" : "";
-        const rem = l.remise ? ` — Remise: ${Number(l.remise).toFixed(2)} DHS` : "";
-        return `${i + 1}. ${l.nom}${urgent}\n   Lot: ${l.numeroLot} — Qté: ${l.quantite}${rem}`;
-      })
-      .join("\n");
-    const footer = `\n\nMerci de confirmer la disponibilité et les délais.`;
-    return `${header}\n${body}${footer}`;
-  }, []);
-
-  const sendWhatsAppForSupplier = useCallback(
-    async (supplierName) => {
-      const todayString = new Date().toISOString().split("T")[0];
-
-      const lines = (groups[supplierName] || []).filter((l) => {
-        const st = lineStatus[l.key] || {};
-        const isToday = l.date === todayString;
-        const notSent = !st.sent;
-        const isNewAfterSent = l.isNewAfterSent === true;
-        return (isToday && notSent) || (isNewAfterSent && notSent);
-      });
-
-      if (!lines.length) {
-        setError("Aucune ligne à envoyer pour aujourd'hui");
-        return;
-      }
-
-      let rec = findSupplierRecord(supplierName) || (await ensureSupplierDoc(supplierName));
-      if (!rec) {
-        setError("Impossible d'envoyer, fournisseur non identifié.");
-        return;
-      }
-      await fetchFournisseurs();
-      rec = findSupplierRecord(supplierName) || rec;
-      let commercials = rec.commerciaux || [];
-      if (!commercials.length) {
-        if (window.confirm("Aucun commercial pour ce fournisseur. En ajouter un ?")) {
-          await addCommercial(supplierName);
-          await fetchFournisseurs();
-          rec = findSupplierRecord(supplierName) || rec;
-          commercials = rec.commerciaux || [];
-          if (!commercials.length) {
-            setError("Commercial introuvable après l'ajout.");
-            return;
-          }
-        } else {
-          setError("Ajoutez un commercial pour envoyer via WhatsApp.");
-          return;
-        }
-      }
-      let tel = groupCommercial[rec.id] || "";
-      let comName = "";
-      if (!tel && commercials.length === 1) {
-        tel = normalizePhoneForWa(commercials[0].telephone);
-        comName = commercials[0].nom || "";
-        setGroupCommercial((p) => ({ ...p, [rec.id]: tel }));
-      }
-      if (!tel) {
-        setError("Veuillez sélectionner un commercial.");
-        return;
-      }
-      const m = commercials.find((c) => normalizePhoneForWa(c.telephone) === normalizePhoneForWa(tel));
-      comName = m?.nom || "";
-
-      const msg = buildWhatsAppMessage(supplierName, lines, comName);
-      const url = `https://wa.me/${tel}?text=${encodeWhatsAppText(msg)}`;
-      window.open(url, "_blank", "noopener,noreferrer");
-
-      const now = Timestamp.now();
-
-      await Promise.all(
-        lines.map(async (l) => {
-          const frozenOps = Array.isArray(l.sourceOps) ? l.sourceOps : [];
-          setLineStatusPartial(l.key, {
-            sent: true,
-            sentAt: now,
-            frozenOps,
-            frozenQuantity: l.quantite,
-            frozenDate: l.date,
-            frozenRemise: l.remise,
-            frozenUrgent: l.urgent,
-            frozenName: l.nom,
-            frozenLot: l.numeroLot,
-            frozenSupplier: l.fournisseur || supplierName,
-          });
-
-          if (l.isManual && l.manualId && societeId) {
-            await deleteDoc(doc(db, "societe", societeId, MANUAL_LINES_COLL, l.manualId)).catch(() => {});
-          }
-        })
-      );
-
-      setSuccess("Message WhatsApp prêt — lignes verrouillées.");
-      setTimeout(() => setSuccess(""), 1500);
-    },
-    [
-      groups,
-      lineStatus,
-      groupCommercial,
-      findSupplierRecord,
-      ensureSupplierDoc,
-      fetchFournisseurs,
-      addCommercial,
-      buildWhatsAppMessage,
-      setLineStatusPartial,
-      societeId,
-    ]
-  );
-
-  const markLineValidated = useCallback(
-    (key) => {
-      const now = Timestamp.now();
-      setLineStatusPartial(key, { validated: true, validatedAt: now, sent: true, sentAt: now });
-    },
-    [setLineStatusPartial]
+    [societeId]
   );
 
   const addManualLine = useCallback(async () => {
-    const nom = window.prompt("Nom du médicament :");
-    if (!nom) return;
-    const lot = window.prompt("Numéro de lot (optionnel) :") || "-";
+    try {
+      await addDoc(collection(db, "societe", societeId, MANUAL_LINES_COLL), {
+        nom: "",
+        numeroLot: "",
+        quantite: 1,
+        fournisseur: "",
+        stockSource: "stock1",
+        date: todayISO(),
+        remise: 0,
+        urgent: false,
+        createdAt: Timestamp.now(),
+      });
+      setSuccess("Nouvelle ligne ajoutée");
+    } catch (e) {
+      console.error("Erreur ajout ligne manuelle:", e);
+      setError("Erreur lors de l'ajout");
+    }
+  }, [societeId]);
 
-    const existsList = fournisseurs.length
-      ? `\n\nFournisseurs existants :\n- ${fournisseurs.map((f) => f.nom).join("\n- ")}\n\n`
-      : "\n";
-    const fournisseurInput =
-      window.prompt("Nom du fournisseur : (laisser vide pour 'Fournisseur inconnu')" + existsList) || "";
-
-    const fournisseurFinal = (fournisseurInput || "").trim() || "Fournisseur inconnu";
-
-    const qtyStr = window.prompt("Quantité :");
-    const qty = safeNumber(qtyStr, 1);
-    if (qty <= 0) {
-      setError("Quantité invalide");
+  /* ================== 🆕 GESTION DES COMMERCIAUX ================== */
+  const addCommercial = useCallback(async () => {
+    if (!newCommercialNom || !newCommercialTel || !selectedFournisseurForCommercial) {
+      setError("Veuillez remplir tous les champs");
       return;
     }
 
-    const newLine = {
-      key: `manual-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-      nom: nom.trim(),
-      numeroLot: lot,
-      fournisseur: fournisseurFinal,
-      quantite: qty,
-      date: todayISO(),
-      remise: 0,
-      urgent: false,
-      sourceOps: [],
-      isManual: true,
-    };
-
     try {
-      if (!societeId) throw new Error("Société inconnue");
-      await addDoc(collection(db, "societe", societeId, MANUAL_LINES_COLL), {
-        ...newLine,
-        societeId,
+      await addDoc(collection(db, "societe", societeId, COMMERCIAUX_COLL), {
+        fournisseur: selectedFournisseurForCommercial,
+        nom: newCommercialNom,
+        telephone: newCommercialTel,
         createdAt: Timestamp.now(),
-        updatedAt: Timestamp.now(),
       });
-      setSuccess("Ligne manuelle ajoutée.");
-      setTimeout(() => setSuccess(""), 1200);
+      setSuccess("Commercial ajouté avec succès");
+      setNewCommercialNom("");
+      setNewCommercialTel("");
+      setShowCommercialModal(false);
     } catch (e) {
-      console.error("addManualLine:", e);
-      setError("Impossible d'enregistrer la ligne manuelle.");
+      console.error("Erreur ajout commercial:", e);
+      setError("Erreur lors de l'ajout du commercial");
     }
-  }, [fournisseurs, societeId]);
+  }, [newCommercialNom, newCommercialTel, selectedFournisseurForCommercial, societeId]);
 
-  /* ================== COMPTEURS POUR BADGES ================== */
-  const statusCounts = useMemo(() => {
-    const counts = {
-      all: 0,
-      pending: 0,
-      sent: 0,
-      validated: 0,
-    };
+  const deleteCommercial = useCallback(
+    async (commercialId) => {
+      try {
+        await deleteDoc(doc(db, "societe", societeId, COMMERCIAUX_COLL, commercialId));
+        setSuccess("Commercial supprimé");
+      } catch (e) {
+        console.error("Erreur suppression commercial:", e);
+        setError("Erreur lors de la suppression");
+      }
+    },
+    [societeId]
+  );
 
-    toOrder.forEach((line) => {
-      const st = lineStatus[line.key] || {};
-      counts.all++;
+  /* ================== 🆕 ENVOI WHATSAPP & VERROUILLAGE ================== */
+  /**
+   * Envoie la commande via WhatsApp et marque toutes les lignes comme "envoyées" + verrouillées
+   */
+  const sendOrderViaWhatsApp = useCallback(
+    async (fournisseurName, lines, commercialTel = null) => {
+      if (!fournisseurName || !lines || lines.length === 0) {
+        setError("Aucune ligne à envoyer");
+        return;
+      }
 
-      if (st.validated) {
-        counts.validated++;
-      } else if (st.sent) {
-        counts.sent++;
-      } else {
-        counts.pending++;
+      setSendingWhatsApp(true);
+      try {
+        // 1. Trouver les infos du fournisseur
+        const fournisseur = fournisseurs.find(
+          (f) => normalize(f.nom || "") === normalize(fournisseurName)
+        );
+
+        let phoneToUse = commercialTel || fournisseur?.telephone;
+
+        if (!phoneToUse) {
+          setError(`Numéro de téléphone manquant pour ${fournisseurName}`);
+          setSendingWhatsApp(false);
+          return;
+        }
+
+        // 2. Construire le message WhatsApp
+        let message = `🏥 *Commande Pharmacie*\n\n`;
+        message += `📦 *Fournisseur:* ${fournisseurName}\n`;
+        message += `📅 *Date commande:* ${formatDateSafe(new Date())}\n\n`;
+        message += `*Articles à commander:*\n`;
+        message += `━━━━━━━━━━━━━━━━━━━━\n\n`;
+
+        let totalItems = 0;
+
+        lines.forEach((line, idx) => {
+          const displayNom = line.nom || "Produit";
+          const displayLot = line.lot || "-";
+          const displayQte = safeNumber(line.quantite);
+          const displayRemise = safeNumber(line.remise);
+          const displayUrgent = line.urgent ? " ⚡ *URGENT*" : "";
+          const displayStock = line.stockSource === "stock2" ? " [Stock 2]" : " [Stock 1]";
+          
+          // 🆕 Ajouter infos de vente
+          const venteInfo = line.client ? ` (Vente: ${line.client})` : "";
+
+          message += `${idx + 1}. *${displayNom}*${displayUrgent}${displayStock}${venteInfo}\n`;
+          if (displayLot !== "-") {
+            message += `   Lot: ${displayLot}\n`;
+          }
+          message += `   Qté: ${displayQte}`;
+          if (displayRemise > 0) {
+            message += ` (Remise: ${displayRemise}%)`;
+          }
+          if (line.venteDate) {
+            message += `\n   Date vente: ${formatDateSafe(line.venteDate)}`;
+          }
+          message += `\n\n`;
+
+          totalItems += displayQte;
+        });
+
+        message += `━━━━━━━━━━━━━━━━━━━━\n`;
+        message += `📊 *Total articles:* ${lines.length}\n`;
+        message += `📦 *Quantité totale:* ${totalItems}\n\n`;
+        message += `Merci de confirmer la disponibilité. ✅`;
+
+        // 3. Marquer toutes les lignes comme "envoyées" et les verrouiller dans Firestore
+        const batch = writeBatch(db);
+
+        lines.forEach((line) => {
+          const statusRef = doc(db, "societe", societeId, ORDER_STATUS_COLL, line.key);
+          batch.set(
+            statusRef,
+            {
+              sent: true,
+              sentAt: Timestamp.now(),
+              locked: true,
+              validated: false,
+            },
+            { merge: true }
+          );
+        });
+
+        await batch.commit();
+
+        // 4. Ouvrir WhatsApp
+        const phone = normalizePhoneForWa(phoneToUse);
+        const waUrl = `https://wa.me/${phone}?text=${encodeWhatsAppText(message)}`;
+        window.open(waUrl, "_blank");
+
+        setSuccess(`Commande envoyée à ${fournisseurName} via WhatsApp! 📤`);
+        setShowCommercialSelect("");
+        setSelectedCommercial("");
+      } catch (e) {
+        console.error("Erreur envoi WhatsApp:", e);
+        setError("Erreur lors de l'envoi WhatsApp");
+      } finally {
+        setSendingWhatsApp(false);
+      }
+    },
+    [fournisseurs, societeId]
+  );
+
+  /* ================== 🆕 VALIDATION COMMANDE ================== */
+  /**
+   * Marque une ligne comme "validée" (la commande a été reçue)
+   */
+  const markLineValidated = useCallback(
+    async (lineKey) => {
+      try {
+        const statusRef = doc(db, "societe", societeId, ORDER_STATUS_COLL, lineKey);
+        await updateDoc(statusRef, {
+          validated: true,
+          validatedAt: Timestamp.now(),
+        });
+        setSuccess("✅ Commande validée!");
+      } catch (e) {
+        console.error("Erreur validation:", e);
+        setError("Erreur lors de la validation");
+      }
+    },
+    [societeId]
+  );
+
+  /* ================== FILTRAGE ================== */
+  const filteredGroupCommercial = useMemo(() => {
+    const searchLower = normalize(searchText);
+    const filtered = {};
+
+    Object.entries(groupCommercial).forEach(([fName, lines]) => {
+      const matchingLines = lines.filter((line) => {
+        // Filtre texte
+        const matchText =
+          !searchLower ||
+          normalize(line.nom).includes(searchLower) ||
+          normalize(line.lot).includes(searchLower) ||
+          normalize(fName).includes(searchLower);
+
+        // Filtre statut
+        const st = lineStatus[line.key] || {};
+        let matchStatus = true;
+        if (statusFilter === "sent") matchStatus = st.sent && !st.validated;
+        if (statusFilter === "validated") matchStatus = st.validated;
+        if (statusFilter === "pending") matchStatus = !st.sent && !st.validated;
+
+        return matchText && matchStatus;
+      });
+
+      if (matchingLines.length > 0) {
+        filtered[fName] = matchingLines;
       }
     });
 
-    return counts;
-  }, [toOrder, lineStatus]);
+    return filtered;
+  }, [groupCommercial, searchText, statusFilter, lineStatus]);
 
-  /* ================== UI ================== */
-
+  /* ================== RENDU ================== */
   if (waiting) {
     return (
-      <div style={{ minHeight: "100vh", display: "grid", placeItems: "center" }}>
-        <div>Chargement…</div>
-      </div>
-    );
-  }
-  if (!user || !societeId) {
-    return (
-      <div style={{ minHeight: "100vh", display: "grid", placeItems: "center" }}>
-        <div>Accès non autorisé.</div>
+      <div style={{ padding: 24, textAlign: "center" }}>
+        <p style={{ color: "#6b7280", fontSize: 18 }}>Chargement...</p>
       </div>
     );
   }
 
   return (
-    <div
-      style={{
-        minHeight: "100vh",
-        background: "linear-gradient(135deg,#eef2ff,#fdf2f8)",
-        padding: 20,
-        fontFamily: '"Inter",-apple-system,BlinkMacSystemFont,sans-serif',
-      }}
-    >
+    <div style={{ padding: "20px 24px", maxWidth: 1600, margin: "0 auto" }}>
+      {/* En-tête */}
       <div
         style={{
-          background: "rgba(255,255,255,.95)",
-          borderRadius: 20,
-          padding: 20,
-          marginBottom: 16,
-          boxShadow: "0 10px 30px rgba(0,0,0,.05)",
+          background: "linear-gradient(135deg,#6366f1,#4f46e5)",
+          borderRadius: 16,
+          padding: 24,
+          marginBottom: 24,
+          color: "#fff",
+          boxShadow: "0 10px 30px rgba(99, 102, 241, 0.3)",
+        }}
+      >
+        <h1 style={{ margin: 0, fontSize: 28, fontWeight: 900 }}>📦 Gestion des Commandes</h1>
+        <p style={{ margin: "8px 0 0", opacity: 0.95, fontSize: 15 }}>
+          Suivi automatique des besoins en stock avec envoi WhatsApp intégré
+        </p>
+      </div>
+
+      {/* 🆕 Statistiques globales */}
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))",
+          gap: 16,
+          marginBottom: 24,
         }}
       >
         <div
           style={{
-            display: "flex",
-            gap: 12,
-            alignItems: "center",
-            justifyContent: "space-between",
-            flexWrap: "wrap",
+            background: "linear-gradient(135deg,#dbeafe,#bfdbfe)",
+            borderRadius: 14,
+            padding: 18,
+            boxShadow: "0 4px 12px rgba(59, 130, 246, 0.15)",
           }}
         >
-          <div>
-            <h1
-              style={{
-                margin: 0,
-                fontSize: 28,
-                fontWeight: 800,
-                background: "linear-gradient(135deg,#6366f1,#a855f7)",
-                WebkitBackgroundClip: "text",
-                WebkitTextFillColor: "transparent",
-              }}
-            >
-              Gestion des Commandes Fournisseurs
-            </h1>
-            <p style={{ margin: "6px 0 0", color: "#6b7280" }}>
-              Synchronisation en temps réel • {statusCounts.all} ligne(s) totale(s)
-            </p>
-          </div>
+          <h3 style={{ margin: "0 0 8px", fontSize: 14, fontWeight: 700, color: "#1e40af" }}>
+            Total Commandes
+          </h3>
+          <p style={{ margin: 0, fontSize: 32, fontWeight: 900, color: "#1e3a8a" }}>{toOrder.length}</p>
+        </div>
+
+        <div
+          style={{
+            background: "linear-gradient(135deg,#fef3c7,#fde68a)",
+            borderRadius: 14,
+            padding: 18,
+            boxShadow: "0 4px 12px rgba(251, 191, 36, 0.15)",
+          }}
+        >
+          <h3 style={{ margin: "0 0 8px", fontSize: 14, fontWeight: 700, color: "#b45309" }}>
+            ⏳ En attente
+          </h3>
+          <p style={{ margin: 0, fontSize: 32, fontWeight: 900, color: "#92400e" }}>
+            {toOrder.filter((l) => !lineStatus[l.key]?.sent).length}
+          </p>
+        </div>
+
+        <div
+          style={{
+            background: "linear-gradient(135deg,#ddd6fe,#c4b5fd)",
+            borderRadius: 14,
+            padding: 18,
+            boxShadow: "0 4px 12px rgba(139, 92, 246, 0.15)",
+          }}
+        >
+          <h3 style={{ margin: "0 0 8px", fontSize: 14, fontWeight: 700, color: "#6d28d9" }}>
+            📤 Envoyés
+          </h3>
+          <p style={{ margin: 0, fontSize: 32, fontWeight: 900, color: "#5b21b6" }}>
+            {toOrder.filter((l) => lineStatus[l.key]?.sent && !lineStatus[l.key]?.validated).length}
+          </p>
+        </div>
+
+        <div
+          style={{
+            background: "linear-gradient(135deg,#dcfce7,#bbf7d0)",
+            borderRadius: 14,
+            padding: 18,
+            boxShadow: "0 4px 12px rgba(34, 197, 94, 0.15)",
+          }}
+        >
+          <h3 style={{ margin: "0 0 8px", fontSize: 14, fontWeight: 700, color: "#15803d" }}>
+            ✅ Validés
+          </h3>
+          <p style={{ margin: 0, fontSize: 32, fontWeight: 900, color: "#166534" }}>
+            {toOrder.filter((l) => lineStatus[l.key]?.validated).length}
+          </p>
         </div>
       </div>
 
+      {/* Messages */}
       {error && (
         <div
           style={{
-            background: "rgba(254,226,226,.9)",
-            color: "#b91c1c",
-            padding: 12,
+            padding: 14,
             borderRadius: 12,
-            marginBottom: 12,
-            border: "1px solid rgba(185,28,28,.2)",
+            background: "linear-gradient(135deg,#fecaca,#fca5a5)",
+            border: "1px solid #f87171",
+            marginBottom: 16,
+            display: "flex",
+            alignItems: "center",
+            gap: 10,
           }}
         >
-          {error}
-          <button onClick={() => setError("")} style={{ marginLeft: 8, border: "none", background: "transparent", cursor: "pointer", fontSize: 20 }}>
+          <span style={{ fontSize: 18 }}>⚠️</span>
+          <span style={{ fontSize: 14, fontWeight: 600, color: "#7f1d1d" }}>{error}</span>
+          <button
+            onClick={() => setError("")}
+            style={{
+              marginLeft: "auto",
+              border: "none",
+              background: "transparent",
+              cursor: "pointer",
+              fontSize: 20,
+              color: "#7f1d1d",
+            }}
+          >
             ×
           </button>
         </div>
       )}
+
       {success && (
         <div
           style={{
-            background: "rgba(220,252,231,.9)",
-            color: "#166534",
-            padding: 12,
+            padding: 14,
             borderRadius: 12,
-            marginBottom: 12,
-            border: "1px solid rgba(22,101,52,.2)",
+            background: "linear-gradient(135deg,#d1fae5,#a7f3d0)",
+            border: "1px solid #86efac",
+            marginBottom: 16,
+            display: "flex",
+            alignItems: "center",
+            gap: 10,
           }}
         >
-          {success}
-          <button onClick={() => setSuccess("")} style={{ marginLeft: 8, border: "none", background: "transparent", cursor: "pointer", fontSize: 20 }}>
+          <span style={{ fontSize: 18 }}>✅</span>
+          <span style={{ fontSize: 14, fontWeight: 600, color: "#065f46" }}>{success}</span>
+          <button
+            onClick={() => setSuccess("")}
+            style={{
+              marginLeft: "auto",
+              border: "none",
+              background: "transparent",
+              cursor: "pointer",
+              fontSize: 20,
+              color: "#065f46",
+            }}
+          >
             ×
           </button>
         </div>
       )}
 
+      {/* Barre d'outils */}
       <div
         style={{
-          background: "rgba(255,255,255,.95)",
-          borderRadius: 20,
-          padding: 16,
-          boxShadow: "0 10px 30px rgba(0,0,0,.05)",
+          background: "#fff",
+          borderRadius: 14,
+          padding: 18,
+          marginBottom: 24,
+          boxShadow: "0 4px 12px rgba(0,0,0,0.08)",
+          display: "flex",
+          gap: 12,
+          flexWrap: "wrap",
+          alignItems: "center",
         }}
       >
-        {/* BARRE DE FILTRES */}
-        <div
+        <input
+          type="text"
+          placeholder="🔍 Rechercher..."
+          value={searchText}
+          onChange={(e) => setSearchText(e.target.value)}
           style={{
-            background: "linear-gradient(135deg, #f8fafc, #f1f5f9)",
-            border: "2px solid #e2e8f0",
-            borderRadius: 16,
-            padding: 16,
-            marginBottom: 20,
+            flex: 1,
+            minWidth: 200,
+            padding: "10px 14px",
+            border: "1px solid #e5e7eb",
+            borderRadius: 10,
+            fontSize: 14,
+          }}
+        />
+
+        <select
+          value={statusFilter}
+          onChange={(e) => setStatusFilter(e.target.value)}
+          style={{
+            padding: "10px 14px",
+            border: "1px solid #e5e7eb",
+            borderRadius: 10,
+            fontSize: 14,
+            cursor: "pointer",
           }}
         >
-          <div style={{ marginBottom: 16 }}>
-            <input
-              type="text"
-              placeholder="🔍 Rechercher un médicament par nom..."
-              value={searchText}
-              onChange={(e) => setSearchText(e.target.value)}
-              style={{
-                width: "100%",
-                padding: "12px 16px",
-                borderRadius: 12,
-                border: "2px solid #cbd5e1",
-                fontSize: 15,
-                fontWeight: 500,
-                outline: "none",
-                transition: "all 0.2s ease",
-              }}
-              onFocus={(e) => (e.target.style.borderColor = "#6366f1")}
-              onBlur={(e) => (e.target.style.borderColor = "#cbd5e1")}
-            />
-          </div>
+          <option value="all">📊 Tous les statuts</option>
+          <option value="pending">⏳ En attente</option>
+          <option value="sent">📤 Envoyés</option>
+          <option value="validated">✅ Validés</option>
+        </select>
 
-          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-            <span style={{ fontWeight: 700, color: "#475569", fontSize: 14 }}>Statut :</span>
+        <button
+          onClick={addManualLine}
+          style={{
+            padding: "10px 16px",
+            borderRadius: 10,
+            border: "none",
+            background: "linear-gradient(135deg,#10b981,#059669)",
+            color: "#fff",
+            fontSize: 14,
+            fontWeight: 700,
+            cursor: "pointer",
+          }}
+        >
+          ➕ Ajouter une ligne
+        </button>
+      </div>
 
-            {[
-              { value: "all", label: "Tous", count: statusCounts.all, color: "#6366f1" },
-              { value: "pending", label: "En attente", count: statusCounts.pending, color: "#f59e0b" },
-              { value: "sent", label: "Envoyés", count: statusCounts.sent, color: "#3b82f6" },
-              { value: "validated", label: "Validés", count: statusCounts.validated, color: "#22c55e" },
-            ].map((option) => (
-              <button
-                key={option.value}
-                onClick={() => setStatusFilter(option.value)}
-                style={{
-                  padding: "8px 16px",
-                  borderRadius: 10,
-                  border: statusFilter === option.value ? `2px solid ${option.color}` : "2px solid #e2e8f0",
-                  background: statusFilter === option.value ? option.color : "#fff",
-                  color: statusFilter === option.value ? "#fff" : "#64748b",
-                  fontWeight: 700,
-                  fontSize: 14,
-                  cursor: "pointer",
-                  transition: "all 0.2s ease",
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 6,
-                }}
-              >
-                <span>{option.label}</span>
-                <span
-                  style={{
-                    background: statusFilter === option.value ? "rgba(255,255,255,0.3)" : "#f1f5f9",
-                    padding: "2px 8px",
-                    borderRadius: 999,
-                    fontSize: 12,
-                    fontWeight: 800,
-                  }}
-                >
-                  {option.count}
-                </span>
-              </button>
-            ))}
-
-            {(searchText || statusFilter !== "all") && (
-              <button
-                onClick={() => {
-                  setSearchText("");
-                  setStatusFilter("all");
-                }}
-                style={{
-                  marginLeft: "auto",
-                  padding: "8px 16px",
-                  borderRadius: 10,
-                  border: "2px solid #ef4444",
-                  background: "#fff",
-                  color: "#ef4444",
-                  fontWeight: 700,
-                  fontSize: 14,
-                  cursor: "pointer",
-                }}
-              >
-                🔄 Réinitialiser
-              </button>
-            )}
-          </div>
-        </div>
-
-        {/* Actions principales */}
-        <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 16 }}>
-          <button
-            onClick={addManualLine}
+      {/* Groupes par fournisseur */}
+      <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
+        {Object.keys(filteredGroupCommercial).length === 0 ? (
+          <div
             style={{
-              background: "linear-gradient(135deg,#8b5cf6,#7c3aed)",
-              color: "#fff",
-              border: "none",
-              borderRadius: 10,
-              padding: "10px 16px",
-              cursor: "pointer",
-              fontWeight: 700,
+              background: "#fff",
+              borderRadius: 14,
+              padding: 40,
+              textAlign: "center",
+              boxShadow: "0 4px 12px rgba(0,0,0,0.08)",
             }}
           >
-            ➕ Ligne manuelle
-          </button>
-
-          <button
-            onClick={async () => {
-              const keysToClean = Object.keys(lineStatus).filter((k) => lineStatus[k]?.validated);
-              await Promise.all(
-                keysToClean.map((k) => deleteDoc(doc(db, "societe", societeId, ORDER_STATUS_COLL, k)).catch(() => {}))
-              );
-              setSuccess("Nettoyage effectué.");
-              setTimeout(() => setSuccess(""), 1400);
-            }}
-            style={{
-              marginLeft: "auto",
-              background: "transparent",
-              border: "1px dashed #9ca3af",
-              borderRadius: 10,
-              padding: "10px 16px",
-              cursor: "pointer",
-              color: "#4b5563",
-              fontWeight: 600,
-            }}
-          >
-            🧹 Nettoyer validées
-          </button>
-        </div>
-
-        {Object.keys(groups).length === 0 ? (
-          <div style={{ padding: 40, textAlign: "center", color: "#6b7280" }}>
-            <div style={{ fontSize: 48, marginBottom: 16 }}>📦</div>
-            <div style={{ fontSize: 16, fontWeight: 600 }}>Aucune commande en attente</div>
-            <div style={{ fontSize: 14, marginTop: 8 }}>Les articles vendus apparaîtront ici automatiquement</div>
+            <p style={{ fontSize: 16, color: "#6b7280" }}>
+              Aucune commande à afficher avec les filtres actuels.
+            </p>
           </div>
         ) : (
-          Object.keys(groups).map((supName) => {
-            const lines = [...groups[supName]];
-            const rec = findSupplierRecord(supName);
-            const supplierId = rec?.id || null;
-            const commercials = rec?.commerciaux || [];
-            const telSel = supplierId ? groupCommercial[supplierId] || "" : "";
-            const todayString = new Date().toISOString().split("T")[0];
+          Object.entries(filteredGroupCommercial).map(([fName, lines]) => {
+            // Stats du groupe
+            const totalQty = lines.reduce((sum, l) => sum + safeNumber(l.quantite), 0);
+            const sentCount = lines.filter((l) => lineStatus[l.key]?.sent).length;
+            const validatedCount = lines.filter((l) => lineStatus[l.key]?.validated).length;
+            const pendingCount = lines.length - sentCount;
 
-            const filteredLines = lines.filter((l) => {
-              const st = lineStatus[l.key] || {};
-              const isToday = l.date === todayString;
-              const isSentButNotValidated = st.sent && !st.validated;
-              const isNewAfterSent = l.isNewAfterSent === true;
-
-              const baseFilter = isToday || isSentButNotValidated || isNewAfterSent;
-              if (!baseFilter) return false;
-
-              if (searchText) {
-                const searchLower = normalize(searchText);
-                const nomLower = normalize(l.nom);
-                if (!nomLower.includes(searchLower)) return false;
-              }
-
-              if (statusFilter === "pending") {
-                return !st.sent && !st.validated;
-              } else if (statusFilter === "sent") {
-                return st.sent && !st.validated;
-              } else if (statusFilter === "validated") {
-                return st.validated;
-              }
-
-              return true;
-            });
-
-            if (filteredLines.length === 0) return null;
+            // Lignes non envoyées (pour le bouton WhatsApp)
+            const unsent = lines.filter((l) => !lineStatus[l.key]?.sent);
 
             return (
               <div
-                key={supName}
+                key={fName}
                 style={{
-                  marginTop: 16,
-                  border: "1px solid #e5e7eb",
-                  borderRadius: 12,
-                  padding: 12,
                   background: "#fff",
+                  borderRadius: 14,
+                  boxShadow: "0 4px 12px rgba(0,0,0,0.08)",
+                  overflow: "hidden",
                 }}
               >
+                {/* En-tête fournisseur */}
                 <div
                   style={{
+                    background: "linear-gradient(135deg,#f3f4f6,#e5e7eb)",
+                    padding: "16px 20px",
+                    borderBottom: "2px solid #d1d5db",
                     display: "flex",
-                    gap: 10,
                     alignItems: "center",
                     flexWrap: "wrap",
-                    marginBottom: 10,
+                    gap: 12,
                   }}
                 >
-                  <strong style={{ fontSize: 16 }}>
-                    {supName === "Fournisseur inconnu" ? "⚠️ Fournisseur inconnu" : `🏢 ${supName}`}
-                  </strong>
-                  <span
-                    style={{
-                      padding: "2px 8px",
-                      borderRadius: 999,
-                      background: "#f1f5f9",
-                      fontSize: 12,
-                      fontWeight: 700,
-                      color: "#64748b",
-                    }}
-                  >
-                    {filteredLines.length} ligne(s)
-                  </span>
+                  <h2 style={{ margin: 0, fontSize: 20, fontWeight: 800, color: "#111827", flex: 1 }}>
+                    🏢 {fName}
+                  </h2>
 
-                  <div
-                    style={{
-                      marginLeft: "auto",
-                      display: "flex",
-                      gap: 8,
-                      alignItems: "center",
-                      flexWrap: "wrap",
-                    }}
-                  >
-                    <select
-                      value={telSel}
-                      onChange={(e) => handleCommercialSelectChange(supName, e.target.value)}
-                      style={{
-                        padding: "8px 12px",
-                        borderRadius: 10,
-                        border: "2px solid #e5e7eb",
-                        minWidth: 200,
-                        fontWeight: 600,
-                      }}
-                    >
-                      <option value="">— Sélectionner commercial —</option>
-                      {commercials.map((c, i) => (
-                        <option key={i} value={normalizePhoneForWa(c.telephone || "")}>
-                          {c.nom} — {c.telephone}
-                        </option>
-                      ))}
-                    </select>
-
-                    <button
-                      onClick={() => addCommercial(supName)}
-                      style={{
-                        background: "linear-gradient(135deg,#3b82f6,#2563eb)",
-                        color: "#fff",
-                        border: "none",
-                        borderRadius: 10,
-                        padding: "8px 14px",
-                        fontWeight: 700,
-                        cursor: "pointer",
-                      }}
-                    >
-                      ➕ Commercial
-                    </button>
-
-                    <button
-                      onClick={() => sendWhatsAppForSupplier(supName)}
-                      style={{
-                        background: "linear-gradient(135deg,#22c55e,#16a34a)",
-                        color: "#fff",
-                        border: "none",
-                        borderRadius: 10,
-                        padding: "8px 14px",
-                        fontWeight: 800,
-                        cursor: "pointer",
-                      }}
-                    >
-                      📤 WhatsApp
-                    </button>
+                  <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                    <span style={{ fontSize: 13, color: "#6b7280", fontWeight: 600 }}>
+                      {lines.length} ligne{lines.length > 1 ? "s" : ""} · {totalQty} unités
+                    </span>
+                    {pendingCount > 0 && (
+                      <span
+                        style={{
+                          padding: "3px 8px",
+                          borderRadius: 999,
+                          background: "#fef3c7",
+                          border: "1px solid #fde047",
+                          fontSize: 11,
+                          fontWeight: 700,
+                        }}
+                      >
+                        ⏳ {pendingCount}
+                      </span>
+                    )}
+                    {sentCount > 0 && (
+                      <span
+                        style={{
+                          padding: "3px 8px",
+                          borderRadius: 999,
+                          background: "#dbeafe",
+                          border: "1px solid #93c5fd",
+                          fontSize: 11,
+                          fontWeight: 700,
+                        }}
+                      >
+                        📤 {sentCount}
+                      </span>
+                    )}
+                    {validatedCount > 0 && (
+                      <span
+                        style={{
+                          padding: "3px 8px",
+                          borderRadius: 999,
+                          background: "#dcfce7",
+                          border: "1px solid #86efac",
+                          fontSize: 11,
+                          fontWeight: 700,
+                        }}
+                      >
+                        ✅ {validatedCount}
+                      </span>
+                    )}
                   </div>
-                </div>
 
-                {commercials.length > 0 && (
-                  <div
-                    style={{
-                      fontSize: 12,
-                      color: "#6b7280",
-                      background: "#f9fafb",
-                      padding: 10,
-                      borderRadius: 8,
-                      marginBottom: 10,
-                    }}
-                  >
-                    <strong>Commerciaux :</strong>
-                    {commercials.map((c, i) => (
-                      <span key={i} style={{ marginLeft: 8 }}>
-                        {c.nom} ({c.telephone})
+                  {/* 🆕 Bouton WhatsApp */}
+                  {unsent.length > 0 && (
+                    <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                      <button
+                        onClick={() => {
+                          setSelectedFournisseurForCommercial(fName);
+                          setShowCommercialModal(true);
+                        }}
+                        style={{
+                          padding: "8px 14px",
+                          borderRadius: 10,
+                          border: "1px solid #e5e7eb",
+                          background: "#fff",
+                          color: "#374151",
+                          fontSize: 13,
+                          fontWeight: 600,
+                          cursor: "pointer",
+                        }}
+                        title="Gérer les commerciaux"
+                      >
+                        👥 Commerciaux
+                      </button>
+
+                      {showCommercialSelect === fName ? (
+                        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                          <select
+                            value={selectedCommercial}
+                            onChange={(e) => setSelectedCommercial(e.target.value)}
+                            style={{
+                              padding: "8px 12px",
+                              borderRadius: 10,
+                              border: "1px solid #e5e7eb",
+                              fontSize: 13,
+                            }}
+                          >
+                            <option value="">Fournisseur principal</option>
+                            {(commerciaux[fName] || []).map((com) => (
+                              <option key={com.id} value={com.telephone}>
+                                {com.nom} - {com.telephone}
+                              </option>
+                            ))}
+                          </select>
+                          <button
+                            onClick={() => sendOrderViaWhatsApp(fName, unsent, selectedCommercial || null)}
+                            disabled={sendingWhatsApp}
+                            style={{
+                              padding: "10px 18px",
+                              borderRadius: 10,
+                              border: "none",
+                              background: sendingWhatsApp
+                                ? "linear-gradient(135deg,#9ca3af,#6b7280)"
+                                : "linear-gradient(135deg,#22c55e,#16a34a)",
+                              color: "#fff",
+                              fontSize: 14,
+                              fontWeight: 700,
+                              cursor: sendingWhatsApp ? "not-allowed" : "pointer",
+                            }}
+                          >
+                            {sendingWhatsApp ? "⏳" : "📲 Envoyer"}
+                          </button>
+                          <button
+                            onClick={() => {
+                              setShowCommercialSelect("");
+                              setSelectedCommercial("");
+                            }}
+                            style={{
+                              padding: "10px 14px",
+                              borderRadius: 10,
+                              border: "1px solid #e5e7eb",
+                              background: "#fff",
+                              color: "#6b7280",
+                              fontSize: 14,
+                              cursor: "pointer",
+                            }}
+                          >
+                            ✕
+                          </button>
+                        </div>
+                      ) : (
                         <button
-                          onClick={() => deleteCommercial(supName, i)}
+                          onClick={() => setShowCommercialSelect(fName)}
+                          disabled={sendingWhatsApp}
                           style={{
-                            marginLeft: 6,
-                            padding: "2px 6px",
-                            background: "#fee2e2",
-                            border: "1px solid #fecaca",
-                            borderRadius: 6,
-                            cursor: "pointer",
-                            fontSize: 10,
+                            padding: "10px 18px",
+                            borderRadius: 10,
+                            border: "none",
+                            background: sendingWhatsApp
+                              ? "linear-gradient(135deg,#9ca3af,#6b7280)"
+                              : "linear-gradient(135deg,#22c55e,#16a34a)",
+                            color: "#fff",
+                            fontSize: 14,
+                            fontWeight: 700,
+                            cursor: sendingWhatsApp ? "not-allowed" : "pointer",
+                            display: "flex",
+                            alignItems: "center",
+                            gap: 8,
                           }}
                         >
-                          ✕
+                          {sendingWhatsApp ? "⏳ Envoi..." : "📲 Envoyer via WhatsApp"}
                         </button>
-                      </span>
-                    ))}
-                  </div>
-                )}
+                      )}
+                    </div>
+                  )}
+                </div>
 
+                {/* Tableau des lignes */}
                 <div style={{ overflowX: "auto" }}>
-                  <table style={{ width: "100%", minWidth: 900, borderCollapse: "collapse" }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 1200 }}>
                     <thead>
-                      <tr style={{ background: "linear-gradient(135deg,#1f2937,#111827)", color: "#fff" }}>
-                        <th style={{ padding: 10, textAlign: "left" }}>Médicament</th>
-                        <th style={{ padding: 10, textAlign: "left" }}>N° lot</th>
-                        <th style={{ padding: 10, textAlign: "center" }}>Date</th>
-                        <th style={{ padding: 10, textAlign: "center" }}>Qté</th>
-                        <th style={{ padding: 10, textAlign: "center" }}>Remise</th>
-                        <th style={{ padding: 10, textAlign: "center" }}>Urgent</th>
-                        <th style={{ padding: 10, textAlign: "center" }}>Statut</th>
-                        <th style={{ padding: 10, textAlign: "center", width: 320 }}>Actions</th>
+                      <tr style={{ background: "linear-gradient(135deg,#6366f1,#4f46e5)", color: "#fff" }}>
+                        <th style={{ padding: 12, textAlign: "left", fontSize: 13, fontWeight: 700 }}>
+                          Produit / Lot
+                        </th>
+                        <th style={{ padding: 12, textAlign: "left", fontSize: 13, fontWeight: 700 }}>
+                          Vente (Client)
+                        </th>
+                        <th style={{ padding: 12, textAlign: "center", fontSize: 13, fontWeight: 700 }}>
+                          Date souhaitée
+                        </th>
+                        <th style={{ padding: 12, textAlign: "center", fontSize: 13, fontWeight: 700 }}>
+                          Quantité
+                        </th>
+                        <th style={{ padding: 12, textAlign: "center", fontSize: 13, fontWeight: 700 }}>
+                          Remise (%)
+                        </th>
+                        <th style={{ padding: 12, textAlign: "center", fontSize: 13, fontWeight: 700 }}>
+                          Urgent
+                        </th>
+                        <th style={{ padding: 12, textAlign: "center", fontSize: 13, fontWeight: 700 }}>
+                          Statut
+                        </th>
+                        <th style={{ padding: 12, textAlign: "center", fontSize: 13, fontWeight: 700 }}>
+                          Actions
+                        </th>
                       </tr>
                     </thead>
                     <tbody>
-                      {filteredLines.map((l, idx) => {
+                      {lines.map((l) => {
                         const st = lineStatus[l.key] || {};
-                        const isLocked = st.sent && !st.validated;
-                        const isNewAfterSent = l.isNewAfterSent || false;
+                        const isLocked = st.sent || st.locked;
 
-                        const displayNom = isLocked ? st.frozenName || l.nom : l.nom;
-                        const displayLot = isLocked ? st.frozenLot || l.numeroLot : l.numeroLot;
-                        const displayQuantite = isLocked ? st.frozenQuantity || l.quantite : l.quantite;
-                        const displayDate = isLocked ? st.frozenDate || l.date : l.date;
-                        const displayRemise = isLocked ? st.frozenRemise || l.remise : l.remise;
-                        const displayUrgent = isLocked ? st.frozenUrgent || l.urgent : l.urgent;
+                        const displayNom = l.nom || "Produit";
+                        const displayLot = l.lot || "-";
+                        const displayDate = l.date || todayISO();
+                        const displayQuantite = safeNumber(l.quantite);
+                        const displayRemise = safeNumber(l.remise);
+                        const displayUrgent = l.urgent;
+
+                        // Vérifie si la ligne a été créée/modifiée après l'envoi
+                        const isNewAfterSent = false; // À implémenter si besoin
 
                         return (
                           <tr
                             key={l.key}
                             style={{
-                              background: st.validated
-                                ? "rgba(220,252,231,.3)"
-                                : isLocked
-                                ? "rgba(254,243,199,.3)"
-                                : isNewAfterSent
-                                ? "rgba(191,219,254,.3)"
-                                : idx % 2
-                                ? "#f9fafb"
-                                : "white",
-                              borderLeft: st.validated
-                                ? "4px solid #22c55e"
-                                : isLocked
-                                ? "4px solid #f59e0b"
-                                : isNewAfterSent
-                                ? "4px solid #3b82f6"
-                                : undefined,
+                              borderBottom: "1px solid #f3f4f6",
+                              background: st.validated ? "#f0fdf4" : isLocked ? "#fefce8" : "#fff",
                             }}
                           >
                             <td style={{ padding: 10, fontWeight: 700 }}>
-                              {displayNom}
-                              {isNewAfterSent && (
-                                <span
-                                  style={{
-                                    marginLeft: 6,
-                                    padding: "2px 6px",
-                                    background: "#dbeafe",
-                                    border: "1px solid #93c5fd",
-                                    borderRadius: 6,
-                                    fontSize: 10,
-                                    fontWeight: 800,
-                                  }}
-                                >
-                                  NOUVEAU
-                                </span>
+                              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                                <span>{displayNom}</span>
+                                {displayLot !== "-" && (
+                                  <span style={{ fontSize: 11, color: "#6b7280" }}>(Lot: {displayLot})</span>
+                                )}
+                                {l.stockSource === "stock2" && (
+                                  <span
+                                    style={{
+                                      padding: "2px 6px",
+                                      background: "linear-gradient(135deg,#10b981,#059669)",
+                                      color: "#fff",
+                                      borderRadius: 6,
+                                      fontSize: 10,
+                                      fontWeight: 800,
+                                    }}
+                                  >
+                                    S2
+                                  </span>
+                                )}
+                                {isNewAfterSent && (
+                                  <span
+                                    style={{
+                                      padding: "2px 6px",
+                                      background: "#dbeafe",
+                                      border: "1px solid #93c5fd",
+                                      borderRadius: 6,
+                                      fontSize: 10,
+                                      fontWeight: 800,
+                                    }}
+                                  >
+                                    NOUVEAU
+                                  </span>
+                                )}
+                              </div>
+                            </td>
+                            <td style={{ padding: 10 }}>
+                              {l.client || l.isManual ? (
+                                <div style={{ fontSize: 12 }}>
+                                  {l.isManual ? (
+                                    <span style={{ color: "#6b7280", fontStyle: "italic" }}>Ligne manuelle</span>
+                                  ) : (
+                                    <>
+                                      <div style={{ fontWeight: 600, color: "#374151" }}>{l.client || "-"}</div>
+                                      {l.venteDate && (
+                                        <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 2 }}>
+                                          {formatDateSafe(l.venteDate)}
+                                        </div>
+                                      )}
+                                    </>
+                                  )}
+                                </div>
+                              ) : (
+                                <span style={{ fontSize: 11, color: "#9ca3af" }}>-</span>
                               )}
                             </td>
-                            <td style={{ padding: 10 }}>{displayLot}</td>
                             <td style={{ padding: 10, textAlign: "center" }}>
                               <input
                                 type="date"
@@ -1646,8 +1425,9 @@ export default function OrderManagement() {
                                       fontSize: 13,
                                       fontWeight: 700,
                                     }}
+                                    title="Marquer comme validé"
                                   >
-                                    ✅
+                                    ✅ Valider
                                   </button>
                                 )}
                                 {!isLocked && (
@@ -1685,7 +1465,25 @@ export default function OrderManagement() {
                                   </>
                                 )}
                                 {isLocked && (
-                                  <span style={{ fontSize: 11, color: "#6b7280", fontWeight: 600 }}>🔒 Verrouillé</span>
+                                  <>
+                                    <span style={{ fontSize: 11, color: "#6b7280", fontWeight: 600 }}>🔒 Verrouillé</span>
+                                    <button
+                                      onClick={() => deleteLinePermanently(l.key)}
+                                      style={{
+                                        background: "linear-gradient(135deg,#ef4444,#dc2626)",
+                                        color: "#fff",
+                                        border: "none",
+                                        borderRadius: 8,
+                                        padding: "6px 10px",
+                                        cursor: "pointer",
+                                        fontSize: 13,
+                                        fontWeight: 700,
+                                      }}
+                                      title="Supprimer définitivement"
+                                    >
+                                      🗑️ Supprimer
+                                    </button>
+                                  </>
                                 )}
                               </div>
                             </td>
@@ -1700,6 +1498,167 @@ export default function OrderManagement() {
           })
         )}
       </div>
+
+      {/* 🆕 Modal Gestion des Commerciaux */}
+      {showCommercialModal && (
+        <div
+          onClick={(e) => e.target === e.currentTarget && setShowCommercialModal(false)}
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(0,0,0,0.5)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 10000,
+            padding: 16,
+          }}
+        >
+          <div
+            style={{
+              background: "#fff",
+              borderRadius: 16,
+              width: "min(100%, 600px)",
+              maxHeight: "80vh",
+              overflowY: "auto",
+              boxShadow: "0 20px 50px rgba(0,0,0,0.3)",
+            }}
+          >
+            {/* En-tête */}
+            <div
+              style={{
+                padding: "20px 24px",
+                borderBottom: "2px solid #e5e7eb",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+              }}
+            >
+              <h2 style={{ margin: 0, fontSize: 20, fontWeight: 800, color: "#111827" }}>
+                👥 Commerciaux - {selectedFournisseurForCommercial}
+              </h2>
+              <button
+                onClick={() => setShowCommercialModal(false)}
+                style={{
+                  border: "none",
+                  background: "transparent",
+                  fontSize: 24,
+                  cursor: "pointer",
+                  color: "#6b7280",
+                }}
+              >
+                ×
+              </button>
+            </div>
+
+            {/* Contenu */}
+            <div style={{ padding: 24 }}>
+              {/* Formulaire ajout */}
+              <div
+                style={{
+                  background: "linear-gradient(135deg,#f3f4f6,#e5e7eb)",
+                  borderRadius: 12,
+                  padding: 18,
+                  marginBottom: 20,
+                }}
+              >
+                <h3 style={{ margin: "0 0 14px", fontSize: 16, fontWeight: 700, color: "#374151" }}>
+                  ➕ Ajouter un commercial
+                </h3>
+                <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                  <input
+                    type="text"
+                    placeholder="Nom du commercial"
+                    value={newCommercialNom}
+                    onChange={(e) => setNewCommercialNom(e.target.value)}
+                    style={{
+                      padding: "10px 14px",
+                      border: "1px solid #e5e7eb",
+                      borderRadius: 10,
+                      fontSize: 14,
+                    }}
+                  />
+                  <input
+                    type="tel"
+                    placeholder="Numéro de téléphone (ex: +212...)"
+                    value={newCommercialTel}
+                    onChange={(e) => setNewCommercialTel(e.target.value)}
+                    style={{
+                      padding: "10px 14px",
+                      border: "1px solid #e5e7eb",
+                      borderRadius: 10,
+                      fontSize: 14,
+                    }}
+                  />
+                  <button
+                    onClick={addCommercial}
+                    style={{
+                      padding: "10px 16px",
+                      borderRadius: 10,
+                      border: "none",
+                      background: "linear-gradient(135deg,#10b981,#059669)",
+                      color: "#fff",
+                      fontSize: 14,
+                      fontWeight: 700,
+                      cursor: "pointer",
+                    }}
+                  >
+                    ➕ Ajouter
+                  </button>
+                </div>
+              </div>
+
+              {/* Liste des commerciaux */}
+              <h3 style={{ margin: "0 0 12px", fontSize: 16, fontWeight: 700, color: "#374151" }}>
+                📋 Liste des commerciaux
+              </h3>
+              {(commerciaux[selectedFournisseurForCommercial] || []).length === 0 ? (
+                <p style={{ color: "#6b7280", fontSize: 14, fontStyle: "italic" }}>
+                  Aucun commercial enregistré
+                </p>
+              ) : (
+                <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                  {(commerciaux[selectedFournisseurForCommercial] || []).map((com) => (
+                    <div
+                      key={com.id}
+                      style={{
+                        background: "#fff",
+                        border: "1px solid #e5e7eb",
+                        borderRadius: 10,
+                        padding: "12px 16px",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "space-between",
+                        gap: 12,
+                      }}
+                    >
+                      <div style={{ flex: 1 }}>
+                        <div style={{ fontWeight: 700, fontSize: 15, color: "#111827" }}>{com.nom}</div>
+                        <div style={{ fontSize: 13, color: "#6b7280", marginTop: 2 }}>{com.telephone}</div>
+                      </div>
+                      <button
+                        onClick={() => deleteCommercial(com.id)}
+                        style={{
+                          padding: "8px 12px",
+                          borderRadius: 8,
+                          border: "none",
+                          background: "linear-gradient(135deg,#ef4444,#dc2626)",
+                          color: "#fff",
+                          fontSize: 13,
+                          fontWeight: 600,
+                          cursor: "pointer",
+                        }}
+                      >
+                        🗑️ Supprimer
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

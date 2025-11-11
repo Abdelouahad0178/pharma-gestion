@@ -1,5 +1,7 @@
-// src/components/Navbar.js - Version complète avec gestion permissions personnalisées + Analytics + Charges + Catalogue + Clôture caisse
-import React, { useState, useEffect } from "react";
+// src/components/Navbar.js
+// Version robuste : gère hasCustomPermissions (function|boolean) et getExtraPermissions (function|array)
+
+import React, { useState, useEffect, useMemo } from "react";
 import { Link, useNavigate, useLocation } from "react-router-dom";
 
 import {
@@ -16,7 +18,7 @@ import {
   Button,
   Divider,
   Badge,
-  Chip
+  Chip,
 } from "@mui/material";
 import {
   Menu as MenuIcon,
@@ -38,7 +40,7 @@ import {
   Person as PersonIcon,          // Charges Personnels
   Receipt as ReceiptIcon,        // Charges Divers
   MenuBook as MenuBookIcon,      // Catalogue médicaments
-  AccountBalanceWallet as WalletIcon // Clôture caisse
+  AccountBalanceWallet as WalletIcon, // Clôture caisse
 } from "@mui/icons-material";
 
 import { signOut } from "firebase/auth";
@@ -51,10 +53,10 @@ export default function Navbar() {
   const [currentTime, setCurrentTime] = useState("");
   const navigate = useNavigate();
   const location = useLocation();
-  
-  const { 
-    role, 
-    loading, 
+
+  const {
+    role,
+    loading,
     authReady,
     canAccessApp,
     isDeleted,
@@ -63,8 +65,8 @@ export default function Navbar() {
     isOwner,
     getUserRoleDisplay,
     getOwnershipStatus,
-    hasCustomPermissions,
-    getExtraPermissions
+    hasCustomPermissions,   // peut être function ou boolean (rétro-compat)
+    getExtraPermissions,    // peut être function ou array (rétro-compat)
   } = useUserRole();
 
   const { can } = usePermissions();
@@ -73,7 +75,11 @@ export default function Navbar() {
     const updateClock = () => {
       const now = new Date();
       setCurrentTime(
-        now.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit", second: "2-digit" })
+        now.toLocaleTimeString("fr-FR", {
+          hour: "2-digit",
+          minute: "2-digit",
+          second: "2-digit",
+        })
       );
     };
     updateClock();
@@ -81,36 +87,54 @@ export default function Navbar() {
     return () => clearInterval(id);
   }, []);
 
+  // ========= Sécurisation rétro-compat permissions étendues =========
+  const userHasCustomPerms = useMemo(() => {
+    if (typeof hasCustomPermissions === "function") return !!hasCustomPermissions();
+    return !!hasCustomPermissions; // si c'est un booléen exposé
+  }, [hasCustomPermissions]);
+
+  const extraPermissions = useMemo(() => {
+    if (!userHasCustomPerms) return [];
+    if (typeof getExtraPermissions === "function") {
+      const arr = getExtraPermissions();
+      return Array.isArray(arr) ? arr : [];
+    }
+    // si c'est déjà un tableau exposé dans le contexte
+    return Array.isArray(getExtraPermissions) ? getExtraPermissions : [];
+  }, [userHasCustomPerms, getExtraPermissions]);
+
   // ================= MENU ==================
-  const menuItems = [
+  const menuItems = useMemo(() => ([
     { text: "Dashboard", icon: <DashboardIcon />, path: "/dashboard", permission: "voir_dashboard", description: "Tableau de bord principal" },
     { text: "Achats", icon: <ShoppingCartIcon />, path: "/achats", permission: "voir_achats", description: "Gestion des achats fournisseurs" },
     { text: "Ventes", icon: <PointOfSaleIcon />, path: "/ventes", permission: "voir_ventes", description: "Gestion des ventes clients" },
     { text: "Clients", icon: <PeopleIcon />, path: "/clients", permission: "voir_ventes", description: "Gestion des clients, commandes & paiements" },
 
-    // Aligné avec App.js: /stock est protégé par "ajouter_stock"
+    // Aligné avec App.js: /stock protégé par "ajouter_stock"
     { text: "Stock", icon: <LocalPharmacyIcon />, path: "/stock", permission: "ajouter_stock", description: "Gestion du stock pharmacie" },
 
-    // Nouveau : Catalogue médicaments (route /catalogue dans App.js, permission voir_ventes)
+    // Catalogue médicaments (permission réutilisée 'voir_ventes')
     { text: "Catalogue médicaments", icon: <MenuBookIcon />, path: "/catalogue", permission: "voir_ventes", description: "Catalogue partagé des médicaments (références, DCI, dosage)" },
 
     { text: "Devis & Factures", icon: <DescriptionIcon />, path: "/devis-factures", permission: "voir_devis_factures", description: "Gestion devis et factures" },
     { text: "Paiements", icon: <AttachMoneyIcon />, path: "/paiements", permission: "voir_paiements", description: "Suivi des paiements" },
 
-    // ✅ Nouveau : Clôture caisse (route /cloture, permission réutilisée 'voir_paiements')
+    // Clôture caisse (permission réutilisée 'voir_paiements')
     { text: "Clôture caisse", icon: <WalletIcon />, path: "/cloture", permission: "voir_paiements", description: "Clôture journalière (contrôle de caisse)" },
-    
+
     // Charges
     { text: "Charges Personnels", icon: <PersonIcon />, path: "/charges-personnels", permission: "voir_dashboard", description: "Gestion des charges du personnel" },
     { text: "Charges Divers", icon: <ReceiptIcon />, path: "/charges-divers", permission: "voir_dashboard", description: "Gestion des charges diverses" },
-    
+
     { text: "Statistiques", icon: <BarChartIcon />, path: "/analytics", permission: "voir_dashboard", description: "Analyses et graphiques de performance", isNew: true },
     { text: "Sauvegardes", icon: <BackupIcon />, path: "/backup", permission: "voir_dashboard", description: "Sauvegarde des données", isNew: true, hasOwnerBonus: true },
+
     { text: "Utilisateurs", icon: <PeopleIcon />, path: "/users", permission: "gerer_utilisateurs", description: "Gestion des invitations et utilisateurs", isAdmin: true },
     { text: "👑 Gestion Rôles", icon: <ManageAccountsIcon />, path: "/gestion-utilisateurs", permission: "gerer_utilisateurs", ownerOnly: true, description: "Promotion/rétrogradation des utilisateurs", isOwnerSpecial: true },
+
     { text: "Paramètres", icon: <SettingsIcon />, path: "/parametres", permission: "parametres", description: "Configuration système" },
     { text: "Documents légaux", icon: <GavelIcon />, path: "/legal", permission: "voir_dashboard", description: "CGU, Confidentialité, Mentions, SLA" },
-  ];
+  ]), []);
 
   const handleLogout = async () => {
     try {
@@ -122,16 +146,14 @@ export default function Navbar() {
   };
 
   if (loading || !authReady) return null;
-  if (!canAccessApp()) return null; // doit rester une fonction
-
-  const extraPermissions = hasCustomPermissions() ? getExtraPermissions() : [];
+  if (!canAccessApp()) return null; // laisser en fonction
 
   const drawer = (
     <Box
       sx={{
         width: 285,
         height: "100%",
-        color: "#fff"
+        color: "#fff",
       }}
       role="presentation"
       onClick={() => setDrawerOpen(false)}
@@ -204,9 +226,7 @@ export default function Navbar() {
       {(isDeleted || isLocked || !isActive) && (
         <Box sx={{ textAlign: "center", mb: 1, px: 2 }}>
           <Chip
-            label={
-              isDeleted ? "🗑️ Supprimé" : isLocked ? "🔒 Verrouillé" : "⏸️ Désactivé"
-            }
+            label={isDeleted ? "🗑️ Supprimé" : isLocked ? "🔒 Verrouillé" : "⏸️ Désactivé"}
             size="small"
             sx={{
               background: "linear-gradient(90deg,#f44336,#e57373)",
@@ -250,9 +270,7 @@ export default function Navbar() {
                   }),
                   "&:hover": {
                     background:
-                      location.pathname === item.path
-                        ? "#fff"
-                        : "rgba(255,255,255,0.1)",
+                      location.pathname === item.path ? "#fff" : "rgba(255,255,255,0.1)",
                   },
                 }}
               >
@@ -294,8 +312,7 @@ export default function Navbar() {
                           fontSize: "7px",
                           height: "14px",
                           minWidth: "28px",
-                          background:
-                            "linear-gradient(90deg,#10b981,#059669)",
+                          background: "linear-gradient(90deg,#10b981,#059669)",
                           color: "white",
                           fontWeight: "bold",
                         },
@@ -317,8 +334,7 @@ export default function Navbar() {
                           label="Étendue"
                           size="small"
                           sx={{
-                            background:
-                              "linear-gradient(90deg,#ffd700,#ffed4a)",
+                            background: "linear-gradient(90deg,#ffd700,#ffed4a)",
                             color: "#1a2332",
                             fontSize: "0.6rem",
                             height: "16px",
@@ -459,7 +475,15 @@ export default function Navbar() {
 
           {/* Heure actuelle */}
           <Box sx={{ mr: 3 }}>
-            <Typography variant="body1" sx={{ fontWeight: "bold", fontSize: "0.9rem", color: "#fff", textShadow: "0 0 5px #0006" }}>
+            <Typography
+              variant="body1"
+              sx={{
+                fontWeight: "bold",
+                fontSize: "0.9rem",
+                color: "#fff",
+                textShadow: "0 0 5px #0006",
+              }}
+            >
               🕒 {currentTime}
             </Typography>
           </Box>
@@ -474,7 +498,7 @@ export default function Navbar() {
               borderRadius: 2,
               px: 2,
               transition: "background 0.2s",
-              "&:hover": { bgcolor: "#fff5", color: "#1976d2" }
+              "&:hover": { bgcolor: "#fff5", color: "#1976d2" },
             }}
           >
             Déconnexion
@@ -490,8 +514,8 @@ export default function Navbar() {
           sx: {
             borderTopRightRadius: 18,
             borderBottomRightRadius: 18,
-            background: "linear-gradient(135deg,#122058,#315aac 120%)"
-          }
+            background: "linear-gradient(135deg,#122058,#315aac 120%)",
+          },
         }}
       >
         {drawer}

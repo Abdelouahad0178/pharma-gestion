@@ -562,6 +562,9 @@ export default function Ventes() {
   /* 🆕 ===== PAGINATION STATE ===== */
   const [currentPage, setCurrentPage] = useState(1);
 
+  /* 🆕 ===== ÉTAT POUR AFFICHER/MASQUER LES FILTRES ===== */
+  const [showFilters, setShowFilters] = useState(true);
+
   /* ===== Audio (bip) ===== */
   const audioCtxRef = useRef(null);
   const getAudioCtx = useCallback(() => {
@@ -608,7 +611,7 @@ export default function Ventes() {
   /* ===== Contexte utilisateur ===== */
   const { user, societeId, loading } = useUserRole();
 
-  /* ===== Etats ===== */
+  /* ===== États ===== */
   const [client, setClient] = useState("(passant)");
   const [dateVente, setDateVente] = useState(getTodayDateString());
   const [statutPaiement, setStatutPaiement] = useState("payé");
@@ -658,6 +661,14 @@ export default function Ventes() {
 
   const [lastRealtimeBeat, setLastRealtimeBeat] = useState(null);
   const lastAddTsRef = useRef(0);
+
+  // 🆕 États pour les nouveaux filtres
+  const [filterClient, setFilterClient] = useState("");
+  const [filterProduit, setFilterProduit] = useState("");
+  const [filterS1, setFilterS1] = useState(false);
+  const [filterS2, setFilterS2] = useState(false);
+  const [dateDe, setDateDe] = useState("");
+  const [dateA, setDateA] = useState("");
 
   /* ===== CHARGEMENT (lié à active) ===== */
   useEffect(() => {
@@ -799,6 +810,17 @@ export default function Ventes() {
       .sort((a, b) => a.nom.localeCompare(b.nom));
   }, [medicaments, stockEntries]);
 
+  // 🆕 Liste unique des produits pour le filtre
+  const uniqueProduits = useMemo(() => {
+    const set = new Set();
+    ventes.forEach((v) => {
+      (v.articles || []).forEach((a) => {
+        if (a.produit) set.add(a.produit);
+      });
+    });
+    return Array.from(set).sort();
+  }, [ventes]);
+
   /* ===== Totaux / filtres ===== */
   const totalVenteCourante = useMemo(
     () => articles.reduce((t, a) =>
@@ -808,11 +830,48 @@ export default function Ventes() {
 
   const distinctPanierCount = useMemo(() => distinctCountByProduit(articles), [articles]);
 
+  // 🆕 Amélioration du filtrage avec les nouveaux filtres
   const ventesFiltrees = useMemo(() => {
     if (!active) return [];
     return ventes.filter((v) => {
       let keep = true;
+      
+      // Filtre par statut
       if (filterStatut && v.statutPaiement !== filterStatut) keep = false;
+      
+      // Filtre par client spécifique
+      if (filterClient && v.client !== filterClient) keep = false;
+      
+      // Filtre par produit spécifique
+      if (filterProduit && !v.articles?.some(a => a.produit === filterProduit)) keep = false;
+      
+      // Filtre S1 - doit avoir au moins un article depuis stock1
+      if (filterS1 && !filterS2 && !v.articles?.some(a => a.stockSource === "stock1")) keep = false;
+      
+      // Filtre S2 - doit avoir au moins un article depuis stock2
+      if (filterS2 && !filterS1 && !v.articles?.some(a => a.stockSource === "stock2")) keep = false;
+      
+      // Si S1 ET S2 sont cochés, on veut les ventes qui ont au moins un article de l'un ou l'autre
+      if (filterS1 && filterS2) {
+        const hasS1 = v.articles?.some(a => a.stockSource === "stock1");
+        const hasS2 = v.articles?.some(a => a.stockSource === "stock2");
+        if (!hasS1 && !hasS2) keep = false;
+      }
+      
+      // 🆕 Filtre par date
+      const venteDate = safeParseDate(v.date);
+      if (dateDe) {
+        const start = new Date(dateDe);
+        start.setHours(0, 0, 0, 0);
+        if (venteDate < start) keep = false;
+      }
+      if (dateA) {
+        const end = new Date(dateA);
+        end.setHours(23, 59, 59, 999);
+        if (venteDate > end) keep = false;
+      }
+      
+      // Recherche textuelle
       if (searchTerm) {
         const s = searchTerm.toLowerCase();
         const clientMatch = v.client?.toLowerCase().includes(s);
@@ -823,14 +882,26 @@ export default function Ventes() {
         });
         keep = keep && (clientMatch || produitMatch);
       }
+      
       return keep;
     });
-  }, [ventes, filterStatut, searchTerm, active]);
+  }, [ventes, filterStatut, filterClient, filterProduit, filterS1, filterS2, dateDe, dateA, searchTerm, active]);
+
+  // 🆕 Calcul du total des ventes filtrées
+  const totalFiltrees = useMemo(() => {
+    return ventesFiltrees.reduce((sum, v) => {
+      const total = v.montantTotal ||
+        (Array.isArray(v.articles) ? v.articles : []).reduce((s, a) =>
+          s + (safeNumber(a.prixUnitaire) * safeNumber(a.quantite) - safeNumber(a.remise || 0)), 0
+        );
+      return sum + total;
+    }, 0);
+  }, [ventesFiltrees]);
 
   /* 🆕 ===== RÉINITIALISER LA PAGE LORS DU CHANGEMENT DE FILTRES ===== */
   useEffect(() => {
     setCurrentPage(1);
-  }, [searchTerm, filterStatut]);
+  }, [searchTerm, filterStatut, filterClient, filterProduit, filterS1, filterS2, dateDe, dateA]);
 
   /* 🆕 ===== PAGINATION DES VENTES ===== */
   const totalPages = Math.ceil(ventesFiltrees.length / ITEMS_PER_PAGE);
@@ -1184,15 +1255,11 @@ export default function Ventes() {
   const handleDeleteVente = useCallback(async (vente) => {
     if (!active) return;
     if (!window.confirm(`Supprimer la vente de ${vente.client} ?
-
 Le stock sera automatiquement restauré pour tous les articles de cette vente.`)) return;
-
     setIsSaving(true);
     setError("");
-
     try {
       await ensureMembership(user, societeId);
-
       // ✅ TOUTES les lectures AVANT la transaction
       const arts = vente.articles || [];
       
@@ -1207,7 +1274,6 @@ Le stock sera automatiquement restauré pour tous les articles de cette vente.`)
             article
           }));
         });
-
       // 2️⃣ Préparer la lecture des paiements
       const paiementsPromise = getDocs(
         query(
@@ -1219,13 +1285,11 @@ Le stock sera automatiquement restauré pour tous les articles de cette vente.`)
         console.warn("Erreur lecture paiements:", e);
         return { docs: [] };
       });
-
       // 3️⃣ Exécuter TOUTES les lectures en parallèle
       const [lotReads, paiementsSnapshot] = await Promise.all([
         Promise.all(lotReadsPromises),
         paiementsPromise
       ]);
-
       // 4️⃣ Transaction (écritures seulement)
       await runTransaction(db, async (transaction) => {
         // Restaurer le stock pour chaque lot
@@ -1235,12 +1299,10 @@ Le stock sera automatiquement restauré pour tous les articles de cette vente.`)
             const s1 = safeNumber(lotData.stock1);
             const s2 = safeNumber(lotData.stock2);
             const qte = safeNumber(article.quantite);
-
             let newS1 = s1, newS2 = s2;
             if (article.stockSource === "stock1") newS1 = s1 + qte;
             else if (article.stockSource === "stock2") newS2 = s2 + qte;
             else newS1 = s1 + qte;
-
             transaction.update(lotRef, {
               stock1: newS1,
               stock2: newS2,
@@ -1257,29 +1319,24 @@ Le stock sera automatiquement restauré pour tous les articles de cette vente.`)
             });
           }
         });
-
         // Supprimer les markers de sync
         for (let i = 0; i < arts.length; i++) {
           const opId = `${vente.id}#${i}`;
           transaction.delete(doc(db, "societe", societeId, APPLIED_SALES_COLL, opId));
           transaction.delete(doc(db, "societe", societeId, DISMISSED_COLL, opId));
         }
-
         // Supprimer la vente
         transaction.delete(doc(db, "societe", societeId, "ventes", vente.id));
-
         // Supprimer les paiements liés
         paiementsSnapshot.docs.forEach((pDoc) => {
           transaction.delete(pDoc.ref);
         });
       });
-
       await logActivity("vente_supprimee", {
         client: vente.client,
         montant: vente.montantTotal,
         articles: (vente.articles || []).length,
       });
-
       beepSuccess();
       setSuccess("Vente supprimée et stock restauré avec succès !");
       setTimeout(() => setSuccess(""), 2400);
@@ -1403,28 +1460,35 @@ Le stock sera automatiquement restauré pour tous les articles de cette vente.`)
     setShowFinalizationSection(false);
   }, []);
 
+  // 🆕 Fonction pour réinitialiser tous les filtres
+  const resetFilters = useCallback(() => {
+    setSearchTerm("");
+    setFilterStatut("");
+    setFilterClient("");
+    setFilterProduit("");
+    setFilterS1(false);
+    setFilterS2(false);
+    setDateDe("");
+    setDateA("");
+  }, []);
+
   /* ===================== Scan (douchette) ===================== */
   const onBarcodeDetected = useCallback((barcode) => {
     if (!active) return;
     try {
       const isMatch = (obj) => BARCODE_FIELDS.some((f) => String(obj?.[f] || "") === String(barcode));
       setNumeroArticle(String(barcode || ""));
-
       const fromEntry = (Array.isArray(stockEntries) ? stockEntries : []).find((p) => isMatch(p)) || null;
-      const fromMed   = !fromEntry ? (Array.isArray(medicaments) ? medicaments : []).find((m) => isMatch(m)) : null;
+      const fromMed = !fromEntry ? (Array.isArray(medicaments) ? medicaments : []).find((m) => isMatch(m)) : null;
       const found = fromEntry || fromMed;
       if (!found) { beepError(); setError(`Aucun produit trouvé pour le code : ${barcode}`); return; }
-
       const nom = found.nom || found.name || "";
       setProduit(nom || ""); setQuantite(1);
-
       const pV = safeNumber(found.prixVente ?? found.price ?? 0);
       if (pV > 0) setPrixUnitaire(pV);
-
       const lotsForProduct = (Array.isArray(stockEntries) ? stockEntries : [])
         .filter((e) => (e.nom || e.name) === nom && (safeNumber(e.stock1) + safeNumber(e.stock2)) > 0);
       setAvailableLots(lotsForProduct || []);
-
       if (lotsForProduct?.length === 1) {
         setSelectedLot(lotsForProduct[0]?.id || lotsForProduct[0]?.numeroLot || "");
         const code = findAnyBarcode(lotsForProduct[0]) || "";
@@ -1432,7 +1496,6 @@ Le stock sera automatiquement restauré pour tous les articles de cette vente.`)
       } else if (lotsForProduct?.length > 0) {
         setSelectedLot(lotsForProduct[0]?.id || "");
       }
-
       const canAutoAdd = Boolean(nom && pV > 0 && (lotsForProduct?.length > 0));
       if (canAutoAdd) {
         beepSuccess();
@@ -1447,7 +1510,6 @@ Le stock sera automatiquement restauré pour tous les articles de cette vente.`)
     if (!active) return;
     const opts = { minChars: 6, endKey: "Enter", timeoutMs: 250 };
     const state = { buf: "", timer: null };
-
     const onKeyDown = (e) => {
       if (e.ctrlKey || e.altKey || e.metaKey) return;
       if (e.key === opts.endKey) {
@@ -1463,7 +1525,6 @@ Le stock sera automatiquement restauré pour tous les articles de cette vente.`)
         }, opts.timeoutMs);
       }
     };
-
     window.addEventListener("keydown", onKeyDown);
     return () => { window.removeEventListener("keydown", onKeyDown); clearTimeout(state.timer); };
   }, [onBarcodeDetected, active]);
@@ -1480,30 +1541,24 @@ Le stock sera automatiquement restauré pour tous les articles de cette vente.`)
           orderBy("date", "desc")
         )
       );
-
       let totalPaye = 0;
       let lastMode = "";
       let lastPaidAt = null;
-
       const rows = [];
       snap.forEach((d) => rows.push({ id: d.id, ...d.data() }));
-
       rows.forEach((p) => {
         totalPaye += safeNumber(p.montant);
       });
-
       if (rows.length > 0) {
         const last = rows[0];
         lastMode = (last.mode || "").trim();
         lastPaidAt = last.date || Timestamp.now();
       }
-
       const total = safeNumber(vente.montantTotal);
       const EPS = 0.01;
       let statut = "impayé";
       if (totalPaye >= total - EPS && total > 0) statut = "payé";
       else if (totalPaye > EPS && totalPaye < total - EPS) statut = "partiel";
-
       const updates = {
         statutPaiement: statut,
         montantPaye: totalPaye,
@@ -1511,14 +1566,11 @@ Le stock sera automatiquement restauré pour tous les articles de cette vente.`)
         lastPaidAt: lastPaidAt || Timestamp.now(),
         updatedAt: Timestamp.now(),
       };
-
       // Règle métier : si la vente devient "payé" et que le dernier paiement est en "Espèces", forcer modePaiement = "Espèces"
       if (statut === "payé" && String(lastMode).toLowerCase().includes("esp")) {
         updates.modePaiement = "Espèces";
       }
-
       await updateDoc(doc(db, "societe", societeId, "ventes", vente.id), updates);
-
       setSuccess(`Statut synchronisé (${statut}${updates.modePaiement ? " • " + updates.modePaiement : ""})`);
       setTimeout(() => setSuccess(""), 2000);
     } catch (e) {
@@ -1815,7 +1867,7 @@ Le stock sera automatiquement restauré pour tous les articles de cette vente.`)
                         <th style={{ padding: 10, textAlign: "left", fontWeight: 600, fontSize: 12 }}>Produit / Traçabilité</th>
                         <th style={{ padding: 10, textAlign: "center", fontWeight: 600, fontSize: 12 }}>Qté</th>
                         <th style={{ padding: 10, textAlign: "right", fontWeight: 600, fontSize: 12 }}>Prix unit.</th>
-                        <th style={{ padding: 10, textAlign:  "right", fontWeight: 600, fontSize: 12 }}>Remise</th>
+                        <th style={{ padding: 10, textAlign: "right", fontWeight: 600, fontSize: 12 }}>Remise</th>
                         <th style={{ padding: 10, textAlign: "right", fontWeight: 600, fontSize: 12 }}>Total</th>
                         <th style={{ padding: 10, textAlign: "center", fontWeight: 600, fontSize: 12, width: 60 }}>Action</th>
                       </tr>
@@ -1922,7 +1974,7 @@ Le stock sera automatiquement restauré pour tous les articles de cette vente.`)
                     <select value={modePaiement} onChange={(e) => setModePaiement(e.target.value)}
                             style={{width:"100%",padding:"8px 12px",borderRadius:10,border:"2px solid #e5e7eb",fontSize:14,background:"white"}}>
                       <option value="Espèces">Espèces</option>
-                      <option value="Carte">Carte bancaire</option>
+                      <option value="Carte">Carte</option>
                       <option value="Chèque">Chèque</option>
                       <option value="Virement">Virement</option>
                       <option value="Crédit">Crédit</option>
@@ -1954,29 +2006,130 @@ Le stock sera automatiquement restauré pour tous les articles de cette vente.`)
         </div>
       )}
 
-      {/* Filtres */}
-      <div style={{background:"rgba(255,255,255,0.95)",backdropFilter:"blur(20px)",borderRadius:16,padding:18,marginBottom:16,border:"1px solid rgba(255,255,255,0.2)",boxShadow:"0 10px 25px rgba(0,0,0,0.08)"}}>
-        <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
-          <div style={{ flex: "1", minWidth: 240 }}>
-            <input type="text" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} placeholder="Rechercher client, produit, lot ou N° article..."
-                   style={{width:"100%",padding:"11px 18px",borderRadius:20,border:"2px solid #e5e7eb",fontSize:15,background:"white"}} />
+      {/* 🆕 Bouton pour afficher/masquer les filtres */}
+      <div style={{background:"rgba(255,255,255,0.95)",backdropFilter:"blur(20px)",borderRadius:16,padding:16,marginBottom:16,border:"1px solid rgba(255,255,255,0.2)",boxShadow:"0 10px 25px rgba(0,0,0,0.08)"}}>
+        <button
+          onClick={() => setShowFilters(!showFilters)}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 8,
+            width: "100%",
+            background: "linear-gradient(135deg,#6366f1,#8b5cf6)",
+            color: "white",
+            border: "none",
+            padding: "12px 20px",
+            borderRadius: 12,
+            fontSize: 16,
+            fontWeight: 700,
+            cursor: "pointer",
+            transition: "all 0.3s ease",
+            boxShadow: "0 8px 20px rgba(99,102,241,0.3)"
+          }}
+        >
+          <span style={{ fontSize: 20, transition: "transform 0.3s ease", transform: showFilters ? "rotate(180deg)" : "rotate(0deg)" }}>▼</span>
+          {showFilters ? "Masquer les filtres" : "Afficher les filtres"}
+          <span style={{ fontSize: 20, transition: "transform 0.3s ease", transform: showFilters ? "rotate(180deg)" : "rotate(0deg)" }}>▼</span>
+        </button>
+
+        {/* 🆕 Filtres améliorés - conditionnellement affichés */}
+        {showFilters && (
+          <div style={{ marginTop: 16, transition: "all 0.3s ease" }}>
+            <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+              {/* Recherche textuelle */}
+              <div style={{ flex: "1", minWidth: 200 }}>
+                <input type="text" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} placeholder="Rechercher client, produit, lot ou N° article..."
+                       style={{width:"100%",padding:"11px 18px",borderRadius:20,border:"2px solid #e5e7eb",fontSize:15,background:"white"}} />
+              </div>
+
+              {/* Filtre par client */}
+              <select
+                value={filterClient}
+                onChange={(e) => setFilterClient(e.target.value)}
+                style={{padding:"11px 18px",borderRadius:20,border:"2px solid #e5e7eb",fontSize:15,background:"white",minWidth:150}}
+              >
+                <option value="">Tous les clients</option>
+                {clients.map((c) => (
+                  <option key={c} value={c}>{c}</option>
+                ))}
+              </select>
+
+              {/* Filtre par produit */}
+              <select
+                value={filterProduit}
+                onChange={(e) => setFilterProduit(e.target.value)}
+                style={{padding:"11px 18px",borderRadius:20,border:"2px solid #e5e7eb",fontSize:15,background:"white",minWidth:150}}
+              >
+                <option value="">Tous les produits</option>
+                {uniqueProduits.map((p) => (
+                  <option key={p} value={p}>{p}</option>
+                ))}
+              </select>
+
+              {/* Filtre par date de */}
+              <div style={{ minWidth: 150 }}>
+                <label style={{ display: "block", fontSize: 12, color: "#374151", marginBottom: 4 }}>Date de</label>
+                <input
+                  type="date"
+                  value={dateDe}
+                  onChange={(e) => setDateDe(e.target.value)}
+                  style={{width:"100%",padding:"8px 12px",borderRadius:10,border:"2px solid #e5e7eb",fontSize:14,background:"white"}}
+                />
+              </div>
+
+              {/* Filtre par date à */}
+              <div style={{ minWidth: 150 }}>
+                <label style={{ display: "block", fontSize: 12, color: "#374151", marginBottom: 4 }}>Date à</label>
+                <input
+                  type="date"
+                  value={dateA}
+                  onChange={(e) => setDateA(e.target.value)}
+                  style={{width:"100%",padding:"8px 12px",borderRadius:10,border:"2px solid #e5e7eb",fontSize:14,background:"white"}}
+                />
+              </div>
+
+              {/* Filtre par statut */}
+              <select value={filterStatut} onChange={(e) => setFilterStatut(e.target.value)}
+                      style={{padding:"11px 18px",borderRadius:20,border:"2px solid #e5e7eb",fontSize:15,background:"white",minWidth:150}}>
+                <option value="">Tous les statuts</option>
+                <option value="payé">Payé</option>
+                <option value="partiel">Partiel</option>
+                <option value="impayé">Impayé</option>
+              </select>
+
+              {/* Filtres S1/S2 */}
+              <div style={{display:"flex",gap:10,alignItems:"center"}}>
+                <label style={{display:"flex",alignItems:"center",gap:4,cursor:"pointer"}}>
+                  <input
+                    type="checkbox"
+                    checked={filterS1}
+                    onChange={(e) => setFilterS1(e.target.checked)}
+                    style={{width:16,height:16,cursor:"pointer"}}
+                  />
+                  <span style={{fontSize:14,fontWeight:600,color:"#2563eb"}}>Stock 1</span>
+                </label>
+                <label style={{display:"flex",alignItems:"center",gap:4,cursor:"pointer"}}>
+                  <input
+                    type="checkbox"
+                    checked={filterS2}
+                    onChange={(e) => setFilterS2(e.target.checked)}
+                    style={{width:16,height:16,cursor:"pointer"}}
+                  />
+                  <span style={{fontSize:14,fontWeight:600,color:"#10b981"}}>Stock 2</span>
+                </label>
+              </div>
+
+              {/* Bouton réinitialiser */}
+              {(searchTerm || filterStatut || filterClient || filterProduit || filterS1 || filterS2 || dateDe || dateA) && (
+                <button onClick={resetFilters}
+                        style={{background:"linear-gradient(135deg,#ef4444,#dc2626)",color:"white",border:"none",padding:"11px 18px",borderRadius:20,fontSize:14,fontWeight:600,cursor:"pointer",boxShadow:"0 6px 18px rgba(239,68,68,0.3)"}}>
+                  Réinitialiser
+                </button>
+              )}
+            </div>
           </div>
-
-          <select value={filterStatut} onChange={(e) => setFilterStatut(e.target.value)}
-                  style={{padding:"11px 18px",borderRadius:20,border:"2px solid #e5e7eb",fontSize:15,background:"white",minWidth:170}}>
-            <option value="">Tous les statuts</option>
-            <option value="payé">Payé</option>
-            <option value="partiel">Partiel</option>
-            <option value="impayé">Impayé</option>
-          </select>
-
-          {(searchTerm || filterStatut) && (
-            <button onClick={() => { setSearchTerm(""); setFilterStatut(""); }}
-                    style={{background:"linear-gradient(135deg,#ef4444,#dc2626)",color:"white",border:"none",padding:"11px 18px",borderRadius:20,fontSize:14,fontWeight:600,cursor:"pointer",boxShadow:"0 6px 18px rgba(239,68,68,0.3)"}}>
-              Réinitialiser
-            </button>
-          )}
-        </div>
+        )}
       </div>
 
       {/* Indicateur résultats */}
@@ -1984,11 +2137,24 @@ Le stock sera automatiquement restauré pour tous les articles de cette vente.`)
         <div
           style={{
             display: "flex",
-            justifyContent: "flex-end",
+            justifyContent: "space-between",
             alignItems: "center",
             marginBottom: 12,
           }}
         >
+          <div
+            style={{
+              padding: "10px 16px",
+              background: "linear-gradient(135deg,#e0e7ff,#c7d2fe)",
+              border: "2px solid #818cf8",
+              borderRadius: 10,
+              color: "#312e81",
+              fontWeight: 700,
+              fontSize: 14,
+            }}
+          >
+            💰 Total filtrées: {safeToFixed(totalFiltrees)} DHS
+          </div>
           <div
             style={{
               padding: "10px 16px",
@@ -2014,7 +2180,7 @@ Le stock sera automatiquement restauré pour tous les articles de cette vente.`)
                 <th style={{ padding: 16, textAlign: "left", fontWeight: 700, fontSize: 13, borderRight: "1px solid rgba(255,255,255,0.1)" }}>N° VENTE</th>
                 <th style={{ padding: 16, textAlign: "left", fontWeight: 700, fontSize: 13, borderRight: "1px solid rgba(255,255,255,0.1)" }}>CLIENT</th>
                 <th style={{ padding: 16, textAlign: "center", fontWeight: 700, fontSize: 13, borderRight: "1px solid rgba(255,255,255,0.1)" }}>DATE</th>
-                <th style={{ padding: 16, textAlign:  "center", fontWeight: 700, fontSize: 13, borderRight: "1px solid rgba(255,255,255,0.1)" }}>ARTICLES / STOCK / SYNC</th>
+                <th style={{ padding: 16, textAlign: "center", fontWeight: 700, fontSize: 13, borderRight: "1px solid rgba(255,255,255,0.1)" }}>ARTICLES / STOCK / SYNC</th>
                 <th style={{ padding: 16, textAlign: "center", fontWeight: 700, fontSize: 13, borderRight: "1px solid rgba(255,255,255,0.1)" }}>STATUT</th>
                 <th style={{ padding: 16, textAlign: "right", fontWeight: 700, fontSize: 13, borderRight: "1px solid rgba(255,255,255,0.1)" }}>TOTAL</th>
                 <th style={{ padding: 16, textAlign: "center", fontWeight: 700, fontSize: 13, width: 260 }}>ACTIONS</th>

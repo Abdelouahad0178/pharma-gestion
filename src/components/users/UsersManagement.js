@@ -1,7 +1,7 @@
 // src/components/users/UsersManagement.js
 // Version responsive + permissions GRANULAIRES + soft delete (désactiver/réactiver)
 // - Archivage sous societe/{sid}/archives_users/{uid}
-// - Invitations: ajoute emailLower pour matcher les règles Firestore
+// - Invitations: crée chaque doc avec ID = inviteToken (setDoc + docId)
 
 import React, { useState, useEffect } from "react";
 import { db } from "../../firebase/config";
@@ -103,8 +103,10 @@ export default function UsersManagement() {
     role,
     loading,
     isOwner,
-    canManageUsers, // selon ton contexte: bool ou fonction. On ne modifie pas son usage actuel.
+    canManageUsers, // Fonction du contexte (vérifie l'accès à la page)
+    canModifyUser,  // Import de la fonction de modification depuis le contexte
     refreshCustomPermissions,
+    societeName,
   } = useUserRole();
 
   // États
@@ -207,6 +209,7 @@ export default function UsersManagement() {
             prenom: userData.prenom || "",
             actif: userData.actif !== false,
             customPermissions: normalized,
+            isOwner: userData.isOwner === true,
           });
         });
 
@@ -256,6 +259,7 @@ export default function UsersManagement() {
             prenom: userData.prenom || "",
             actif: userData.actif !== false,
             customPermissions: normalized,
+            isOwner: userData.isOwner === true,
           });
         });
 
@@ -275,10 +279,11 @@ export default function UsersManagement() {
           const inviteData = d.data();
           invitationsList.push({
             id: d.id,
-            email: inviteData.email,
+            email: inviteData.email || inviteData.emailLower,
             role: inviteData.role,
             statut: inviteData.statut || "pending",
             createdAt: inviteData.createdAt,
+            inviteToken: inviteData.inviteToken || d.id,
           });
         });
         setInvitations(invitationsList);
@@ -291,6 +296,17 @@ export default function UsersManagement() {
     loadInvitations();
   }, [user?.uid, societeId, hasAccess]);
 
+  // ====== Générateur de token robuste (docId) ======
+  const generateInviteToken = (len = 28) => {
+    if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+      return crypto.randomUUID().replace(/-/g, "").slice(0, len);
+    }
+    const chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+    let t = "";
+    for (let i = 0; i < len; i++) t += chars.charAt(Math.floor(Math.random() * chars.length));
+    return t;
+  };
+
   // ====== Invitations ======
   const sendInvitation = async (e) => {
     e.preventDefault();
@@ -302,25 +318,51 @@ export default function UsersManagement() {
 
     setSendingInvite(true);
     try {
-      const emailLower = inviteEmail.trim().toLowerCase();
-      const inviteToken =
-        Math.random().toString(36).substring(2, 15) +
-        Math.random().toString(36).substring(2, 15);
+      const emailTrim = inviteEmail.trim();
+      const emailLower = emailTrim.toLowerCase();
 
+      // Empêche d'inviter un Admin si non-owner (sécurité UI)
+      if (inviteRole === "admin" && !isOwner) {
+        setNotification({ message: "Seul le propriétaire peut inviter un administrateur.", type: "error" });
+        setTimeout(() => setNotification(null), 3000);
+        setSendingInvite(false);
+        return;
+      }
+
+      // Vérifier s'il existe déjà une invitation pending pour cet email/société
+      const pendingQ = query(
+        collection(db, "invitations"),
+        where("emailLower", "==", emailLower),
+        where("societeId", "==", societeId),
+        where("statut", "==", "pending")
+      );
+      const pendingSnap = await getDocs(pendingQ);
+      if (!pendingSnap.empty) {
+        setNotification({ message: "Une invitation en attente existe déjà pour cet email.", type: "error" });
+        setTimeout(() => setNotification(null), 3000);
+        setSendingInvite(false);
+        return;
+      }
+
+      // Générer docId = token
+      const inviteToken = generateInviteToken(28);
+
+      const expiresAt = Timestamp.fromDate(new Date(Date.now() + 7 * 24 * 60 * 60 * 1000));
       const invitationData = {
-        email: emailLower,            // on garde l'email normalisé ici
-        emailLower,                   // champ explicit pour les règles
+        email: emailTrim,
+        emailLower,
         role: inviteRole,
         societeId,
         statut: "pending",
         createdAt: serverTimestamp(),
-        expiresAt: Timestamp.fromDate(new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)),
+        expiresAt,
         invitePar: user.uid,
         inviteParEmail: user.email || "",
-        inviteToken,                  // utilisé par AcceptInvitation et les règles
+        inviteToken, // dupliqué pour fallback query
       };
 
-      await setDoc(doc(collection(db, "invitations")), invitationData);
+      // IMPORTANT: docId = inviteToken
+      await setDoc(doc(db, "invitations", inviteToken), invitationData);
 
       const inviteLink = `${window.location.origin}/accept-invitation?token=${inviteToken}`;
 
@@ -329,7 +371,7 @@ export default function UsersManagement() {
         token: inviteToken,
         link: inviteLink,
         role: inviteRole,
-        expiresAt: invitationData.expiresAt,
+        expiresAt,
       });
 
       setNotification({ message: `Invitation créée pour ${emailLower}`, type: "success" });
@@ -338,6 +380,25 @@ export default function UsersManagement() {
       setShowInviteCode(true);
       setInviteEmail("");
       setShowInviteForm(false);
+
+      // Rafraîchir la liste des invitations
+      try {
+        const qInv = query(collection(db, "invitations"), where("societeId", "==", societeId), limit(20));
+        const snapshot = await getDocs(qInv);
+        const list = [];
+        snapshot.forEach((d) => {
+          const inviteData = d.data();
+          list.push({
+            id: d.id,
+            email: inviteData.email || inviteData.emailLower,
+            role: inviteData.role,
+            statut: inviteData.statut || "pending",
+            createdAt: inviteData.createdAt,
+            inviteToken: inviteData.inviteToken || d.id,
+          });
+        });
+        setInvitations(list);
+      } catch {}
     } catch (error) {
       console.error("Erreur création invitation:", error);
       setNotification({ message: "Erreur lors de la création", type: "error" });
@@ -440,12 +501,6 @@ export default function UsersManagement() {
     } finally {
       setUpdatingUser("");
     }
-  };
-
-  const canManageUser = (targetUser) => {
-    if (targetUser.id === user?.uid) return false;
-    if (["pharmacien", "docteur", "admin"].includes(targetUser.role?.toLowerCase())) return false;
-    return ["pharmacien", "docteur", "admin"].includes(role?.toLowerCase()) || isOwner;
   };
 
   // ========== Styles ==========
@@ -760,6 +815,11 @@ export default function UsersManagement() {
                   ["voir_achats", "creer_achats", "modifier_achats"].includes(p)
                 );
 
+                let roleName = "Vendeuse";
+                if (u.role === "docteur") roleName = "Pharmacien";
+                if (u.role === "admin") roleName = "Administrateur";
+                if (u.isOwner) roleName = "Propriétaire";
+
                 return (
                   <div key={u.id} style={styles.userCard}>
                     <div style={styles.userInfo}>
@@ -772,7 +832,7 @@ export default function UsersManagement() {
                         )}
                       </div>
                       <div style={styles.userDetails}>
-                        {u.email} • {u.role === "docteur" ? "Pharmacien" : u.role || "Vendeuse"}
+                        {u.email} • {roleName}
                       </div>
 
                       {/* Infos permissions */}
@@ -818,7 +878,7 @@ export default function UsersManagement() {
 
                         {/* Gérer permissions personnalisées (vendeuse) */}
                         {u.role?.toLowerCase() === "vendeuse" &&
-                          (typeof canManageUsers === "function" ? canManageUsers() : canManageUsers) && (
+                          canModifyUser(u.id, u.isOwner, u.role) && (
                             <button
                               style={{
                                 ...styles.permissionButton,
@@ -833,7 +893,7 @@ export default function UsersManagement() {
                           )}
 
                         {/* Désactiver / Réactiver */}
-                        {canManageUser(u) && (
+                        {canModifyUser(u.id, u.isOwner, u.role) && (
                           <button
                             style={{
                               ...styles.actionButton,
@@ -874,8 +934,12 @@ export default function UsersManagement() {
                 {invitations.map((inv) => (
                   <div key={inv.id} style={styles.invitationCard}>
                     <div style={styles.userInfo}>
-                      <div style={{ fontWeight: 600, color: "#2d3748", marginBottom: "5px" }}>{inv.email}</div>
-                      <div style={{ fontSize: "0.8em", color: "#6b7280" }}>Rôle: {inv.role}</div>
+                      <div style={{ fontWeight: 600, color: "#2d3748", marginBottom: "5px" }}>
+                        {inv.email}
+                      </div>
+                      <div style={{ fontSize: "0.8em", color: "#6b7280" }}>
+                        Rôle: {inv.role}
+                      </div>
                     </div>
 
                     <div
@@ -898,7 +962,7 @@ export default function UsersManagement() {
       {/* Modals : Invitation */}
       {showInviteForm && (
         <div style={styles.modalOverlay}>
-          <div style={styles.modalContent}>
+          <div style={styles.modalContent} className="modal-content">
             <h3
               style={{
                 marginBottom: "20px",
@@ -929,7 +993,8 @@ export default function UsersManagement() {
               >
                 <option value="vendeuse">Vendeuse</option>
                 <option value="assistant">Assistant(e)</option>
-                <option value="admin">Administrateur</option>
+                {/* Seul le propriétaire peut inviter un Admin */}
+                {isOwner && <option value="admin">Administrateur</option>}
               </select>
 
               <div
@@ -964,7 +1029,7 @@ export default function UsersManagement() {
       {/* Modal Code Invitation */}
       {showInviteCode && invitationCode && (
         <div style={styles.modalOverlay}>
-          <div style={styles.modalContent}>
+          <div style={styles.modalContent} className="modal-content">
             <h3
               style={{
                 textAlign: "center",

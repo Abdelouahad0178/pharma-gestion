@@ -11,8 +11,10 @@ import {
   where,
   getDocs,
   addDoc,
+  setDoc,
   serverTimestamp,
   arrayUnion,
+  Timestamp,
 } from "firebase/firestore";
 
 export default function Invitations() {
@@ -55,6 +57,8 @@ export default function Invitations() {
         const data = societeSnap.data();
         setSocieteInfo(data);
         setInvitationCode(data.invitationCode || "");
+      } else {
+        setError("Pharmacie introuvable.");
       }
     } catch (err) {
       console.error("Erreur chargement société:", err);
@@ -82,7 +86,13 @@ export default function Invitations() {
   };
 
   // Générer un token d'invitation (pour lien accept-invitation)
-  const generateInviteToken = (len = 24) => {
+  const generateInviteToken = (len = 28) => {
+    // Préfère crypto.randomUUID() si dispo (plus robuste), sinon fallback aléatoire
+    try {
+      if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+        return crypto.randomUUID().replace(/-/g, "").slice(0, len);
+      }
+    } catch {}
     const chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
     let t = "";
     for (let i = 0; i < len; i++) t += chars.charAt(Math.floor(Math.random() * chars.length));
@@ -144,7 +154,7 @@ export default function Invitations() {
     }
   };
 
-  // Créer une invitation par e-mail (DOC **RACINE**: invitations)
+  // Créer une invitation par e-mail (DOC RACINE: invitations, docId = inviteToken)
   const handleCreateInvitation = async (e) => {
     e.preventDefault();
     setError("");
@@ -159,13 +169,20 @@ export default function Invitations() {
       setError("Saisissez un e-mail valide pour l'invitation.");
       return;
     }
+
+    // Seul le propriétaire peut inviter "admin"
+    if (invRole === "admin" && !isOwner) {
+      setError("Seul le propriétaire peut inviter un Administrateur.");
+      return;
+    }
+
     if (!["vendeuse", "pharmacien", "admin"].includes(invRole)) {
       setError("Rôle d'invitation invalide.");
       return;
     }
 
     const days = Math.max(1, Math.min(60, Number(invDays) || 7));
-    const expiresAt = new Date(Date.now() + days * 24 * 60 * 60 * 1000);
+    const expiresAt = Timestamp.fromDate(new Date(Date.now() + days * 24 * 60 * 60 * 1000));
 
     // Normalisation e-mail
     const emailTrim = invEmail.trim();
@@ -185,19 +202,19 @@ export default function Invitations() {
         return;
       }
 
-      // Génère un token unique (simple et suffisant)
+      // Génère un token unique et l'utilise comme ID de document
       const inviteToken = generateInviteToken(28);
 
-      // Crée l'invitation en **racine**
-      const invRef = await addDoc(collection(db, "invitations"), {
+      // Crée/écrit l'invitation avec ID = inviteToken
+      await setDoc(doc(db, "invitations", inviteToken), {
         email: emailTrim,
-        emailLower,               // <— important pour les règles
+        emailLower,            // <— utile côté app (filtrage/search)
         societeId,
         role: invRole,
-        inviteToken,
-        statut: "pending",        // (aligné avec AcceptInvitation.js)
+        inviteToken,           // dupliqué pour compat anciennes requêtes
+        statut: "pending",
         createdAt: serverTimestamp(),
-        expiresAt,                // JS Date -> Timestamp côté Firestore
+        expiresAt,             // Timestamp Firestore
         invitePar: user.uid,
         inviteParEmail: user.email || null,
       });
@@ -209,7 +226,7 @@ export default function Invitations() {
         userEmail: user.email || null,
         inviteEmail: emailTrim,
         inviteRole: invRole,
-        invitationId: invRef.id,
+        invitationId: inviteToken, // docId = token
         timestamp: serverTimestamp(),
       });
 
@@ -266,8 +283,6 @@ export default function Invitations() {
       const societeData = societeDoc.data();
       const newSocieteId = societeDoc.id;
 
-      // ⚠️ Suivant tes règles, cette étape peut être refusée pour un user sans société.
-      // Si c'est le cas, privilégie le flux par e-mail + invitation (AcceptInvitation).
       await updateDoc(doc(db, "societe", newSocieteId), {
         membres: arrayUnion(user.uid),
       });
@@ -467,7 +482,7 @@ export default function Invitations() {
         </div>
       </div>
 
-      {/* Création d'une invitation PAR E-MAIL (doc RACINE: invitations) */}
+      {/* Création d'une invitation PAR E-MAIL (doc RACINE: invitations, docId = inviteToken) */}
       {canManageInvitations && (
         <div className="paper-card" style={{ marginTop: 20 }}>
           <h3 style={{ color: "#1f2937", marginBottom: 15 }}>Créer une invitation par e-mail</h3>
@@ -495,7 +510,7 @@ export default function Invitations() {
                 >
                   <option value="vendeuse">Vendeuse</option>
                   <option value="pharmacien">Pharmacien</option>
-                  <option value="admin">Admin</option>
+                  {isOwner && <option value="admin">Admin</option>}
                 </select>
               </div>
 
@@ -548,7 +563,7 @@ export default function Invitations() {
             )}
 
             <p style={{ color: "#6b7280", fontSize: 13 }}>
-              L'invitation est enregistrée dans la collection <code>invitations</code> (racine).
+              L'invitation est enregistrée dans la collection <code>invitations</code> (racine) avec un ID égal au token.
               Le destinataire utilisera le lien fourni pour créer son compte.
             </p>
           </form>
