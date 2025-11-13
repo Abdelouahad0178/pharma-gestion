@@ -401,7 +401,7 @@ export default function Navbar() {
             py: 1,
           }}
         >
-          Déconnexion
+          Log out
         </Button>
       </Box>
     </Box>
@@ -501,7 +501,7 @@ export default function Navbar() {
               "&:hover": { bgcolor: "#fff5", color: "#1976d2" },
             }}
           >
-            Déconnexion
+            LOG OUT
           </Button>
         </Toolbar>
       </AppBar>

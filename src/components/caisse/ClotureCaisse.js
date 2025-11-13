@@ -168,14 +168,32 @@ function normalizeCauses(causes) {
 
 /* =========================================================
    Clôture de caisse — compatible avec tes règles Firestore
-   - AUCUNE update sur societe/{sid}/closures/{todayId}
-   - create pour valider (avec createdAt: serverTimestamp())
-   - delete le même jour pour annuler (sameDay(resource.data.createdAt))
-   - brouillons dans closuresDrafts (libre)
 ========================================================= */
 
 export default function ClotureCaisse() {
   const { societeId, user } = useUserRole();
+
+  /* ===== Thème sombre/clair ===== */
+  const systemPrefersDark = typeof window !== "undefined" && window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+  const [isDark, setIsDark] = useState(() => {
+    try {
+      const saved = localStorage.getItem("theme");
+      if (saved === "dark") return true;
+      if (saved === "light") return false;
+      return systemPrefersDark;
+    } catch {
+      return systemPrefersDark;
+    }
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem("theme", isDark ? "dark" : "light");
+      document.documentElement.setAttribute("data-theme", isDark ? "dark" : "light");
+      document.documentElement.classList.toggle("dark", isDark);
+    } catch {}
+  }, [isDark]);
+
+  const styles = useMemo(() => getStyles(isDark), [isDark]);
 
   const [ops, setOps] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -189,6 +207,10 @@ export default function ClotureCaisse() {
   const [busy, setBusy] = useState(false);
   const [activeTab, setActiveTab] = useState("today");
   const [expandedDay, setExpandedDay] = useState(null);
+
+  // 🔎 Filtres de date pour l’historique
+  const [historyFrom, setHistoryFrom] = useState("");
+  const [historyTo, setHistoryTo] = useState("");
 
   // Détails remises (agrégé)
   const [ventesRemises, setVentesRemises] = useState([]);
@@ -235,7 +257,6 @@ export default function ClotureCaisse() {
       if (snap.exists()) {
         const data = { id: snap.id, ...snap.data() };
         setClosure(data);
-        // remplir champ physique à l’écran depuis le doc validé (lecture seule)
         if (typeof data.physicalCash === "number") setPhysicalCashInput(String(data.physicalCash));
       } else {
         setClosure(null);
@@ -243,7 +264,7 @@ export default function ClotureCaisse() {
     });
   }, [closureDocRef]);
 
-  // ===== Historique des clôtures (30 derniers jours)
+  // ===== Historique des clôtures (30 jours)
   useEffect(() => {
     if (!societeId) return;
     return onSnapshot(
@@ -262,7 +283,7 @@ export default function ClotureCaisse() {
     );
   }, [societeId]);
 
-  // ===== Brouillon du jour (dans closuresDrafts) — lecture/écriture
+  // ===== Brouillon du jour (closuresDrafts)
   useEffect(() => {
     if (!draftDocRef) return;
     return onSnapshot(draftDocRef, (snap) => {
@@ -275,7 +296,7 @@ export default function ClotureCaisse() {
     });
   }, [draftDocRef, closure]);
 
-  // ===== Écoutes collections pour construire les opérations du jour
+  // ===== Écoutes collections
   useEffect(() => {
     if (!societeId) return;
     setLoading(true);
@@ -303,7 +324,6 @@ export default function ClotureCaisse() {
             const mode = v.modePaiement || v.mode || v.moyen;
             if (!isPaidStrict(statut) || !isCash(mode)) return;
 
-            // Montant net (déjà après remise)
             let amount = 0;
             if (typeof v.montantTotal === "number") amount = v.montantTotal;
             else if (typeof v.totalTTC === "number") amount = v.totalTTC;
@@ -321,7 +341,6 @@ export default function ClotureCaisse() {
             amount = Math.max(0, toNum(amount));
             if (amount <= 0) return;
 
-            // Remise globale
             const remiseTotal = Number(v.remiseTotal) || 0;
             if (remiseTotal > 0.0001) {
               const brut = round2(amount + remiseTotal);
@@ -359,7 +378,11 @@ export default function ClotureCaisse() {
             });
           }
 
-          setVentesRemises(remisesDirectes.sort((a, b) => (toDateObj(b.at)?.getTime() || 0) - (toDateObj(a.at)?.getTime() || 0)));
+          setVentesRemises(
+            remisesDirectes.sort(
+              (a, b) => (toDateObj(b.at)?.getTime() || 0) - (toDateObj(a.at)?.getTime() || 0)
+            )
+          );
           setOps((prev) => mergeAndDedupe(prev, arr, "ventesAgg"));
           setLoading(false);
         },
@@ -371,7 +394,7 @@ export default function ClotureCaisse() {
       )
     );
 
-    /* 2) PAIEMENTS (inclut règlements de crédits en espèces + remises issues des ventes à crédit) */
+    /* 2) PAIEMENTS */
     unsubs.push(
       onSnapshot(
         query(collection(db, "societe", societeId, "paiements"), orderBy("date", "desc")),
@@ -396,7 +419,7 @@ export default function ClotureCaisse() {
 
             const saleId = saleIdFrom(p);
 
-            // Règlement d'une vente à crédit, payé en espèces aujourd'hui
+            // Crédit réglé aujourd'hui en espèces
             if (saleId && isPaidStrict(statut) && isCash(mode)) {
               if (!countedSaleIdsRef.current.has(saleId)) {
                 arr.push({
@@ -496,7 +519,7 @@ export default function ClotureCaisse() {
       )
     );
 
-    /* 4) CHARGES DIVERS (sorties espèces) */
+  /* 4) CHARGES DIVERS (sorties espèces) */
     unsubs.push(
       onSnapshot(
         query(collection(db, "societe", societeId, "chargesDivers"), orderBy("updatedAt", "desc")),
@@ -622,7 +645,7 @@ export default function ClotureCaisse() {
 
   const ecart = useMemo(() => round2(physical - totals.solde), [physical, totals.solde]);
 
-  /* ================= Draft auto-save (dans closuresDrafts) ================= */
+  /* ================= Draft auto-save (closuresDrafts) ================= */
 
   const summarizeCauses = (arr) => {
     const map = {};
@@ -630,7 +653,6 @@ export default function ClotureCaisse() {
     return Object.keys(map).map((k) => `${k} ×${map[k]}`);
   };
 
-  // Enregistrer le brouillon (autorisé par règle par défaut /{sub=**})
   useEffect(() => {
     if (!draftDocRef || loading || ops.length === 0) return;
     const payload = {
@@ -669,7 +691,6 @@ export default function ClotureCaisse() {
         return;
       }
 
-      // CREATE (conforme aux règles) — createdAt = serverTimestamp() pour sameDay(resource.data.createdAt)
       const payload = {
         status: "validated",
         dateId: todayId(),
@@ -688,7 +709,6 @@ export default function ClotureCaisse() {
           source: o.source,
           refId: o.refId,
         })),
-        // IMPORTANT pour la règle delete: sameDay(resource.data.createdAt)
         createdAt: serverTimestamp(),
       };
 
@@ -726,8 +746,6 @@ export default function ClotureCaisse() {
         alert("Aucune validation à annuler pour aujourd'hui.");
         return;
       }
-
-      // Règles: delete autorisé le même jour si sameDay(resource.data.createdAt)
       await deleteDoc(closureDocRef);
 
       try {
@@ -748,17 +766,42 @@ export default function ClotureCaisse() {
     }
   }, [closureDocRef, societeId, user]);
 
+  /* ====== Historique filtré par date ====== */
+  const filteredHistory = useMemo(() => {
+    if (!historyFrom && !historyTo) return closureHistory;
+
+    return closureHistory.filter((day) => {
+      const id = day.dateId || day.id;
+      if (!id) return false;
+      const dt = parseDate(id);
+      const from = historyFrom ? parseDate(historyFrom) : null;
+      const to = historyTo ? parseDate(historyTo) : null;
+      if (from && dt < from) return false;
+      if (to && dt > to) return false;
+      return true;
+    });
+  }, [closureHistory, historyFrom, historyTo]);
+
   /* ======================== UI ======================== */
 
   return (
     <div style={styles.container}>
       {/* Header */}
       <div style={styles.header}>
-        <div>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <h1 style={styles.title}>💰 Clôture de Caisse</h1>
+          <button
+            type="button"
+            onClick={() => setIsDark((v) => !v)}
+            style={styles.themeBtn}
+            title={isDark ? "Passer en mode clair" : "Passer en mode sombre"}
+          >
+            <span style={{ marginRight: 8 }}>{isDark ? "🌙" : "☀️"}</span>
+            {isDark ? "Sombre" : "Clair"}
+          </button>
         </div>
         <div style={styles.dateBox}>
-          <div style={styles.dateLabel}>Date du jour</div>
+          <div style={styles.dateLabel}></div>
           <div style={styles.dateValue}>{formatDateLong(new Date())}</div>
         </div>
       </div>
@@ -786,6 +829,7 @@ export default function ClotureCaisse() {
       {/* Content */}
       {activeTab === "today" ? (
         <TodayView
+          styles={styles}
           totals={totals}
           physical={physical}
           physicalCashInput={physicalCashInput}
@@ -803,9 +847,14 @@ export default function ClotureCaisse() {
         />
       ) : (
         <HistoryView
-          closureHistory={closureHistory}
+          styles={styles}
+          closureHistory={filteredHistory}
           expandedDay={expandedDay}
           setExpandedDay={setExpandedDay}
+          historyFrom={historyFrom}
+          historyTo={historyTo}
+          setHistoryFrom={setHistoryFrom}
+          setHistoryTo={setHistoryTo}
         />
       )}
     </div>
@@ -815,6 +864,7 @@ export default function ClotureCaisse() {
 /* ================= Today View Component ================= */
 
 function TodayView({
+  styles,
   totals,
   physical,
   physicalCashInput,
@@ -863,14 +913,14 @@ function TodayView({
       )}
 
       <div style={styles.statsGrid}>
-        <StatCard icon="📥" label="Entrées Espèces" value={totals.in} color="#10b981" bgColor="#d1fae5" />
-        <StatCard icon="📤" label="Sorties Espèces" value={totals.out} color="#ef4444" bgColor="#fee2e2" />
-        <StatCard icon="💵" label="Solde Attendu" value={totals.solde} color="#3b82f6" bgColor="#dbeafe" highlighted />
-        <StatCard icon="🔍" label="Nombre d'opérations" value={ops.length} isCount color="#8b5cf6" bgColor="#ede9fe" />
+        <StatCard styles={styles} icon="📥" label="Entrées Espèces" value={totals.in} color="#10b981" bgColor={styles.bgGreen} />
+        <StatCard styles={styles} icon="📤" label="Sorties Espèces" value={totals.out} color="#ef4444" bgColor={styles.bgRed} />
+        <StatCard styles={styles} icon="💵" label="Solde Attendu" value={totals.solde} color="#3b82f6" bgColor={styles.bgBlue} highlighted />
+        <StatCard styles={styles} icon="🔍" label="Nombre d'opérations" value={ops.length} isCount color="#8b5cf6" bgColor={styles.bgPurple} />
       </div>
 
       <div style={styles.cashSection}>
-        <div style={styles.cashCard}>
+        <div style={styles.card}>
           <div style={styles.cashHeader}>
             <span style={styles.cashIcon}>💰</span>
             <span style={styles.cashTitle}>Caisse Physique Comptée</span>
@@ -924,7 +974,7 @@ function TodayView({
         )}
       </div>
 
-      <div style={styles.tableCard}>
+      <div style={styles.card}>
         <div style={styles.tableHeader}>
           <div>
             <div style={styles.tableTitle}>📋 Détail des opérations du jour</div>
@@ -990,7 +1040,7 @@ function TodayView({
                             )}
                             <span>{o.cause}</span>
                             {isVentesAgg && hasRemises && (
-                              <span style={{ marginLeft: 8, fontSize: 12, color: "#6b7280" }}>
+                              <span style={styles.remiseInfo}>
                                 — {ventesRemises.length} vente(s) avec remise
                               </span>
                             )}
@@ -1003,46 +1053,33 @@ function TodayView({
 
                       {isVentesAgg && expandRemises && hasRemises && (
                         <tr>
-                          <td colSpan={5} style={{ background: "#f8fafc", padding: 0 }}>
+                          <td colSpan={5} style={styles.subTableOuterTd}>
                             <div style={{ padding: 12 }}>
                               <div style={{ overflowX: "auto" }}>
-                                <table
-                                  style={{
-                                    width: "100%",
-                                    borderCollapse: "separate",
-                                    borderSpacing: 0,
-                                    minWidth: 780,
-                                    background: "white",
-                                    borderWidth: 1,
-                                    borderStyle: "solid",
-                                    borderColor: "#e5e7eb",
-                                    borderRadius: 10,
-                                    overflow: "hidden",
-                                  }}
-                                >
+                                <table style={styles.subTable}>
                                   <thead>
-                                    <tr style={{ background: "#f3f4f6" }}>
-                                      <th style={subTh}>Heure</th>
-                                      <th style={subTh}>Client</th>
-                                      <th style={subTh}>Type</th>
-                                      <th style={subThRight}>Brut</th>
-                                      <th style={subThRight}>Remise</th>
-                                      <th style={subThRight}>Net</th>
-                                      <th style={subThRight}>% Remise</th>
+                                    <tr style={styles.subTheadTr}>
+                                      <th style={styles.subTh}>Heure</th>
+                                      <th style={styles.subTh}>Client</th>
+                                      <th style={styles.subTh}>Type</th>
+                                      <th style={styles.subThRight}>Brut</th>
+                                      <th style={styles.subThRight}>Remise</th>
+                                      <th style={styles.subThRight}>Net</th>
+                                      <th style={styles.subThRight}>% Remise</th>
                                     </tr>
                                   </thead>
                                   <tbody>
                                     {ventesRemises.map((r, idx) => (
-                                      <tr key={r.id} style={{ borderBottom: "1px solid #f1f5f9", background: idx % 2 ? "#ffffff" : "#fafafa" }}>
-                                        <td style={subTd}>{fmtTime(r.at)}</td>
-                                        <td style={{ ...subTd, fontWeight: 600 }}>{String(r.client || "-")}</td>
-                                        <td style={{ ...subTd, fontSize: 12, opacity: 0.8 }}>
+                                      <tr key={r.id} style={styles.subTr(idx)}>
+                                        <td style={styles.subTd}>{fmtTime(r.at)}</td>
+                                        <td style={{ ...styles.subTd, fontWeight: 600 }}>{String(r.client || "-")}</td>
+                                        <td style={{ ...styles.subTd, fontSize: 12, opacity: 0.85 }}>
                                           {r.type || "Vente directe"}
                                         </td>
-                                        <td style={subTdRight}>{r.brut.toFixed(2)} DHS</td>
-                                        <td style={{ ...subTdRight, color: "#b91c1c", fontWeight: 700 }}>- {r.remise.toFixed(2)} DHS</td>
-                                        <td style={{ ...subTdRight, color: "#065f46", fontWeight: 700 }}>{r.net.toFixed(2)} DHS</td>
-                                        <td style={subTdRight}>{r.pct.toFixed(2)}%</td>
+                                        <td style={styles.subTdRight}>{r.brut.toFixed(2)} DHS</td>
+                                        <td style={{ ...styles.subTdRight, color: styles.negColor, fontWeight: 700 }}>- {r.remise.toFixed(2)} DHS</td>
+                                        <td style={{ ...styles.subTdRight, color: styles.posColorDark, fontWeight: 700 }}>{r.net.toFixed(2)} DHS</td>
+                                        <td style={styles.subTdRight}>{r.pct.toFixed(2)}%</td>
                                       </tr>
                                     ))}
                                   </tbody>
@@ -1053,12 +1090,12 @@ function TodayView({
                                       const tNet  = ventesRemises.reduce((s, r) => s + r.net, 0);
                                       const pct   = tBrut > 0 ? (tRem / tBrut) * 100 : 0;
                                       return (
-                                        <tr style={{ background: "#f9fafb", fontWeight: 800 }}>
-                                          <td style={subTf} colSpan={3}>TOTAL</td>
-                                          <td style={subTfRight}>{tBrut.toFixed(2)} DHS</td>
-                                          <td style={{ ...subTfRight, color: "#b91c1c" }}>- {tRem.toFixed(2)} DHS</td>
-                                          <td style={{ ...subTfRight, color: "#065f46" }}>{tNet.toFixed(2)} DHS</td>
-                                          <td style={subTfRight}>{pct.toFixed(2)}%</td>
+                                        <tr style={styles.subTfootTr}>
+                                          <td style={styles.subTf} colSpan={3}>TOTAL</td>
+                                          <td style={styles.subTfRight}>{tBrut.toFixed(2)} DHS</td>
+                                          <td style={{ ...styles.subTfRight, color: styles.negColor }}>- {tRem.toFixed(2)} DHS</td>
+                                          <td style={{ ...styles.subTfRight, color: styles.posColorDark }}>{tNet.toFixed(2)} DHS</td>
+                                          <td style={styles.subTfRight}>{pct.toFixed(2)}%</td>
                                         </tr>
                                       );
                                     })()}
@@ -1099,7 +1136,16 @@ function TodayView({
 
 /* ================= History View Component ================= */
 
-function HistoryView({ closureHistory, expandedDay, setExpandedDay }) {
+function HistoryView({
+  styles,
+  closureHistory,
+  expandedDay,
+  setExpandedDay,
+  historyFrom,
+  historyTo,
+  setHistoryFrom,
+  setHistoryTo,
+}) {
   if (closureHistory.length === 0) {
     return (
       <div style={styles.content}>
@@ -1107,7 +1153,7 @@ function HistoryView({ closureHistory, expandedDay, setExpandedDay }) {
           <div style={styles.emptyHistoryIcon}>📅</div>
           <div style={styles.emptyHistoryTitle}>Aucun historique</div>
           <div style={styles.emptyHistoryText}>
-            Les clôtures validées apparaîtront ici
+            Les clôtures validées apparaîtront ici (ou ajustez le filtre de dates)
           </div>
         </div>
       </div>
@@ -1121,10 +1167,46 @@ function HistoryView({ closureHistory, expandedDay, setExpandedDay }) {
         <div style={styles.historyCount}>{closureHistory.length} jour(s)</div>
       </div>
 
+      {/* Filtres de date */}
+      <div style={styles.historyFilters}>
+        <span style={styles.historyFilterLabel}>Filtrer par date :</span>
+        <label style={styles.historyFilterLabel}>
+          Du{" "}
+          <input
+            type="date"
+            value={historyFrom}
+            onChange={(e) => setHistoryFrom(e.target.value)}
+            style={styles.historyFilterInput}
+          />
+        </label>
+        <label style={styles.historyFilterLabel}>
+          Au{" "}
+          <input
+            type="date"
+            value={historyTo}
+            onChange={(e) => setHistoryTo(e.target.value)}
+            style={styles.historyFilterInput}
+          />
+        </label>
+        {(historyFrom || historyTo) && (
+          <button
+            type="button"
+            onClick={() => {
+              setHistoryFrom("");
+              setHistoryTo("");
+            }}
+            style={styles.historyFilterReset}
+          >
+            Réinitialiser
+          </button>
+        )}
+      </div>
+
       <div style={styles.historyList}>
         {closureHistory.map((day) => (
           <HistoryCard
             key={day.id}
+            styles={styles}
             day={day}
             expanded={expandedDay === day.id}
             onToggle={() => setExpandedDay(expandedDay === day.id ? null : day.id)}
@@ -1137,9 +1219,9 @@ function HistoryView({ closureHistory, expandedDay, setExpandedDay }) {
 
 /* ================= History Card Component ================= */
 
-function HistoryCard({ day, expanded, onToggle }) {
+function HistoryCard({ styles, day, expanded, onToggle }) {
   const isValidated = day.status === "validated";
-  const isCanceled = day.status === "canceled"; // (pas utilisé ici, laissé pour compat)
+  const isCanceled = day.status === "canceled"; // (pas utilisé ici, compat)
 
   const causesSafe = normalizeCauses(day.causes || []);
 
@@ -1237,171 +1319,303 @@ function HistoryCard({ day, expanded, onToggle }) {
   );
 }
 
-/* ================== Styles ================== */
+/* ================== Styles (clair/sombre) ================== */
 
-const styles = {
-  container: { padding: 20 },
-  header: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 },
-  title: { margin: 0, fontWeight: 900, fontSize: 26, color: "#111827" },
-  dateBox: { background: "#f9fafb", padding: "8px 12px", borderRadius: 10, borderWidth: 1, borderStyle: "solid", borderColor: "#e5e7eb" },
-  dateLabel: { fontSize: 12, color: "#6b7280" },
-  dateValue: { fontWeight: 800, color: "#111827" },
+function getStyles(isDark) {
+  const base = {
+    bg: isDark ? "#0b1220" : "#ffffff",
+    card: isDark ? "#0f172a" : "#ffffff",
+    text: isDark ? "#e5e7eb" : "#111827",
+    textMuted: isDark ? "#9ca3af" : "#374151",
+    border: isDark ? "#1f2937" : "#e5e7eb",
+    tableHead: isDark ? "#0b1220" : "#f8fafc",
+    rowAlt: isDark ? "rgba(15,23,42,0.6)" : "rgba(248,250,252,0.5)",
+    pillBg: isDark ? "#111827" : "#f9fafb",
+    pillBorder: isDark ? "#1f2937" : "#e5e7eb",
+    blue: "#2563eb",
+    posColor: "#10b981",
+    posColorDark: "#065f46",
+    negColor: "#b91c1c",
+    bgGreen: isDark ? "rgba(16,185,129,0.15)" : "#d1fae5",
+    bgRed: isDark ? "rgba(239,68,68,0.15)" : "#fee2e2",
+    bgBlue: isDark ? "rgba(37,99,235,0.15)" : "#dbeafe",
+    bgPurple: isDark ? "rgba(139,92,246,0.15)" : "#ede9fe",
+    bannerOk: isDark ? "rgba(4,120,87,0.15)" : "#f0fdf4",
+    subTableStrip: isDark ? "#0b1220" : "#fafafa",
+    subTableHead: isDark ? "#0b1220" : "#f3f4f6",
+    subTableBorder: isDark ? "#1f2937" : "#e5e7eb",
+  };
 
-  tabsContainer: { display: "flex", gap: 8, marginBottom: 16 },
-  tab: { padding: "8px 12px", borderRadius: 10, borderWidth: 1, borderStyle: "solid", borderColor: "#e5e7eb", cursor: "pointer", fontWeight: 700 },
-  tabActive: { background: "#111827", color: "#fff", borderColor: "#111827" },
-  tabIcon: { marginRight: 6 },
-  badge: { marginLeft: 8, background: "#10b981", color: "#fff", borderRadius: 8, padding: "1px 8px", fontSize: 12, fontWeight: 800 },
-  badgeCount: { marginLeft: 8, background: "#3b82f6", color: "#fff", borderRadius: 8, padding: "1px 8px", fontSize: 12, fontWeight: 800 },
+  return {
+    posColorDark: base.posColorDark,
+    negColor: base.negColor,
+    bgGreen: base.bgGreen,
+    bgRed: base.bgRed,
+    bgBlue: base.bgBlue,
+    bgPurple: base.bgPurple,
 
-  content: {},
-  validatedBanner: { display: "flex", gap: 10, alignItems: "center", borderWidth: 1, borderStyle: "solid", borderColor: "#e5e7eb", background: "#f0fdf4", padding: 12, borderRadius: 12, marginBottom: 12 },
-  validatedIcon: { fontSize: 22 },
-  validatedTitle: { fontWeight: 800, margin: 0 },
-  validatedText: { color: "#374151", marginTop: 2 },
+    container: { padding: 20, background: base.bg, color: base.text, minHeight: "100%" },
+    header: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 },
+    title: { margin: 0, fontWeight: 900, fontSize: 26, color: base.text },
+    themeBtn: {
+      border: `1px solid ${base.border}`,
+      background: base.card,
+      color: base.text,
+      padding: "6px 10px",
+      borderRadius: 10,
+      cursor: "pointer",
+      fontWeight: 800,
+    },
+    dateBox: { background: isDark ? "#0f172a" : "#f9fafb", padding: "8px 12px", borderRadius: 10, border: `1px solid ${base.border}` },
+    dateLabel: { fontSize: 12, color: base.textMuted },
+    dateValue: { fontWeight: 800, color: base.text },
 
-  statsGrid: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 10, marginBottom: 12 },
+    tabsContainer: { display: "flex", gap: 8, marginBottom: 16 },
+    tab: {
+      padding: "8px 12px",
+      borderRadius: 10,
+      border: `1px solid ${base.border}`,
+      cursor: "pointer",
+      fontWeight: 700,
+      background: base.card,
+      color: base.text,
+    },
+    tabActive: { background: base.text, color: isDark ? "#0b1220" : "#fff", borderColor: base.text },
+    tabIcon: { marginRight: 6 },
+    badge: { marginLeft: 8, background: base.posColor, color: "#fff", borderRadius: 8, padding: "1px 8px", fontSize: 12, fontWeight: 800 },
+    badgeCount: { marginLeft: 8, background: base.blue, color: "#fff", borderRadius: 8, padding: "1px 8px", fontSize: 12, fontWeight: 800 },
 
-  cashSection: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 },
-  cashCard: { borderWidth: 1, borderStyle: "solid", borderColor: "#e5e7eb", borderRadius: 12, padding: 12, background: "#fff" },
-  cashHeader: { display: "flex", alignItems: "center", gap: 8, marginBottom: 8 },
-  cashIcon: { fontSize: 20 },
-  cashTitle: { fontWeight: 800 },
-  cashInput: { width: "100%", borderWidth: 1, borderStyle: "solid", borderColor: "#e5e7eb", borderRadius: 10, padding: "10px 12px", fontWeight: 800, fontSize: 16 },
+    content: {},
+    validatedBanner: {
+      display: "flex", gap: 10, alignItems: "center",
+      border: `1px solid ${base.border}`,
+      background: base.bannerOk,
+      padding: 12, borderRadius: 12, marginBottom: 12,
+      color: base.text
+    },
+    validatedIcon: { fontSize: 22 },
+    validatedTitle: { fontWeight: 800, margin: 0 },
+    validatedText: { color: base.textMuted, marginTop: 2 },
 
-  ecartCard: (ecart) => ({ borderWidth: 1, borderStyle: "solid", borderColor: "#e5e7eb", borderRadius: 12, padding: 12, background: ecart === 0 ? "#ecfeff" : ecart > 0 ? "#eff6ff" : "#fff7ed" }),
-  ecartHeader: { display: "flex", alignItems: "center", gap: 8, marginBottom: 8 },
-  ecartIcon: { fontSize: 20 },
-  ecartTitle: { fontWeight: 800 },
-  ecartValue: () => ({ fontWeight: 900, fontSize: 22 }),
-  ecartLabel: { fontSize: 12, color: "#6b7280" },
-  ecartFormula: { fontSize: 12, color: "#6b7280", marginTop: 2 },
+    statsGrid: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 10, marginBottom: 12 },
 
-  actionsRow: { display: "flex", gap: 10, marginBottom: 12 },
-  btnValidate: (disabled) => ({
-    padding: "10px 14px",
-    borderRadius: 10,
-    borderWidth: 0,
-    color: "#fff",
-    background: disabled ? "#94a3b8" : "linear-gradient(135deg,#22c55e,#16a34a)",
-    fontWeight: 900,
-    cursor: disabled ? "not-allowed" : "pointer"
-  }),
-  btnCancel: (disabled) => ({
-    padding: "10px 14px",
-    borderRadius: 10,
-    borderWidth: 0,
-    color: "#fff",
-    background: disabled ? "#94a3b8" : "linear-gradient(135deg,#ef4444,#b91c1c)",
-    fontWeight: 900,
-    cursor: disabled ? "not-allowed" : "pointer",
-    boxShadow: disabled ? "none" : "0 4px 12px rgba(185,28,28,0.25)"
-  }),
-  btnIcon: { marginRight: 8 },
+    cashSection: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 },
+    card: { border: `1px solid ${base.border}`, borderRadius: 12, padding: 12, background: base.card, color: base.text },
 
-  tableCard: { borderWidth: 1, borderStyle: "solid", borderColor: "#e5e7eb", borderRadius: 12, padding: 12, background: "#fff" },
-  tableHeader: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 },
-  tableTitle: { fontWeight: 900, margin: 0, fontSize: 16, color: "#111827" },
-  tableSubtitle: { fontSize: 12, color: "#6b7280", marginTop: 2 },
+    cashHeader: { display: "flex", alignItems: "center", gap: 8, marginBottom: 8 },
+    cashIcon: { fontSize: 20 },
+    cashTitle: { fontWeight: 800 },
+    cashInput: {
+      width: "100%",
+      border: `1px solid ${base.border}`,
+      background: isDark ? "#0b1220" : "#fff",
+      color: base.text,
+      borderRadius: 10,
+      padding: "10px 12px",
+      fontWeight: 800, fontSize: 16,
+      outline: "none",
+    },
 
-  tableWrapper: { overflowX: "auto" },
-  table: { width: "100%", borderCollapse: "separate", borderSpacing: 0, minWidth: 720 },
-  th: { textAlign: "left", padding: "10px 12px", borderBottom: "2px solid #e5e7eb", fontWeight: 800, fontSize: 12, color: "#64748b", background: "#f8fafc" },
-  tr: (i) => ({ borderBottom: "1px solid #f1f5f9", background: i % 2 ? "white" : "rgba(248,250,252,0.5)" }),
-  td: { padding: "10px 12px", fontSize: 14, color: "#111827" },
-  tdType: (dir) => ({ padding: "10px 12px", fontWeight: 800, color: dir === "in" ? "#065f46" : "#991b1b" }),
-  typeIcon: { marginRight: 8 },
-  tdAmount: (dir) => ({ padding: "10px 12px", textAlign: "right", fontWeight: 900, color: dir === "in" ? "#065f46" : "#991b1b" }),
-  tdSource: { padding: "10px 12px" },
-  sourceTag: { borderWidth: 1, borderStyle: "solid", borderColor: "#e5e7eb", background: "#f9fafb", padding: "2px 8px", borderRadius: 999, fontSize: 12, color: "#374151", fontWeight: 800 },
+    ecartCard: (ecart) => ({
+      border: `1px solid ${base.border}`,
+      borderRadius: 12, padding: 12,
+      background: ecart === 0 ? (isDark ? "rgba(6,182,212,0.12)" : "#ecfeff") : ecart > 0 ? (isDark ? "rgba(37,99,235,0.12)" : "#eff6ff") : (isDark ? "rgba(245,158,11,0.12)" : "#fff7ed"),
+      color: base.text,
+    }),
+    ecartHeader: { display: "flex", alignItems: "center", gap: 8, marginBottom: 8 },
+    ecartIcon: { fontSize: 20 },
+    ecartTitle: { fontWeight: 800 },
+    ecartValue: () => ({ fontWeight: 900, fontSize: 22 }),
+    ecartLabel: { fontSize: 12, color: base.textMuted },
+    ecartFormula: { fontSize: 12, color: base.textMuted, marginTop: 2 },
 
-  detailsBtn: (active) => ({
-    borderWidth: 0,
-    background: active ? "#f59e0b" : "#fde68a",
-    color: "#111827",
-    fontWeight: 900,
-    borderRadius: 10,
-    padding: "6px 10px",
-    cursor: "pointer",
-    boxShadow: active ? "0 2px 8px rgba(245,158,11,0.35)" : "none",
-    transition: "transform 0.05s ease-in-out",
-  }),
+    actionsRow: { display: "flex", gap: 10, marginBottom: 12 },
+    btnValidate: (disabled) => ({
+      padding: "10px 14px",
+      borderRadius: 10,
+      borderWidth: 0,
+      color: "#fff",
+      background: disabled ? (isDark ? "#334155" : "#94a3b8") : "linear-gradient(135deg,#22c55e,#16a34a)",
+      fontWeight: 900,
+      cursor: disabled ? "not-allowed" : "pointer"
+    }),
+    btnCancel: (disabled) => ({
+      padding: "10px 14px",
+      borderRadius: 10,
+      borderWidth: 0,
+      color: "#fff",
+      background: disabled ? (isDark ? "#334155" : "#94a3b8") : "linear-gradient(135deg,#ef4444,#b91c1c)",
+      fontWeight: 900,
+      cursor: disabled ? "not-allowed" : "pointer",
+      boxShadow: disabled ? "none" : "0 4px 12px rgba(185,28,28,0.25)"
+    }),
+    btnIcon: { marginRight: 8 },
 
-  emptyCell: { padding: 20, textAlign: "center", color: "#6b7280" },
-  emptyIcon: { fontSize: 28, marginBottom: 6 },
-  loadingSpinner: { animation: "spin 1s linear infinite" },
+    tableHeader: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 },
+    tableTitle: { fontWeight: 900, margin: 0, fontSize: 16, color: base.text },
+    tableSubtitle: { fontSize: 12, color: base.textMuted, marginTop: 2 },
 
-  tfoot: { padding: "10px 12px", color: "#6b7280", fontWeight: 700, borderTop: "2px solid #e5e7eb", background: "#fafafa" },
-  tfootAmount: { padding: "10px 12px", textAlign: "right", color: "#111827", borderTop: "2px solid #e5e7eb", background: "#fafafa" },
+    tableWrapper: { overflowX: "auto" },
+    table: { width: "100%", borderCollapse: "separate", borderSpacing: 0, minWidth: 720, color: base.text },
+    th: { textAlign: "left", padding: "10px 12px", borderBottom: `2px solid ${base.border}`, fontWeight: 800, fontSize: 12, color: base.textMuted, background: base.tableHead, position: "sticky", top: 0, zIndex: 1 },
+    tr: (i) => ({ borderBottom: `1px solid ${base.border}`, background: i % 2 ? base.card : base.rowAlt }),
+    td: { padding: "10px 12px", fontSize: 14, color: base.text },
+    tdType: (dir) => ({ padding: "10px 12px", fontWeight: 800, color: dir === "in" ? base.posColorDark : base.negColor }),
+    typeIcon: { marginRight: 8 },
+    tdAmount: (dir) => ({ padding: "10px 12px", textAlign: "right", fontWeight: 900, color: dir === "in" ? base.posColorDark : base.negColor }),
+    tdSource: { padding: "10px 12px" },
+    sourceTag: { border: `1px solid ${base.pillBorder}`, background: base.pillBg, padding: "2px 8px", borderRadius: 999, fontSize: 12, color: base.text, fontWeight: 800 },
 
-  /* History minimal */
-  historyHeader: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 },
-  historyTitle: { margin: 0, fontWeight: 900 },
-  historyCount: { background: "#eef2ff", color: "#4338ca", borderRadius: 999, padding: "2px 10px", fontWeight: 800 },
-  historyList: { display: "grid", gap: 10 },
-  historyCard: { borderWidth: 1, borderStyle: "solid", borderColor: "#e5e7eb", borderRadius: 12, background: "#fff" },
-  historyCardHeader: { display: "flex", alignItems: "center", justifyContent: "space-between", padding: 12, cursor: "pointer" },
-  historyCardLeft: { display: "flex", alignItems: "center", gap: 10 },
-  historyCardDate: { fontWeight: 800, color: "#111827" },
-  historyCardIcon: { marginRight: 6 },
-  historyCardStatus: (ok, ko) => ({ fontWeight: 900, color: ok ? "#065f46" : ko ? "#991b1b" : "#1f2937" }),
-  historyCardRight: { display: "flex", alignItems: "center", gap: 10 },
-  historyCardSolde: { fontWeight: 900 },
+    detailsBtn: (active) => ({
+      borderWidth: 0,
+      background: active ? (isDark ? "#b45309" : "#f59e0b") : (isDark ? "#7c2d12" : "#fde68a"),
+      color: base.text,
+      fontWeight: 900,
+      borderRadius: 10,
+      padding: "6px 10px",
+      cursor: "pointer",
+      boxShadow: active ? "0 2px 8px rgba(245,158,11,0.35)" : "none",
+      transition: "transform 0.05s ease-in-out",
+    }),
+    remiseInfo: { marginLeft: 8, fontSize: 12, color: base.textMuted },
 
-  expandBtn: (active) => ({
-    borderWidth: 1,
-    borderStyle: "solid",
-    borderColor: active ? "#4f46e5" : "#a5b4fc",
-    padding: "4px 12px",
-    borderRadius: 12,
-    fontWeight: 900,
-    background: active ? "#4f46e5" : "#a5b4fc",
-    color: "#ffffff",
-    cursor: "pointer",
-    boxShadow: active
-      ? "0 2px 10px rgba(79,70,229,0.35)"
-      : "0 1px 4px rgba(99,102,241,0.25)",
-    outline: "none",
-    appearance: "none",
-    lineHeight: 1.1,
-    display: "inline-flex",
-    alignItems: "center",
-    justifyContent: "center",
-    minWidth: 36,
-    transition: "transform .05s ease, box-shadow .15s ease",
-  }),
+    emptyCell: { padding: 20, textAlign: "center", color: base.textMuted },
+    emptyIcon: { fontSize: 28, marginBottom: 6 },
+    loadingSpinner: { animation: "spin 1s linear infinite" },
 
-  historyCardBody: { padding: 12, borderTop: "1px solid #e5e7eb" },
-  historyStatsGrid: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 8, marginBottom: 10 },
-  historyStat: { borderWidth: 1, borderStyle: "solid", borderColor: "#e5e7eb", borderRadius: 10, padding: 10, background: "#f9fafb" },
-  historyStatLabel: { fontSize: 12, color: "#6b7280" },
-  historyStatValue: (c) => ({ fontWeight: 900, color: c }),
-  historyFooter: { display: "flex", gap: 16, flexWrap: "wrap", marginTop: 8 },
-  historyFooterItem: { fontSize: 14, color: "#374151" },
-  causesSection: { marginTop: 12 },
-  causesSectionTitle: { fontWeight: 900, marginBottom: 8 },
-  causesList: { display: "flex", flexWrap: "wrap", gap: 8 },
-  causePill: { background: "#eff6ff", color: "#1d4ed8", borderWidth: 1, borderStyle: "solid", borderColor: "#bfdbfe", borderRadius: 999, padding: "2px 8px", fontWeight: 800, fontSize: 12 },
-};
+    tfoot: { padding: "10px 12px", color: base.textMuted, fontWeight: 700, borderTop: `2px solid ${base.border}`, background: isDark ? "#0b1220" : "#fafafa" },
+    tfootAmount: { padding: "10px 12px", textAlign: "right", color: base.text, borderTop: `2px solid ${base.border}`, background: isDark ? "#0b1220" : "#fafafa" },
 
-/* Sous-table remises: mini styles */
-const subTh = { textAlign: "left", padding: "8px 10px", borderBottom: "2px solid #e5e7eb", fontWeight: 800, fontSize: 12, color: "#64748b" };
-const subThRight = { ...subTh, textAlign: "right" };
-const subTd = { padding: "8px 10px", fontSize: 13, color: "#111827" };
-const subTdRight = { ...subTd, textAlign: "right", fontWeight: 800 };
-const subTf = { padding: "10px 10px", borderTop: "2px solid #e5e7eb", color: "#111827" };
-const subTfRight = { ...subTf, textAlign: "right" };
+    /* History minimal */
+    historyHeader: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 },
+    historyTitle: { margin: 0, fontWeight: 900, color: base.text },
+    historyCount: { background: isDark ? "#1e3a8a" : "#eef2ff", color: isDark ? "#c7d2fe" : "#4338ca", borderRadius: 999, padding: "2px 10px", fontWeight: 800 },
+
+    historyFilters: {
+      display: "flex",
+      flexWrap: "wrap",
+      gap: 8,
+      alignItems: "center",
+      marginBottom: 12,
+    },
+    historyFilterLabel: {
+      fontSize: 12,
+      color: base.textMuted,
+      fontWeight: 600,
+      display: "flex",
+      alignItems: "center",
+      gap: 4,
+    },
+    historyFilterInput: {
+      borderRadius: 8,
+      border: `1px solid ${base.border}`,
+      padding: "4px 8px",
+      background: isDark ? "#020617" : "#ffffff",
+      color: base.text,
+      fontSize: 13,
+      outline: "none",
+    },
+    historyFilterReset: {
+      borderRadius: 999,
+      border: `1px solid ${base.blue}`,
+      padding: "4px 10px",
+      background: isDark ? "#1d4ed8" : "#2563eb",
+      color: "#ffffff",
+      fontWeight: 700,
+      cursor: "pointer",
+      fontSize: 12,
+    },
+
+    historyList: { display: "grid", gap: 10 },
+    historyCard: { border: `1px solid ${base.border}`, borderRadius: 12, background: base.card, color: base.text },
+    historyCardHeader: { display: "flex", alignItems: "center", justifyContent: "space-between", padding: 12, cursor: "pointer" },
+    historyCardLeft: { display: "flex", alignItems: "center", gap: 10 },
+    historyCardDate: { fontWeight: 800, color: base.text },
+    historyCardIcon: { marginRight: 6 },
+    historyCardStatus: (ok, ko) => ({ fontWeight: 900, color: ok ? base.posColorDark : ko ? base.negColor : base.text }),
+    historyCardRight: { display: "flex", alignItems: "center", gap: 10 },
+    historyCardSolde: { fontWeight: 900, color: base.text },
+
+    expandBtn: (active) => ({
+      border: `1px solid ${active ? base.blue : (isDark ? "#334155" : "#a5b4fc")}`,
+      padding: "4px 12px",
+      borderRadius: 12,
+      fontWeight: 900,
+      background: active ? base.blue : (isDark ? "#0b1220" : "#a5b4fc"),
+      color: "#ffffff",
+      cursor: "pointer",
+      boxShadow: active
+        ? "0 2px 10px rgba(79,70,229,0.35)"
+        : "0 1px 4px rgba(99,102,241,0.25)",
+      outline: "none",
+      appearance: "none",
+      lineHeight: 1.1,
+      display: "inline-flex",
+      alignItems: "center",
+      justifyContent: "center",
+      minWidth: 36,
+      transition: "transform .05s ease, box-shadow .15s ease",
+    }),
+
+    historyCardBody: { padding: 12, borderTop: `1px solid ${base.border}` },
+    historyStatsGrid: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 8, marginBottom: 10 },
+    historyStat: { border: `1px solid ${base.border}`, borderRadius: 10, padding: 10, background: isDark ? "#0b1220" : "#f9fafb" },
+    historyStatLabel: { fontSize: 12, color: base.textMuted },
+    historyStatValue: (c) => ({ fontWeight: 900, color: c }),
+    historyFooter: { display: "flex", gap: 16, flexWrap: "wrap", marginTop: 8, color: base.text },
+    historyFooterItem: { fontSize: 14, color: base.textMuted },
+    causesSection: { marginTop: 12 },
+    causesSectionTitle: { fontWeight: 900, marginBottom: 8, color: base.text },
+    causesList: { display: "flex", flexWrap: "wrap", gap: 8 },
+    causePill: { background: base.pillBg, color: base.text, border: `1px solid ${base.pillBorder}`, borderRadius: 999, padding: "2px 8px", fontWeight: 800, fontSize: 12 },
+
+    emptyHistory: {
+      border: `1px solid ${base.border}`,
+      borderRadius: 12,
+      padding: 16,
+      textAlign: "center",
+      background: base.card,
+      color: base.text,
+    },
+    emptyHistoryIcon: { fontSize: 30, marginBottom: 6 },
+    emptyHistoryTitle: { fontWeight: 900, marginBottom: 4 },
+    emptyHistoryText: { fontSize: 13, color: base.textMuted },
+
+    // Sous-table remises
+    subTableOuterTd: { background: isDark ? "#0b1220" : "#f8fafc", padding: 0 },
+    subTable: {
+      width: "100%",
+      borderCollapse: "separate",
+      borderSpacing: 0,
+      minWidth: 780,
+      background: base.card,
+      color: base.text,
+      border: `1px solid ${base.subTableBorder}`,
+      borderRadius: 10,
+      overflow: "hidden",
+    },
+    subTheadTr: { background: base.subTableHead },
+    subTh: { textAlign: "left", padding: "8px 10px", borderBottom: `2px solid ${base.subTableBorder}`, fontWeight: 800, fontSize: 12, color: base.textMuted },
+    subThRight: { textAlign: "right", padding: "8px 10px", borderBottom: `2px solid ${base.subTableBorder}`, fontWeight: 800, fontSize: 12, color: base.textMuted },
+    subTr: (idx) => ({ borderBottom: `1px solid ${base.subTableBorder}`, background: idx % 2 ? base.card : base.subTableStrip }),
+    subTd: { padding: "8px 10px", fontSize: 13, color: base.text },
+    subTdRight: { padding: "8px 10px", textAlign: "right", fontWeight: 800, color: base.text },
+    subTfootTr: { background: isDark ? "#0b1220" : "#f9fafb", fontWeight: 800 },
+    subTf: { padding: "10px 10px", borderTop: `2px solid ${base.subTableBorder}`, color: base.text },
+    subTfRight: { padding: "10px 10px", textAlign: "right", borderTop: `2px solid ${base.subTableBorder}`, color: base.text },
+  };
+}
 
 /* ================== Helpers UI ================== */
 
-function StatCard({ icon, label, value, color, bgColor, highlighted, isCount }) {
+function StatCard({ styles, icon, label, value, color, bgColor, highlighted, isCount }) {
   return (
-    <div style={{ borderWidth: 1, borderStyle: "solid", borderColor: "#e5e7eb", borderRadius: 12, padding: 12, background: bgColor }}>
+    <div style={{ border: `1px solid ${styles.border || 'transparent'}`, borderRadius: 12, padding: 12, background: bgColor }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
         <span style={{ fontSize: 18 }}>{icon}</span>
-        <span style={{ fontWeight: 800, color: "#111827" }}>{label}</span>
+        <span style={{ fontWeight: 800 }}>{label}</span>
       </div>
-      <div style={{ fontWeight: 900, color: highlighted ? "#111827" : color, fontSize: isCount ? 18 : 20 }}>
+      <div style={{ fontWeight: 900, color: highlighted ? undefined : color, fontSize: isCount ? 18 : 20 }}>
         {isCount ? value : `${Number(value || 0).toFixed(2)} DHS`}
       </div>
     </div>

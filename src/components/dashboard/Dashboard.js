@@ -564,7 +564,7 @@ export default function Dashboard() {
     unsubs.push(onSnapshot(qStockEntries, s => setStockEntries(s.docs.map(d => ({ id:d.id, ...d.data() }))), () => setStockEntries([])));
     unsubs.push(onSnapshot(qPaiements, s => setPaiements(s.docs.map(d => ({ id:d.id, ...d.data() }))), () => setPaiements([])));
 
-    toast("Données (temps réel) prêtes");
+    toast("BIEN VENUE ");
 
     return () => unsubs.forEach(u => { try { u && u(); } catch {} });
   }, [loading, user, societeId, toast]);
@@ -1312,7 +1312,7 @@ export default function Dashboard() {
                   <th style={styles.th}>Type</th>
                   <th style={styles.th}>Produit</th>
                   <th style={styles.th}>Lot</th>
-                  <th style={styles.th}>Quantité</th>
+                  <th style={styles.th}>Qté</th>
                   <th style={styles.th}>Seuil</th>
                   <th style={styles.th}>Jours avant péremption</th>
                 </tr>

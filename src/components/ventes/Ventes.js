@@ -68,6 +68,91 @@ async function ensureMembership(user, societeId) {
   }
 }
 
+/* ===================== 🎨 THEME (clair/sombre) ===================== */
+function useTheme() {
+  const [theme, setTheme] = useState(() => {
+    try {
+      return localStorage.getItem("theme") || "light";
+    } catch {
+      return "light";
+    }
+  });
+  const isDark = theme === "dark";
+  const toggleTheme = useCallback(() => {
+    const next = isDark ? "light" : "dark";
+    setTheme(next);
+    try { localStorage.setItem("theme", next); } catch {}
+  }, [isDark]);
+
+  const COLORS = useMemo(() => {
+    if (!isDark) {
+      return {
+        appBg: "linear-gradient(135deg,#667eea 0%,#764ba2 100%)",
+        cardBg: "rgba(255,255,255,0.95)",
+        softCardBg: "rgba(255,255,255,0.92)",
+        border: "rgba(255,255,255,0.2)",
+        text: "#111827",
+        textSoft: "#374151",
+        muted: "#6b7280",
+        ringBlue: "#e5e7eb",
+        tableHead: "linear-gradient(135deg,#1e293b,#334155)",
+        rowAlt: "rgba(248, 250, 252, 0.5)",
+        good: "#16a34a",
+        danger: "#dc2626",
+        warn: "#d97706",
+        info: "#2563eb",
+        chipBg: "#f8fafc",
+        chipText: "#0f172a",
+        stickyBg: "linear-gradient(135deg,#ffffff,#f9fafb)",
+        filtersBand: "linear-gradient(135deg,#6366f1,#8b5cf6)",
+        totalBand: "linear-gradient(135deg,#e0e7ff,#c7d2fe)",
+        okBand: "linear-gradient(135deg,#f0fdf4,#dcfce7)",
+        notifErrBg: "rgba(254,226,226,0.95)",
+        notifErrBorder: "rgba(220,38,38,0.2)",
+        notifOkBg: "rgba(220,252,231,0.95)",
+        notifOkBorder: "rgba(22,163,74,0.2)",
+        veilBg: "linear-gradient(135deg,#fafafa 0%,#f1f5f9 100%)",
+        unauthorizedBg: "linear-gradient(135deg,#f093fb 0%,#f5576c 100%)",
+        headerTitleGradient: "linear-gradient(135deg,#667eea,#764ba2)",
+        buttonGrey: "linear-gradient(135deg,#6b7280,#4b5563)",
+      };
+    }
+    // dark
+    return {
+      appBg: "linear-gradient(135deg,#0b1220 0%,#0f1326 60%,#111827 100%)",
+      cardBg: "rgba(17,24,39,0.9)",         // slate-900/90
+      softCardBg: "rgba(26,32,44,0.9)",     // gray-900/90
+      border: "rgba(255,255,255,0.06)",
+      text: "#e5e7eb",                      // gray-200
+      textSoft: "#cbd5e1",                  // slate-300
+      muted: "#94a3b8",                     // slate-400
+      ringBlue: "rgba(255,255,255,0.08)",
+      tableHead: "linear-gradient(135deg,#0b1220,#0f172a)",
+      rowAlt: "rgba(2,6,23,0.45)",
+      good: "#22c55e",
+      danger: "#ef4444",
+      warn: "#f59e0b",
+      info: "#60a5fa",
+      chipBg: "rgba(148,163,184,0.12)",
+      chipText: "#e5e7eb",
+      stickyBg: "linear-gradient(135deg,#0b1220,#0f172a)",
+      filtersBand: "linear-gradient(135deg,#4f46e5,#7c3aed)",
+      totalBand: "linear-gradient(135deg,#312e81,#3730a3)",
+      okBand: "linear-gradient(135deg,#064e3b,#065f46)",
+      notifErrBg: "rgba(127,29,29,0.5)",
+      notifErrBorder: "rgba(239,68,68,0.35)",
+      notifOkBg: "rgba(20,83,45,0.55)",
+      notifOkBorder: "rgba(34,197,94,0.35)",
+      veilBg: "linear-gradient(135deg,#0b1220 0%,#0f172a 100%)",
+      unauthorizedBg: "linear-gradient(135deg,#5b21b6 0%,#701a75 100%)",
+      headerTitleGradient: "linear-gradient(135deg,#93c5fd,#c4b5fd)",
+      buttonGrey: "linear-gradient(135deg,#334155,#1f2937)",
+    };
+  }, [isDark]);
+
+  return { theme, isDark, toggleTheme, COLORS };
+}
+
 /* ======================================================
    Constantes / helpers temps-réel
 ====================================================== */
@@ -170,9 +255,9 @@ const distinctCountByProduit = (list) => {
 };
 
 /* ====== Realtime indicator ====== */
-function RealtimeBeat({ lastRealtimeBeat }) {
+function RealtimeBeat({ lastRealtimeBeat, color="#059669" }) {
   return (
-    <span style={{ fontSize: 12, color: "#059669" }}>
+    <span style={{ fontSize: 12, color }}>
       {lastRealtimeBeat ? `Sync: ${lastRealtimeBeat.toLocaleTimeString("fr-FR")}` : "Sync..."}
     </span>
   );
@@ -261,10 +346,10 @@ function CameraBarcodeInlineModal({ open, onClose, onDetected }) {
       onClick={(e) => e.target === e.currentTarget && onClose?.()}
       style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.6)", display: "grid", placeItems: "center", zIndex: 9999, padding: 16 }}
     >
-      <div style={{ background: "#fff", borderRadius: 14, width: "min(100%, 680px)", padding: 16, boxShadow: "0 10px 30px rgba(0,0,0,.2)", position: "relative" }}>
+      <div style={{ background: "#111827", color:"#e5e7eb", borderRadius: 14, width: "min(100%, 680px)", padding: 16, boxShadow: "0 10px 30px rgba(0,0,0,.3)", position: "relative" }}>
         <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 10 }}>
           <h3 style={{ margin: 0, fontWeight: 800, fontSize: 17 }}>Scanner un code-barres</h3>
-          <button onClick={onClose} style={{ marginLeft: "auto", border: "none", borderRadius: 8, padding: "6px 10px", background: "#111827", color: "#fff", cursor: "pointer", fontSize: 13 }}>
+          <button onClick={onClose} style={{ marginLeft: "auto", border: "none", borderRadius: 8, padding: "6px 10px", background: "#0ea5e9", color: "#fff", cursor: "pointer", fontSize: 13 }}>
             Fermer
           </button>
         </div>
@@ -275,9 +360,9 @@ function CameraBarcodeInlineModal({ open, onClose, onDetected }) {
         </div>
 
         {error ? (
-          <p style={{ marginTop: 8, color: "#b91c1c", fontSize: 12 }}>{error}</p>
+          <p style={{ marginTop: 8, color: "#fca5a5", fontSize: 12 }}>{error}</p>
         ) : (
-          <p style={{ marginTop: 8, color: "#6b7280", fontSize: 12 }}>Astuce : place le code bien à plat et évite les reflets.</p>
+          <p style={{ marginTop: 8, color: "#cbd5e1", fontSize: 12 }}>Astuce : place le code bien à plat et évite les reflets.</p>
         )}
       </div>
     </div>
@@ -455,7 +540,8 @@ const VenteRow = memo(({
   onEdit,
   onPrint,
   onDelete,
-  onSyncPaiement
+  onSyncPaiement,
+  isDark
 }) => {
   const total =
     vente.montantTotal ||
@@ -484,16 +570,25 @@ const VenteRow = memo(({
   const principalStock = vente.stockSource || vente.stock || "stock1";
 
   return (
-    <tr style={{borderBottom:"1px solid #f1f5f9",transition:"all 0.3s ease",background: index % 2 === 0 ? "rgba(248, 250, 252, 0.5)" : "white",borderLeft: principalStock === "stock2" ? "4px solid #10b981" : "4px solid #3b82f6"}}>
+    <tr style={{
+      borderBottom:"1px solid #f1f5f9",
+      transition:"all 0.3s ease",
+      background: index % 2 === 0 ? (isDark ? "rgba(2,6,23,0.45)" : "rgba(248, 250, 252, 0.5)") : (isDark ? "rgba(2,6,23,0.15)" : "white"),
+      borderLeft: principalStock === "stock2" ? "4px solid #10b981" : "4px solid #3b82f6"
+    }}>
       <td style={{ padding: 16, borderRight: "1px solid #f1f5f9" }}>
-        <div style={{background: principalStock === "stock2" ? "linear-gradient(135deg,#10b981,#059669)" : "linear-gradient(135deg,#3b82f6,#2563eb)", color: "white", padding: "5px 10px", borderRadius: 10, fontSize: 11, fontWeight: 700, letterSpacing: "0.3px", display: "inline-block"}}>
+        <div style={{
+          background: principalStock === "stock2"
+            ? "linear-gradient(135deg,#10b981,#059669)"
+            : "linear-gradient(135deg,#3b82f6,#2563eb)",
+          color: "white", padding: "5px 10px", borderRadius: 10, fontSize: 11, fontWeight: 700, letterSpacing: "0.3px", display: "inline-block"}}>
           #{(vente.id || "").slice(-6).toUpperCase()}
         </div>
       </td>
       <td style={{ padding: 16, borderRight: "1px solid #f1f5f9" }}>
-        <div style={{ fontWeight: 600, fontSize: 15, color: "#1f2937", marginBottom: 3 }}>{vente.client}</div>
+        <div style={{ fontWeight: 600, fontSize: 15, color: isDark ? "#e5e7eb" : "#1f2937", marginBottom: 3 }}>{vente.client}</div>
         <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
-          <div style={{ fontSize: 11, color: "#6b7280", background: "#f8fafc", padding: "2px 7px", borderRadius: 8, display: "inline-block" }}>{vente.modePaiement || "Espèces"}</div>
+          <div style={{ fontSize: 11, color: isDark ? "#e5e7eb" : "#6b7280", background: isDark ? "rgba(148,163,184,0.12)" : "#f8fafc", padding: "2px 7px", borderRadius: 8, display: "inline-block" }}>{vente.modePaiement || "Espèces"}</div>
           {safeNumber(vente.montantPaye) > 0 && (
             <div title="Montant payé cumulé" style={{ fontSize: 10, color: "#166534", background: "#dcfce7", padding: "2px 7px", borderRadius: 8 }}>
               payé: {safeToFixed(vente.montantPaye)} DH
@@ -501,8 +596,8 @@ const VenteRow = memo(({
           )}
         </div>
       </td>
-      <td style={{ padding: 16, textAlign: "center", borderRight: "1px solid #f1f5f9" }}>
-        <div style={{ fontSize: 13, fontWeight: 600, color: "#374151" }}>{formatDateSafe(vente.date)}</div>
+      <td style={{ padding: 16, textAlign: "center", borderRight: "1px solid #f1f5f9", color: isDark ? "#e5e7eb" : "#374151" }}>
+        <div style={{ fontSize: 13, fontWeight: 600 }}>{formatDateSafe(vente.date)}</div>
       </td>
       <td style={{ padding: 16, textAlign: "center", borderRight: "1px solid #f1f5f9" }}>
         <div style={{ display: "flex", gap: 6, justifyContent: "center", alignItems: "center", flexWrap: "wrap" }}>
@@ -517,7 +612,14 @@ const VenteRow = memo(({
         </div>
       </td>
       <td style={{ padding: 16, textAlign: "center", borderRight: "1px solid #f1f5f9" }}>
-        <span style={{background: vente.statutPaiement === "payé" ? "linear-gradient(135deg,#22c55e,#16a34a)" : vente.statutPaiement === "partiel" ? "linear-gradient(135deg,#eab308,#ca8a04)" : "linear-gradient(135deg,#ef4444,#dc2626)", color:"white", padding:"5px 14px", borderRadius:16, fontSize:11, fontWeight:600, textTransform:"capitalize"}}>
+        <span style={{
+          background:
+            vente.statutPaiement === "payé"
+              ? "linear-gradient(135deg,#22c55e,#16a34a)"
+              : vente.statutPaiement === "partiel"
+              ? "linear-gradient(135deg,#eab308,#ca8a04)"
+              : "linear-gradient(135deg,#ef4444,#dc2626)",
+          color:"white", padding:"5px 14px", borderRadius:16, fontSize:11, fontWeight:600, textTransform:"capitalize"}}>
           {vente.statutPaiement}
         </span>
       </td>
@@ -539,9 +641,11 @@ const VenteRow = memo(({
 VenteRow.displayName = "VenteRow";
 
 /* ======================================================
-   Composant principal (avec Lazy On/Off)
+   Composant principal (avec Lazy On/Off) + THEME
 ====================================================== */
 export default function Ventes() {
+  const { theme, isDark, toggleTheme, COLORS } = useTheme();
+
   /* ===== Lazy: activation manuelle ===== */
   const [active, setActive] = useState(() => {
     try {
@@ -676,8 +780,7 @@ export default function Ventes() {
   }, [loading, societeId, user]);
 
   useEffect(() => {
-    if (!active) return;
-    if (user && societeId) { ensureMembership(user, societeId); }
+    if (user && societeId && active) { ensureMembership(user, societeId); }
   }, [user, societeId, active]);
 
   /* ===== DATA (temps réel) — ACTIVÉS SEULEMENT SI active === true ===== */
@@ -835,30 +938,16 @@ export default function Ventes() {
     if (!active) return [];
     return ventes.filter((v) => {
       let keep = true;
-      
-      // Filtre par statut
       if (filterStatut && v.statutPaiement !== filterStatut) keep = false;
-      
-      // Filtre par client spécifique
       if (filterClient && v.client !== filterClient) keep = false;
-      
-      // Filtre par produit spécifique
       if (filterProduit && !v.articles?.some(a => a.produit === filterProduit)) keep = false;
-      
-      // Filtre S1 - doit avoir au moins un article depuis stock1
       if (filterS1 && !filterS2 && !v.articles?.some(a => a.stockSource === "stock1")) keep = false;
-      
-      // Filtre S2 - doit avoir au moins un article depuis stock2
       if (filterS2 && !filterS1 && !v.articles?.some(a => a.stockSource === "stock2")) keep = false;
-      
-      // Si S1 ET S2 sont cochés, on veut les ventes qui ont au moins un article de l'un ou l'autre
       if (filterS1 && filterS2) {
         const hasS1 = v.articles?.some(a => a.stockSource === "stock1");
         const hasS2 = v.articles?.some(a => a.stockSource === "stock2");
         if (!hasS1 && !hasS2) keep = false;
       }
-      
-      // 🆕 Filtre par date
       const venteDate = safeParseDate(v.date);
       if (dateDe) {
         const start = new Date(dateDe);
@@ -870,8 +959,6 @@ export default function Ventes() {
         end.setHours(23, 59, 59, 999);
         if (venteDate > end) keep = false;
       }
-      
-      // Recherche textuelle
       if (searchTerm) {
         const s = searchTerm.toLowerCase();
         const clientMatch = v.client?.toLowerCase().includes(s);
@@ -882,12 +969,10 @@ export default function Ventes() {
         });
         keep = keep && (clientMatch || produitMatch);
       }
-      
       return keep;
     });
   }, [ventes, filterStatut, filterClient, filterProduit, filterS1, filterS2, dateDe, dateA, searchTerm, active]);
 
-  // 🆕 Calcul du total des ventes filtrées
   const totalFiltrees = useMemo(() => {
     return ventesFiltrees.reduce((sum, v) => {
       const total = v.montantTotal ||
@@ -1260,10 +1345,8 @@ Le stock sera automatiquement restauré pour tous les articles de cette vente.`)
     setError("");
     try {
       await ensureMembership(user, societeId);
-      // ✅ TOUTES les lectures AVANT la transaction
       const arts = vente.articles || [];
-      
-      // 1️⃣ Préparer toutes les lectures de lots
+
       const lotReadsPromises = arts
         .filter(article => article.stockEntryId)
         .map(article => {
@@ -1274,7 +1357,7 @@ Le stock sera automatiquement restauré pour tous les articles de cette vente.`)
             article
           }));
         });
-      // 2️⃣ Préparer la lecture des paiements
+
       const paiementsPromise = getDocs(
         query(
           collection(db, "societe", societeId, "paiements"),
@@ -1285,14 +1368,13 @@ Le stock sera automatiquement restauré pour tous les articles de cette vente.`)
         console.warn("Erreur lecture paiements:", e);
         return { docs: [] };
       });
-      // 3️⃣ Exécuter TOUTES les lectures en parallèle
+
       const [lotReads, paiementsSnapshot] = await Promise.all([
         Promise.all(lotReadsPromises),
         paiementsPromise
       ]);
-      // 4️⃣ Transaction (écritures seulement)
+
       await runTransaction(db, async (transaction) => {
-        // Restaurer le stock pour chaque lot
         lotReads.forEach(({ lotRef, lotSnap, article }) => {
           if (lotSnap.exists()) {
             const lotData = lotSnap.data();
@@ -1319,15 +1401,12 @@ Le stock sera automatiquement restauré pour tous les articles de cette vente.`)
             });
           }
         });
-        // Supprimer les markers de sync
         for (let i = 0; i < arts.length; i++) {
           const opId = `${vente.id}#${i}`;
           transaction.delete(doc(db, "societe", societeId, APPLIED_SALES_COLL, opId));
           transaction.delete(doc(db, "societe", societeId, DISMISSED_COLL, opId));
         }
-        // Supprimer la vente
         transaction.delete(doc(db, "societe", societeId, "ventes", vente.id));
-        // Supprimer les paiements liés
         paiementsSnapshot.docs.forEach((pDoc) => {
           transaction.delete(pDoc.ref);
         });
@@ -1460,7 +1539,6 @@ Le stock sera automatiquement restauré pour tous les articles de cette vente.`)
     setShowFinalizationSection(false);
   }, []);
 
-  // 🆕 Fonction pour réinitialiser tous les filtres
   const resetFilters = useCallback(() => {
     setSearchTerm("");
     setFilterStatut("");
@@ -1566,7 +1644,6 @@ Le stock sera automatiquement restauré pour tous les articles de cette vente.`)
         lastPaidAt: lastPaidAt || Timestamp.now(),
         updatedAt: Timestamp.now(),
       };
-      // Règle métier : si la vente devient "payé" et que le dernier paiement est en "Espèces", forcer modePaiement = "Espèces"
       if (statut === "payé" && String(lastMode).toLowerCase().includes("esp")) {
         updates.modePaiement = "Espèces";
       }
@@ -1583,8 +1660,8 @@ Le stock sera automatiquement restauré pour tous les articles de cette vente.`)
   /* ===================== Rendu ===================== */
   if (waiting) {
     return (
-      <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:"linear-gradient(135deg,#667eea 0%,#764ba2 100%)",color:"white"}}>
-        <div style={{textAlign:"center",padding:40,borderRadius:16,background:"rgba(255,255,255,0.1)",backdropFilter:"blur(10px)",border:"1px solid rgba(255,255,255,0.2)"}}>
+      <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:COLORS.appBg,color:COLORS.text}}>
+        <div style={{textAlign:"center",padding:40,borderRadius:16,background:COLORS.cardBg,backdropFilter:"blur(10px)",border:`1px solid ${COLORS.border}`}}>
           <div style={{width:50,height:50,border:"4px solid rgba(255,255,255,0.3)",borderTop:"4px solid white",borderRadius:"50%",animation:"spin 1s linear infinite",margin:"0 auto 20px"}}/>
           <h3 style={{margin:0,fontSize:18}}>Chargement en cours...</h3>
           <style>{`@keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }`}</style>
@@ -1595,8 +1672,8 @@ Le stock sera automatiquement restauré pour tous les articles de cette vente.`)
 
   if (!user || !societeId) {
     return (
-      <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:"linear-gradient(135deg,#f093fb 0%,#f5576c 100%)",color:"white"}}>
-        <div style={{textAlign:"center",padding:40,borderRadius:16,background:"rgba(255,255,255,0.1)",backdropFilter:"blur(10px)",border:"1px solid rgba(255,255,255,0.2)"}}>
+      <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:COLORS.unauthorizedBg,color:"#fff"}}>
+        <div style={{textAlign:"center",padding:40,borderRadius:16,background:"rgba(255,255,255,0.12)",backdropFilter:"blur(10px)",border:"1px solid rgba(255,255,255,0.2)"}}>
           <h3 style={{margin:"0 0 10px",fontSize:18}}>Accès non autorisé</h3>
           <p style={{margin:0,opacity:0.9}}>Utilisateur non connecté ou société non sélectionnée.</p>
         </div>
@@ -1607,37 +1684,46 @@ Le stock sera automatiquement restauré pour tous les articles de cette vente.`)
   /* ====== Vue "Veille" quand inactive ====== */
   if (!active) {
     return (
-      <div style={{minHeight:"100vh",background:"linear-gradient(135deg,#fafafa 0%,#f1f5f9 100%)",padding:20,fontFamily:'"Inter",-apple-system,BlinkMacSystemFont,sans-serif'}}>
-        <div style={{background:"white",borderRadius:24,padding:24,margin:"40px auto",maxWidth:900,boxShadow:"0 20px 40px rgba(0,0,0,0.06)",border:"1px solid #e5e7eb"}}>
+      <div style={{minHeight:"100vh",background:COLORS.veilBg,padding:20,fontFamily:'"Inter",-apple-system,BlinkMacSystemFont,sans-serif', color: COLORS.text}}>
+        <div style={{background:COLORS.cardBg,borderRadius:24,padding:24,margin:"40px auto",maxWidth:900,boxShadow:"0 20px 40px rgba(0,0,0,0.06)",border:`1px solid ${COLORS.border}`}}>
           <div style={{display:"flex",alignItems:"center",gap:14,marginBottom:12}}>
             <div style={{width:44,height:44,borderRadius:12,display:"grid",placeItems:"center",background:"linear-gradient(135deg,#667eea,#764ba2)",color:"#fff",fontSize:22}}>🛍️</div>
             <div>
-              <h1 style={{margin:0,fontSize:26,fontWeight:800,letterSpacing:.2,color:"#111827"}}>Ventes — Mode veille</h1>
-              <p style={{margin:"6px 0 0",color:"#6b7280"}}>
+              <h1 style={{margin:0,fontSize:26,fontWeight:800,letterSpacing:.2,color:COLORS.text}}>Ventes — Mode veille</h1>
+              <p style={{margin:"6px 0 0",color:COLORS.muted}}>
                 Cette page est en pause pour économiser les ressources. Activez-la pour afficher le tableau des ventes,
                 le panier et la synchronisation temps réel.
               </p>
             </div>
-            <button
-              onClick={toggleActive}
-              style={{marginLeft:"auto",background:"linear-gradient(135deg,#10b981,#059669)",color:"#fff",border:"none",padding:"12px 20px",borderRadius:12,fontWeight:800,cursor:"pointer",boxShadow:"0 8px 24px rgba(16,185,129,0.35)"}}
-            >
-              Activer la page Ventes
-            </button>
+            <div style={{marginLeft:"auto", display:"flex", gap:8}}>
+              <button
+                onClick={toggleTheme}
+                title={isDark ? "Passer en clair" : "Passer en sombre"}
+                style={{background:COLORS.buttonGrey,color:"#fff",border:"none",padding:"12px 14px",borderRadius:12,fontWeight:800,cursor:"pointer"}}
+              >
+                {isDark ? "☀️ Clair" : "🌙 Sombre"}
+              </button>
+              <button
+                onClick={toggleActive}
+                style={{background:"linear-gradient(135deg,#10b981,#059669)",color:"#fff",border:"none",padding:"12px 20px",borderRadius:12,fontWeight:800,cursor:"pointer",boxShadow:"0 8px 24px rgba(16,185,129,0.35)"}}
+              >
+                Activer
+              </button>
+            </div>
           </div>
 
           <div style={{marginTop:16,display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(220px,1fr))",gap:12}}>
-            <div style={{padding:16,borderRadius:16,background:"#f8fafc",border:"1px dashed #cbd5e1"}}>
-              <div style={{fontWeight:700,color:"#0f172a"}}>Listeners Firestore</div>
-              <div style={{fontSize:13,color:"#64748b"}}>Non démarrés</div>
+            <div style={{padding:16,borderRadius:16,background:isDark?"rgba(2,6,23,0.45)":"#f8fafc",border:`1px dashed ${isDark?"#334155":"#cbd5e1"}`, color: COLORS.text}}>
+              <div style={{fontWeight:700}}>Listeners Firestore</div>
+              <div style={{fontSize:13,color:COLORS.muted}}>Non démarrés</div>
             </div>
-            <div style={{padding:16,borderRadius:16,background:"#f8fafc",border:"1px dashed #cbd5e1"}}>
-              <div style={{fontWeight:700,color:"#0f172a"}}>Scanner / Douchette</div>
-              <div style={{fontSize:13,color:"#64748b"}}>Désactivé</div>
+            <div style={{padding:16,borderRadius:16,background:isDark?"rgba(2,6,23,0.45)":"#f8fafc",border:`1px dashed ${isDark?"#334155":"#cbd5e1"}`, color: COLORS.text}}>
+              <div style={{fontWeight:700}}>Scanner / Douchette</div>
+              <div style={{fontSize:13,color:COLORS.muted}}>Désactivé</div>
             </div>
-            <div style={{padding:16,borderRadius:16,background:"#f8fafc",border:"1px dashed #cbd5e1"}}>
-              <div style={{fontWeight:700,color:"#0f172a"}}>Consommation mémoire</div>
-              <div style={{fontSize:13,color:"#64748b"}}>Minimale</div>
+            <div style={{padding:16,borderRadius:16,background:isDark?"rgba(2,6,23,0.45)":"#f8fafc",border:`1px dashed ${isDark?"#334155":"#cbd5e1"}`, color: COLORS.text}}>
+              <div style={{fontWeight:700}}>Consommation mémoire</div>
+              <div style={{fontSize:13,color:COLORS.muted}}>Minimale</div>
             </div>
           </div>
         </div>
@@ -1647,17 +1733,17 @@ Le stock sera automatiquement restauré pour tous les articles de cette vente.`)
 
   /* ====== Vue ACTIVE ====== */
   return (
-    <div style={{minHeight:"100vh",background:"linear-gradient(135deg,#667eea 0%,#764ba2 100%)",padding:20,fontFamily:'"Inter",-apple-system,BlinkMacSystemFont,sans-serif'}}>
+    <div style={{minHeight:"100vh",background:COLORS.appBg,padding:20,fontFamily:'"Inter",-apple-system,BlinkMacSystemFont,sans-serif', color: COLORS.text}}>
       {/* Header */}
-      <div style={{background:"rgba(255,255,255,0.95)",backdropFilter:"blur(20px)",borderRadius:24,padding:24,marginBottom:16,border:"1px solid rgba(255,255,255,0.2)",boxShadow:"0 20px 40px rgba(0,0,0,0.1)"}}>
+      <div style={{background:COLORS.cardBg,backdropFilter:"blur(20px)",borderRadius:24,padding:24,marginBottom:16,border:`1px solid ${COLORS.border}`,boxShadow:"0 20px 40px rgba(0,0,0,0.1)"}}>
         <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:16}}>
           <div>
-            <h1 style={{margin:0,fontSize:32,fontWeight:800,background:"linear-gradient(135deg,#667eea,#764ba2)",WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent",backgroundClip:"text"}}>Gestion des Ventes Multi-Articles</h1>
-            <p style={{margin:"6px 0 0",color:"#6b7280",fontSize:16}}>Catalogue aligné (nom/prixVente/quantite + codes-barres) et lots FIFO.</p>
-            <div style={{marginTop:6}}><RealtimeBeat lastRealtimeBeat={lastRealtimeBeat} /></div>
+            <h1 style={{margin:0,fontSize:32,fontWeight:800,WebkitBackgroundClip:"text",backgroundClip:"text"}}>Gestion des Ventes </h1>
+            
+            <div style={{marginTop:6}}><RealtimeBeat lastRealtimeBeat={lastRealtimeBeat} color={isDark?"#34d399":"#059669"} /></div>
           </div>
 
-          <div style={{display:"flex",gap:8}}>
+          <div style={{gap:8}}>
             <button
               onClick={() => { setShowForm((v) => !v); if (!showForm) resetForm(); }}
               style={{background:showForm?"linear-gradient(135deg,#ef4444,#dc2626)":"linear-gradient(135deg,#3b82f6,#2563eb)",color:"white",border:"none",padding:"14px 28px",borderRadius:16,fontSize:16,fontWeight:600,cursor:"pointer",transition:"all 0.3s ease",boxShadow:"0 8px 25px rgba(59,130,246,0.3)"}}
@@ -1667,9 +1753,16 @@ Le stock sera automatiquement restauré pour tous les articles de cette vente.`)
             <button
               onClick={toggleActive}
               title="Mettre la page en veille (arrête les flux temps réel)"
-              style={{background:"linear-gradient(135deg,#6b7280,#4b5563)",color:"#fff",border:"none",padding:"14px 18px",borderRadius:16,fontSize:14,fontWeight:700,cursor:"pointer"}}
+              style={{background:COLORS.buttonGrey,color:"#fff",border:"none",padding:"14px 18px",borderRadius:16,fontSize:14,fontWeight:700,cursor:"pointer"}}
             >
               Mettre en veille
+            </button>
+            <button
+              onClick={toggleTheme}
+              title={isDark ? "Passer en clair" : "Passer en sombre"}
+              style={{background:isDark?"linear-gradient(135deg,#0ea5e9,#2563eb)":"linear-gradient(135deg,#334155,#1f2937)",color:"#fff",border:"none",padding:"14px 18px",borderRadius:16,fontSize:14,fontWeight:800,cursor:"pointer"}}
+            >
+              {isDark ? "☀️ Mode clair" : "🌙 Mode sombre"}
             </button>
           </div>
         </div>
@@ -1677,39 +1770,39 @@ Le stock sera automatiquement restauré pour tous les articles de cette vente.`)
 
       {/* Notifications */}
       {error && (
-        <div style={{background:"rgba(254,226,226,0.95)",backdropFilter:"blur(10px)",color:"#dc2626",padding:16,borderRadius:16,marginBottom:16,border:"1px solid rgba(220,38,38,0.2)",display:"flex",alignItems:"center",justifyContent:"space-between",boxShadow:"0 8px 25px rgba(220,38,38,0.1)"}}>
+        <div style={{background:COLORS.notifErrBg,backdropFilter:"blur(10px)",color:isDark?"#fecaca":"#dc2626",padding:16,borderRadius:16,marginBottom:16,border:`1px solid ${COLORS.notifErrBorder}`,display:"flex",alignItems:"center",justifyContent:"space-between",boxShadow:"0 8px 25px rgba(220,38,38,0.1)"}}>
           <div style={{display:"flex",alignItems:"center",gap:10}}>
             <div style={{width:20,height:20,borderRadius:"50%",background:"#dc2626",color:"white",display:"flex",alignItems:"center",justifyContent:"center",fontSize:13,fontWeight:600}}>!</div>
             <span style={{fontSize:15,fontWeight:500}}>{error}</span>
           </div>
-          <button onClick={()=>setError("")} style={{background:"none",border:"none",color:"#dc2626",cursor:"pointer",fontSize:22,padding:4,borderRadius:8}}>×</button>
+          <button onClick={()=>setError("")} style={{background:"none",border:"none",color:isDark?"#fecaca":"#dc2626",cursor:"pointer",fontSize:22,padding:4,borderRadius:8}}>×</button>
         </div>
       )}
 
       {success && (
-        <div style={{background:"rgba(220,252,231,0.95)",backdropFilter:"blur(10px)",color:"#16a34a",padding:16,borderRadius:16,marginBottom:16,border:"1px solid rgba(22,163,74,0.2)",display:"flex",alignItems:"center",justifyContent:"space-between",boxShadow:"0 8px 25px rgba(22,163,74,0.1)"}}>
+        <div style={{background:COLORS.notifOkBg,backdropFilter:"blur(10px)",color:"#16a34a",padding:16,borderRadius:16,marginBottom:16,border:`1px solid ${COLORS.notifOkBorder}`,display:"flex",alignItems:"center",justifyContent:"space-between",boxShadow:"0 8px 25px rgba(22,163,74,0.1)"}}>
           <div style={{display:"flex",alignItems:"center",gap:10}}>
             <div style={{width:20,height:20,borderRadius:"50%",background:"#16a34a",color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",fontSize:13,fontWeight:600}}>✓</div>
-            <span style={{fontSize:15,fontWeight:500}}>{success}</span>
+            <span style={{fontSize:15,fontWeight:500,color:isDark?"#bbf7d0":"#16a34a"}}>{success}</span>
           </div>
-          <button onClick={()=>setSuccess("")} style={{background:"none",border:"none",color:"#16a34a",cursor:"pointer",fontSize:22,padding:4,borderRadius:8}}>×</button>
+          <button onClick={()=>setSuccess("")} style={{background:"none",border:"none",color:isDark?"#bbf7d0":"#16a34a",cursor:"pointer",fontSize:22,padding:4,borderRadius:8}}>×</button>
         </div>
       )}
 
       {/* Formulaire */}
       {showForm && (
-        <div style={{background:"rgba(255,255,255,0.95)",backdropFilter:"blur(20px)",borderRadius:20,padding:20,marginBottom:16,border:"1px solid rgba(255,255,255,0.2)",boxShadow:"0 20px 40px rgba(0,0,0,0.1)"}}>
-          <h2 style={{margin:"0 0 16px",fontSize:22,fontWeight:700,color:"#1f2937",textAlign:"center"}}>
+        <div style={{background:COLORS.softCardBg,backdropFilter:"blur(20px)",borderRadius:20,padding:20,marginBottom:16,border:`1px solid ${COLORS.border}`,boxShadow:"0 20px 40px rgba(0,0,0,0.1)"}}>
+          <h2 style={{margin:"0 0 16px",fontSize:22,fontWeight:700,color:COLORS.text, textAlign:"center"}}>
             {isEditing ? "Modifier la vente" : "Nouvelle vente - Ajoutez vos articles"}
           </h2>
 
           {/* Indicateur panier */}
           {articles.length > 0 && (
-            <div style={{background:"linear-gradient(135deg,#dcfce7,#bbf7d0)",borderRadius:12,padding:12,marginBottom:16,border:"2px solid #16a34a",textAlign:"center"}}>
-              <div style={{fontSize:20,fontWeight:800,color:"#15803d",marginBottom:4}}>
+            <div style={{background:isDark?"linear-gradient(135deg,#064e3b,#065f46)":"linear-gradient(135deg,#dcfce7,#bbf7d0)",borderRadius:12,padding:12,marginBottom:16,border:`2px solid ${isDark?"#10b981":"#16a34a"}`,textAlign:"center"}}>
+              <div style={{fontSize:20,fontWeight:800,color:isDark?"#86efac":"#15803d",marginBottom:4}}>
                 🛒 {distinctPanierCount} produit{distinctPanierCount > 1 ? "s" : ""} distinct{distinctPanierCount > 1 ? "s" : ""}
               </div>
-              <div style={{fontSize:14,color:"#16a34a"}}>
+              <div style={{fontSize:14,color:isDark?"#a7f3d0":"#16a34a"}}>
                 Total actuel: <span style={{fontWeight:700,fontSize:16}}>{safeToFixed(totalVenteCourante)} DHS</span>
               </div>
             </div>
@@ -1717,7 +1810,7 @@ Le stock sera automatiquement restauré pour tous les articles de cette vente.`)
 
           {/* Zone scan */}
           <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 12, flexWrap: "wrap" }}>
-            <button type="button" onClick={() => setShowScanner(true)} style={{ borderRadius: 10, padding: "8px 12px", cursor: "pointer", fontSize: 14, border: "2px solid #3b82f6" }}>
+            <button type="button" onClick={() => setShowScanner(true)} style={{ borderRadius: 10, padding: "8px 12px", cursor: "pointer", fontSize: 14, border: `2px solid ${isDark?"#60a5fa":"#3b82f6"}`, background:isDark?"#0b1220":"transparent", color:COLORS.text }}>
               📷 Scanner avec caméra
             </button>
             <CameraBarcodeInlineModal
@@ -1725,27 +1818,27 @@ Le stock sera automatiquement restauré pour tous les articles de cette vente.`)
               onClose={() => setShowScanner(false)}
               onDetected={(code) => { onBarcodeDetected(code); setShowScanner(false); }}
             />
-            <span style={{ color: "#6b7280", fontSize: 12 }}>(Ou scannez avec votre douchette : validation via <b>Entrée</b>)</span>
+            <span style={{ color: COLORS.muted, fontSize: 12 }}>(Ou scannez avec votre douchette : validation via <b>Entrée</b>)</span>
           </div>
 
           {/* Étape 1 */}
-          <div style={{background:"linear-gradient(135deg,#f0f9ff,#e0f2fe)",borderRadius:16,padding:16,marginBottom:12,border:"2px solid #0ea5e9"}}>
+          <div style={{background:isDark?"linear-gradient(135deg,#0b1220,#0f172a)":"linear-gradient(135deg,#f0f9ff,#e0f2fe)",borderRadius:16,padding:16,marginBottom:12,border:`2px solid ${isDark?"#1d4ed8":"#0ea5e9"}`}}>
             <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}}>
-              <h3 style={{margin:0,color:"#0c4a6e",fontSize:18,fontWeight:700}}>
+              <h3 style={{margin:0,color:isDark?"#93c5fd":"#0c4a6e",fontSize:18,fontWeight:700}}>
                 📦 Étape 1 : Ajoutez vos articles
               </h3>
               <span style={{background:"linear-gradient(135deg,#8b5cf6,#7c3aed)",color:"white",padding:"4px 12px",borderRadius:20,fontSize:12,fontWeight:700}}>
                 ARTICLES : {distinctPanierCount}
               </span>
             </div>
-            <p style={{margin:"0 0 12px",fontSize:13,color:"#0369a1"}}>
+            <p style={{margin:"0 0 12px",fontSize:13,color:isDark?"#cbd5e1":"#0369a1"}}>
               💡 Ajoutez autant d'articles que nécessaire. Chaque article sera ajouté au panier ci-dessous.
             </p>
 
             <form onSubmit={handleAddArticle}>
               <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit, minmax(200px, 1fr))",gap:10,marginBottom:12}}>
                 <div>
-                  <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: "#374151", marginBottom: 4 }}>
+                  <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: COLORS.textSoft, marginBottom: 4 }}>
                     Médicament * {getAllAvailableMedicaments.length > 0 && (
                       <span style={{ color: "#059669", fontSize: 11 }}>({getAllAvailableMedicaments.length} en stock)</span>
                     )}
@@ -1754,7 +1847,7 @@ Le stock sera automatiquement restauré pour tous les articles de cette vente.`)
                     value={produit}
                     onChange={(e) => handleProduitChange(e.target.value)}
                     required
-                    style={{width:"100%",padding:"8px 12px",borderRadius:10,border:"2px solid #e5e7eb",fontSize:14,background:"white"}}
+                    style={{width:"100%",padding:"8px 12px",borderRadius:10,border:`2px solid ${COLORS.ringBlue}`,fontSize:14,background:isDark?"#0b1220":"white", color: COLORS.text}}
                   >
                     <option value="">-- Sélectionner un médicament --</option>
                     {getAllAvailableMedicaments.map((m) => (
@@ -1764,34 +1857,34 @@ Le stock sera automatiquement restauré pour tous les articles de cette vente.`)
                 </div>
 
                 <div>
-                  <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: "#374151", marginBottom: 4 }}>Quantité *</label>
+                  <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: COLORS.textSoft, marginBottom: 4 }}>Quantité *</label>
                   <input type="number" value={quantite} onChange={(e) => setQuantite(e.target.value)} required min={1}
-                         style={{width:"100%",padding:"10px 14px",borderRadius:10,border:"2px solid #e5e7eb",fontSize:15,background:"white"}} />
+                         style={{width:"100%",padding:"10px 14px",borderRadius:10,border:`2px solid ${COLORS.ringBlue}`,fontSize:15,background:isDark?"#0b1220":"white", color: COLORS.text}} />
                 </div>
 
                 <div>
-                  <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: "#374151", marginBottom: 4 }}>Prix unitaire (DHS) *</label>
+                  <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: COLORS.textSoft, marginBottom: 4 }}>Prix unitaire (DHS) *</label>
                   <input type="number" value={prixUnitaire} onChange={(e) => setPrixUnitaire(e.target.value)} required min={0} step="0.01"
-                         style={{width:"100%",padding:"8px 12px",borderRadius:10,border:"2px solid #e5e7eb",fontSize:14,background:"white"}} />
+                         style={{width:"100%",padding:"8px 12px",borderRadius:10,border:`2px solid ${COLORS.ringBlue}`,fontSize:14,background:isDark?"#0b1220":"white", color: COLORS.text}} />
                 </div>
 
                 <div>
-                  <label style={{display:"block",fontSize:12,fontWeight:600,color:"#374151",marginBottom:4}}>Remise (DHS)</label>
+                  <label style={{display:"block",fontSize:12,fontWeight:600,color:COLORS.textSoft,marginBottom:4}}>Remise (DHS)</label>
                   <input type="number" value={remiseArticle} onChange={(e) => setRemiseArticle(e.target.value)} min={0} step="0.01"
-                         style={{width:"100%",padding:"8px 12px",borderRadius:10,border:"2px solid #e5e7eb",fontSize:14,background:"white"}}/>
+                         style={{width:"100%",padding:"8px 12px",borderRadius:10,border:`2px solid ${COLORS.ringBlue}`,fontSize:14,background:isDark?"#0b1220":"white", color: COLORS.text}}/>
                 </div>
 
                 <div>
-                  <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: "#374151", marginBottom: 4 }}>N° article (code-barres)</label>
+                  <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: COLORS.textSoft, marginBottom: 4 }}>N° article (code-barres)</label>
                   <input type="text" value={numeroArticle} onChange={(e) => setNumeroArticle(e.target.value)} placeholder="Scannez ou saisissez"
-                         style={{width:"100%",padding:"8px 12px",borderRadius:10,border:"2px solid #e5e7eb",fontSize:14,background:"white"}} />
+                         style={{width:"100%",padding:"8px 12px",borderRadius:10,border:`2px solid ${COLORS.ringBlue}`,fontSize:14,background:isDark?"#0b1220":"white", color: COLORS.text}} />
                 </div>
               </div>
 
               {/* Lots */}
               {availableLots.length > 0 && (
                 <div style={{ marginBottom: 16 }}>
-                  <label style={{display:"block",fontSize:13,fontWeight:600,color:"#374151",marginBottom:8}}>Sélectionner un lot spécifique (FIFO recommandé)</label>
+                  <label style={{display:"block",fontSize:13,fontWeight:600,color:COLORS.textSoft,marginBottom:8}}>Sélectionner un lot spécifique (FIFO recommandé)</label>
                   <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit, minmax(250px, 1fr))",gap:10}}>
                     {availableLots.map((lot) => {
                       const lotDate = safeParseDate(lot.datePeremption);
@@ -1803,29 +1896,29 @@ Le stock sera automatiquement restauré pour tous les articles de cette vente.`)
                       return (
                         <div key={lot.id} onClick={()=>handleLotSelection(lot.id)}
                              style={{padding:12,borderRadius:12,cursor:"pointer",transition:"all 0.3s ease",
-                                     border: selectedLot === lot.id ? "3px solid #10b981" : "2px solid #e5e7eb",
-                                     background: selectedLot === lot.id ? "linear-gradient(135deg,#dcfce7,#bbf7d0)" :
-                                                isExpired ? "linear-gradient(135deg,#fee2e2,#fecaca)" :
-                                                isExpSoon ? "linear-gradient(135deg,#fef3c7,#fed7aa)" :
-                                                "linear-gradient(135deg,#f9fafb,#f3f4f6)"}}>
+                                     border: selectedLot === lot.id ? "3px solid #10b981" : `2px solid ${COLORS.ringBlue}`,
+                                     background: selectedLot === lot.id ? (isDark?"linear-gradient(135deg,#064e3b,#065f46)":"linear-gradient(135deg,#dcfce7,#bbf7d0)") :
+                                                isExpired ? (isDark?"linear-gradient(135deg,#3f1d1d,#7f1d1d)":"linear-gradient(135deg,#fee2e2,#fecaca)") :
+                                                isExpSoon ? (isDark?"linear-gradient(135deg,#3b2a1a,#713f12)":"linear-gradient(135deg,#fef3c7,#fed7aa)") :
+                                                (isDark?"linear-gradient(135deg,#0b1220,#0f172a)":"linear-gradient(135deg,#f9fafb,#f3f4f6)" )}}>
                           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
-                            <span style={{fontWeight:700,fontSize:13,color:"#1f2937"}}>Lot: {lot.numeroLot}</span>
+                            <span style={{fontWeight:700,fontSize:13,color:COLORS.text}}>Lot: {lot.numeroLot}</span>
                             <span style={{background:primaryStock==="stock1"?"#3b82f6":"#10b981",color:"#fff",padding:"2px 8px",borderRadius:12,fontSize:10,fontWeight:600}}>
                               S1: {s1} | S2: {s2}
                             </span>
                           </div>
-                          <div style={{fontSize:11,color:"#6b7280",marginBottom:4}}>
-                            <span style={{background:"#dbeafe",color:"#2563eb",padding:"2px 6px",borderRadius:8,marginRight:4,fontSize:10,fontWeight:500}}>
+                          <div style={{fontSize:11,color:COLORS.muted,marginBottom:4}}>
+                            <span style={{background:isDark?"rgba(37,99,235,0.18)":"#dbeafe",color:isDark?"#93c5fd":"#2563eb",padding:"2px 6px",borderRadius:8,marginRight:4,fontSize:10,fontWeight:500}}>
                               {lot.fournisseur}
                             </span>
-                            <span style={{background:"#f3e8ff",color:"#7c3aed",padding:"2px 6px",borderRadius:8,fontSize:10,fontWeight:600}}>
+                            <span style={{background:isDark?"rgba(124,58,237,0.2)":"#f3e8ff",color:isDark?"#d8b4fe":"#7c3aed",padding:"2px 6px",borderRadius:8,fontSize:10,fontWeight:600}}>
                               {safeToFixed(lot.prixVente ?? lot.price)} DHS
                             </span>
-                            <span style={{background:primaryStock==="stock1"?"#dbeafe":"#dcfce7",color:primaryStock==="stock1"?"#2563eb":"#16a34a",padding:"2px 6px",borderRadius:8,marginLeft:4,fontSize:10,fontWeight:600}}>
+                            <span style={{background:primaryStock==="stock1"?(isDark?"rgba(37,99,235,0.18)":"#dbeafe"):(isDark?"rgba(16,185,129,0.22)":"#dcfce7"),color:primaryStock==="stock1"?(isDark?"#93c5fd":"#2563eb"):(isDark?"#86efac":"#16a34a"),padding:"2px 6px",borderRadius:8,marginLeft:4,fontSize:10,fontWeight:600}}>
                               → {primaryStock.toUpperCase()}
                             </span>
                           </div>
-                          <div style={{fontSize:11,fontWeight:600,color:isExpired?"#dc2626":isExpSoon?"#d97706":"#16a34a"}}>
+                          <div style={{fontSize:11,fontWeight:600,color:isExpired?(isDark?"#fca5a5":"#dc2626"):isExpSoon?(isDark?"#fbbf24":"#d97706"):(isDark?"#86efac":"#16a34a")}}>
                             Exp: {formatDateSafe(lot.datePeremption)} {isExpired && "⚠️ EXPIRÉ"} {isExpSoon && " ⏰ Expire bientôt"}
                           </div>
                         </div>
@@ -1846,9 +1939,9 @@ Le stock sera automatiquement restauré pour tous les articles de cette vente.`)
 
           {/* Panier */}
           {articles.length > 0 && (
-            <div style={{background:"linear-gradient(135deg,#fff7ed,#fed7aa)",borderRadius:16,padding:16,marginBottom:12,border:"2px solid #f97316"}}>
+            <div style={{background:isDark?"linear-gradient(135deg,#3b2a1a,#713f12)":"linear-gradient(135deg,#fff7ed,#fed7aa)",borderRadius:16,padding:16,marginBottom:12,border:`2px solid ${isDark?"#f59e0b":"#f97316"}`}}>
               <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
-                <h3 style={{margin:0,color:"#c2410c",fontSize:18,fontWeight:700}}>
+                <h3 style={{margin:0,color:isDark?"#fdba74":"#c2410c",fontSize:18,fontWeight:700}}>
                   🛍️ Produits du panier ({distinctPanierCount})
                 </h3>
                 <button
@@ -1859,11 +1952,11 @@ Le stock sera automatiquement restauré pour tous les articles de cette vente.`)
                 </button>
               </div>
 
-              <div style={{background:"white",borderRadius:12,overflow:"hidden",boxShadow:"0 6px 16px rgba(0,0,0,0.1)"}}>
+              <div style={{background:isDark?"#0b1220":"white",borderRadius:12,overflow:"hidden",boxShadow:"0 6px 16px rgba(0,0,0,0.1)", border:`1px solid ${COLORS.border}`}}>
                 <div style={{ overflowX: "auto" }}>
-                  <table style={{ width: "100%", minWidth: 600, borderCollapse: "collapse" }}>
+                  <table style={{ width: "100%", minWidth: 600, borderCollapse: "collapse", color: COLORS.text }}>
                     <thead>
-                      <tr style={{ background: "linear-gradient(135deg, #f97316, #ea580c)", color: "white" }}>
+                      <tr style={{ background: isDark?"linear-gradient(135deg,#3b2a1a,#713f12)":"linear-gradient(135deg, #f97316, #ea580c)", color: "white" }}>
                         <th style={{ padding: 10, textAlign: "left", fontWeight: 600, fontSize: 12 }}>Produit / Traçabilité</th>
                         <th style={{ padding: 10, textAlign: "center", fontWeight: 600, fontSize: 12 }}>Qté</th>
                         <th style={{ padding: 10, textAlign: "right", fontWeight: 600, fontSize: 12 }}>Prix unit.</th>
@@ -1874,11 +1967,11 @@ Le stock sera automatiquement restauré pour tous les articles de cette vente.`)
                     </thead>
                     <tbody>
                       {articles.map((a, i) => (
-                        <tr key={i} style={{ borderBottom: "1px solid #f3f4f6" }}>
+                        <tr key={i} style={{ borderBottom: `1px solid ${isDark?"rgba(148,163,184,0.12)":"#f3f4f6"}` }}>
                           <td style={{ padding: 10 }}>
-                            <div style={{ fontWeight: 600, color: "#1f2937", marginBottom: 2, fontSize: 13 }}>{a.produit}</div>
+                            <div style={{ fontWeight: 600, color: COLORS.text, marginBottom: 2, fontSize: 13 }}>{a.produit}</div>
                             {(a.numeroArticle || a.numeroLot || a.fournisseur || a.datePeremption || a.stockSource) && (
-                              <div style={{ fontSize: 10, color: "#6b7280", background: "#f8fafc", padding: 4, borderRadius: 6, border: "1px solid #e5e7eb" }}>
+                              <div style={{ fontSize: 10, color: COLORS.muted, background: isDark?"rgba(148,163,184,0.08)":"#f8fafc", padding: 4, borderRadius: 6, border: `1px solid ${isDark?"rgba(148,163,184,0.12)":"#e5e7eb"}` }}>
                                 {a.stockSource && (
                                   <span style={{ background: a.stockSource === "stock1" ? "#3b82f6" : "#10b981", color: "white", padding: "2px 5px", borderRadius: 5, fontSize: 9, fontWeight: 600, marginRight: 4 }}>
                                     {a.stockSource === "stock1" ? "S1" : "S2"}
@@ -1893,7 +1986,7 @@ Le stock sera automatiquement restauré pour tous les articles de cette vente.`)
                           </td>
                           <td style={{ padding: 10, textAlign: "center", fontWeight: 600, fontSize: 13 }}>{safeNumber(a.quantite)}</td>
                           <td style={{ padding: 10, textAlign: "right", fontWeight: 500, fontSize: 13 }}>{safeToFixed(a.prixUnitaire)} DHS</td>
-                          <td style={{ padding: 10, textAlign: "right", fontWeight: 500, fontSize: 13, color: safeNumber(a.remise) > 0 ? "#dc2626" : "#6b7280" }}>{safeToFixed(a.remise)} DH</td>
+                          <td style={{ padding: 10, textAlign: "right", fontWeight: 500, fontSize: 13, color: safeNumber(a.remise) > 0 ? (isDark?"#fca5a5":"#dc2626") : COLORS.muted }}>{safeToFixed(a.remise)} DH</td>
                           <td style={{ padding: 10, textAlign: "right", fontWeight: 700, fontSize: 13, color: "#16a34a" }}>
                             {safeToFixed(safeNumber(a.prixUnitaire) * safeNumber(a.quantite) - safeNumber(a.remise))} DHS
                           </td>
@@ -1904,8 +1997,8 @@ Le stock sera automatiquement restauré pour tous les articles de cette vente.`)
                           </td>
                         </tr>
                       ))}
-                      <tr style={{ background: "linear-gradient(135deg, #f0fdf4, #dcfce7)", borderTop: "2px solid #16a34a" }}>
-                        <td colSpan={4} style={{ padding: 12, textAlign: "right", fontSize: 15, fontWeight: 700, color: "#15803d" }}>TOTAL DE LA VENTE</td>
+                      <tr style={{ background: isDark?"linear-gradient(135deg,#064e3b,#065f46)":"linear-gradient(135deg, #f0fdf4, #dcfce7)", borderTop: `2px solid ${isDark?"#10b981":"#16a34a"}` }}>
+                        <td colSpan={4} style={{ padding: 12, textAlign: "right", fontSize: 15, fontWeight: 700, color: isDark?"#a7f3d0":"#15803d" }}>TOTAL DE LA VENTE</td>
                         <td style={{ padding: 12, textAlign: "right", fontSize: 18, fontWeight: 800, color: "#16a34a" }}>{safeToFixed(totalVenteCourante)} DHS</td>
                         <td style={{ padding: 12 }}></td>
                       </tr>
@@ -1928,41 +2021,41 @@ Le stock sera automatiquement restauré pour tous les articles de cette vente.`)
 
           {/* Étape 2 */}
           {showFinalizationSection && articles.length > 0 && (
-            <div style={{background:"linear-gradient(135deg,#f3e8ff,#e9d5ff)",borderRadius:16,padding:16,border:"2px solid #8b5cf6"}}>
+            <div style={{background:isDark?"linear-gradient(135deg,#3b0764,#581c87)":"linear-gradient(135deg,#f3e8ff,#e9d5ff)",borderRadius:16,padding:16,border:`2px solid ${isDark?"#7c3aed":"#8b5cf6"}`}}>
               <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}}>
-                <h3 style={{ margin:0, color: "#581c87", fontSize: 18, fontWeight: 700 }}>
+                <h3 style={{ margin:0, color: isDark?"#d8b4fe":"#581c87", fontSize: 18, fontWeight: 700 }}>
                   ✅ Étape 2 : Finaliser la vente
                 </h3>
                 <button
                   onClick={() => setShowFinalizationSection(false)}
-                  style={{background:"transparent",border:"2px solid #8b5cf6",color:"#7c3aed",padding:"4px 10px",borderRadius:8,fontSize:12,fontWeight:600,cursor:"pointer"}}
+                  style={{background:"transparent",border:`2px solid ${isDark?"#7c3aed":"#8b5cf6"}`,color:isDark?"#e9d5ff":"#7c3aed",padding:"4px 10px",borderRadius:8,fontSize:12,fontWeight:600,cursor:"pointer"}}
                 >
                   ← Retour à l'étape 1
                 </button>
               </div>
-              <p style={{margin:"0 0 12px",fontSize:13,color:"#6b21a8"}}>
+              <p style={{margin:"0 0 12px",fontSize:13,color:isDark?"#e9d5ff":"#6b21a8"}}>
                 💡 Complétez les informations de la vente et enregistrez votre transaction.
               </p>
 
               <form onSubmit={handleAddVente}>
                 <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit, minmax(200px, 1fr))",gap:10,marginBottom:12}}>
                   <div>
-                    <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: "#374151", marginBottom: 4 }}>Client *</label>
+                    <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: COLORS.textSoft, marginBottom: 4 }}>Client *</label>
                     <input type="text" value={client} onChange={(e) => setClient(e.target.value)} required placeholder="Nom du client" list="clients-list"
-                           style={{width:"100%",padding:"8px 12px",borderRadius:10,border:"2px solid #e5e7eb",fontSize:14,background:"white"}} />
+                           style={{width:"100%",padding:"8px 12px",borderRadius:10,border:`2px solid ${COLORS.ringBlue}`,fontSize:14,background:isDark?"#0b1220":"white", color: COLORS.text}} />
                     <datalist id="clients-list">{clients.map((c) => (<option key={c} value={c} />))}</datalist>
                   </div>
 
                   <div>
-                    <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: "#374151", marginBottom: 4 }}>Date de vente *</label>
+                    <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: COLORS.textSoft, marginBottom: 4 }}>Date de vente *</label>
                     <input type="date" value={dateVente} onChange={(e) => setDateVente(e.target.value)} required
-                           style={{width:"100%",padding:"8px 12px",borderRadius:10,border:"2px solid #e5e7eb",fontSize:14,background:"white"}} />
+                           style={{width:"100%",padding:"8px 12px",borderRadius:10,border:`2px solid ${COLORS.ringBlue}`,fontSize:14,background:isDark?"#0b1220":"white", color: COLORS.text}} />
                   </div>
 
                   <div>
-                    <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: "#374151", marginBottom: 4 }}>Statut de paiement</label>
+                    <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: COLORS.textSoft, marginBottom: 4 }}>Statut de paiement</label>
                     <select value={statutPaiement} onChange={(e) => setStatutPaiement(e.target.value)}
-                            style={{width:"100%",padding:"8px 12px",borderRadius:10,border:"2px solid #e5e7eb",fontSize:14,background:"white"}}>
+                            style={{width:"100%",padding:"8px 12px",borderRadius:10,border:`2px solid ${COLORS.ringBlue}`,fontSize:14,background:isDark?"#0b1220":"white", color: COLORS.text}}>
                       <option value="payé">Payé</option>
                       <option value="partiel">Partiel</option>
                       <option value="impayé">Impayé</option>
@@ -1970,9 +2063,9 @@ Le stock sera automatiquement restauré pour tous les articles de cette vente.`)
                   </div>
 
                   <div>
-                    <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: "#374151", marginBottom: 4 }}>Mode de paiement</label>
+                    <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: COLORS.textSoft, marginBottom: 4 }}>Mode de paiement</label>
                     <select value={modePaiement} onChange={(e) => setModePaiement(e.target.value)}
-                            style={{width:"100%",padding:"8px 12px",borderRadius:10,border:"2px solid #e5e7eb",fontSize:14,background:"white"}}>
+                            style={{width:"100%",padding:"8px 12px",borderRadius:10,border:`2px solid ${COLORS.ringBlue}`,fontSize:14,background:isDark?"#0b1220":"white", color: COLORS.text}}>
                       <option value="Espèces">Espèces</option>
                       <option value="Carte">Carte</option>
                       <option value="Chèque">Chèque</option>
@@ -1982,16 +2075,10 @@ Le stock sera automatiquement restauré pour tous les articles de cette vente.`)
                   </div>
                 </div>
 
-                <div style={{ marginBottom: 12 }}>
-                  <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: "#374151", marginBottom: 4 }}>Notes / Observations</label>
-                  <textarea value={notesVente} onChange={(e) => setNotesVente(e.target.value)} rows={2} placeholder="Notes optionnelles..."
-                            style={{width:"100%",padding:"8px 12px",borderRadius:10,border:"2px solid #e5e7eb",fontSize:14,background:"white",resize:"vertical",fontFamily:"inherit"}} />
-                </div>
-
                 <div style={{ display: "flex", gap: 10, justifyContent: "center", flexWrap: "wrap" }}>
                   {isEditing && (
                     <button type="button" onClick={resetForm}
-                            style={{background:"linear-gradient(135deg,#6b7280,#4b5563)",color:"white",border:"none",padding:"10px 24px",borderRadius:12,fontSize:14,fontWeight:600,cursor:"pointer",boxShadow:"0 6px 16px rgba(107,114,128,0.3)"}}>
+                            style={{background:COLORS.buttonGrey,color:"white",border:"none",padding:"10px 24px",borderRadius:12,fontSize:14,fontWeight:600,cursor:"pointer",boxShadow:"0 6px 16px rgba(107,114,128,0.3)"}}>
                       Annuler
                     </button>
                   )}
@@ -2007,7 +2094,7 @@ Le stock sera automatiquement restauré pour tous les articles de cette vente.`)
       )}
 
       {/* 🆕 Bouton pour afficher/masquer les filtres */}
-      <div style={{background:"rgba(255,255,255,0.95)",backdropFilter:"blur(20px)",borderRadius:16,padding:16,marginBottom:16,border:"1px solid rgba(255,255,255,0.2)",boxShadow:"0 10px 25px rgba(0,0,0,0.08)"}}>
+      <div style={{background:COLORS.cardBg,backdropFilter:"blur(20px)",borderRadius:16,padding:16,marginBottom:16,border:`1px solid ${COLORS.border}`,boxShadow:"0 10px 25px rgba(0,0,0,0.08)"}}>
         <button
           onClick={() => setShowFilters(!showFilters)}
           style={{
@@ -2016,7 +2103,7 @@ Le stock sera automatiquement restauré pour tous les articles de cette vente.`)
             justifyContent: "center",
             gap: 8,
             width: "100%",
-            background: "linear-gradient(135deg,#6366f1,#8b5cf6)",
+            background: COLORS.filtersBand,
             color: "white",
             border: "none",
             padding: "12px 20px",
@@ -2033,21 +2120,21 @@ Le stock sera automatiquement restauré pour tous les articles de cette vente.`)
           <span style={{ fontSize: 20, transition: "transform 0.3s ease", transform: showFilters ? "rotate(180deg)" : "rotate(0deg)" }}>▼</span>
         </button>
 
-        {/* 🆕 Filtres améliorés - conditionnellement affichés */}
+        {/* 🆕 Filtres améliorés */}
         {showFilters && (
           <div style={{ marginTop: 16, transition: "all 0.3s ease" }}>
             <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
               {/* Recherche textuelle */}
               <div style={{ flex: "1", minWidth: 200 }}>
                 <input type="text" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} placeholder="Rechercher client, produit, lot ou N° article..."
-                       style={{width:"100%",padding:"11px 18px",borderRadius:20,border:"2px solid #e5e7eb",fontSize:15,background:"white"}} />
+                       style={{width:"100%",padding:"11px 18px",borderRadius:20,border:`2px solid ${COLORS.ringBlue}`,fontSize:15,background:isDark?"#0b1220":"white", color: COLORS.text}} />
               </div>
 
               {/* Filtre par client */}
               <select
                 value={filterClient}
                 onChange={(e) => setFilterClient(e.target.value)}
-                style={{padding:"11px 18px",borderRadius:20,border:"2px solid #e5e7eb",fontSize:15,background:"white",minWidth:150}}
+                style={{padding:"11px 18px",borderRadius:20,border:`2px solid ${COLORS.ringBlue}`,fontSize:15,background:isDark?"#0b1220":"white", color: COLORS.text, minWidth:150}}
               >
                 <option value="">Tous les clients</option>
                 {clients.map((c) => (
@@ -2059,7 +2146,7 @@ Le stock sera automatiquement restauré pour tous les articles de cette vente.`)
               <select
                 value={filterProduit}
                 onChange={(e) => setFilterProduit(e.target.value)}
-                style={{padding:"11px 18px",borderRadius:20,border:"2px solid #e5e7eb",fontSize:15,background:"white",minWidth:150}}
+                style={{padding:"11px 18px",borderRadius:20,border:`2px solid ${COLORS.ringBlue}`,fontSize:15,background:isDark?"#0b1220":"white", color: COLORS.text, minWidth:150}}
               >
                 <option value="">Tous les produits</option>
                 {uniqueProduits.map((p) => (
@@ -2067,39 +2154,38 @@ Le stock sera automatiquement restauré pour tous les articles de cette vente.`)
                 ))}
               </select>
 
-              {/* Filtre par date de */}
+              {/* Dates */}
               <div style={{ minWidth: 150 }}>
-                <label style={{ display: "block", fontSize: 12, color: "#374151", marginBottom: 4 }}>Date de</label>
+                <label style={{ display: "block", fontSize: 12, color: COLORS.textSoft, marginBottom: 4 }}>Date de</label>
                 <input
                   type="date"
                   value={dateDe}
                   onChange={(e) => setDateDe(e.target.value)}
-                  style={{width:"100%",padding:"8px 12px",borderRadius:10,border:"2px solid #e5e7eb",fontSize:14,background:"white"}}
+                  style={{width:"100%",padding:"8px 12px",borderRadius:10,border:`2px solid ${COLORS.ringBlue}`,fontSize:14,background:isDark?"#0b1220":"white", color: COLORS.text}}
                 />
               </div>
 
-              {/* Filtre par date à */}
               <div style={{ minWidth: 150 }}>
-                <label style={{ display: "block", fontSize: 12, color: "#374151", marginBottom: 4 }}>Date à</label>
+                <label style={{ display: "block", fontSize: 12, color: COLORS.textSoft, marginBottom: 4 }}>Date à</label>
                 <input
                   type="date"
                   value={dateA}
                   onChange={(e) => setDateA(e.target.value)}
-                  style={{width:"100%",padding:"8px 12px",borderRadius:10,border:"2px solid #e5e7eb",fontSize:14,background:"white"}}
+                  style={{width:"100%",padding:"8px 12px",borderRadius:10,border:`2px solid ${COLORS.ringBlue}`,fontSize:14,background:isDark?"#0b1220":"white", color: COLORS.text}}
                 />
               </div>
 
-              {/* Filtre par statut */}
+              {/* Statut */}
               <select value={filterStatut} onChange={(e) => setFilterStatut(e.target.value)}
-                      style={{padding:"11px 18px",borderRadius:20,border:"2px solid #e5e7eb",fontSize:15,background:"white",minWidth:150}}>
+                      style={{padding:"11px 18px",borderRadius:20,border:`2px solid ${COLORS.ringBlue}`,fontSize:15,background:isDark?"#0b1220":"white", color: COLORS.text, minWidth:150}}>
                 <option value="">Tous les statuts</option>
                 <option value="payé">Payé</option>
                 <option value="partiel">Partiel</option>
                 <option value="impayé">Impayé</option>
               </select>
 
-              {/* Filtres S1/S2 */}
-              <div style={{display:"flex",gap:10,alignItems:"center"}}>
+              {/* S1 / S2 */}
+              <div style={{display:"flex",gap:10,alignItems:"center", color: COLORS.text}}>
                 <label style={{display:"flex",alignItems:"center",gap:4,cursor:"pointer"}}>
                   <input
                     type="checkbox"
@@ -2120,7 +2206,6 @@ Le stock sera automatiquement restauré pour tous les articles de cette vente.`)
                 </label>
               </div>
 
-              {/* Bouton réinitialiser */}
               {(searchTerm || filterStatut || filterClient || filterProduit || filterS1 || filterS2 || dateDe || dateA) && (
                 <button onClick={resetFilters}
                         style={{background:"linear-gradient(135deg,#ef4444,#dc2626)",color:"white",border:"none",padding:"11px 18px",borderRadius:20,fontSize:14,fontWeight:600,cursor:"pointer",boxShadow:"0 6px 18px rgba(239,68,68,0.3)"}}>
@@ -2140,15 +2225,16 @@ Le stock sera automatiquement restauré pour tous les articles de cette vente.`)
             justifyContent: "space-between",
             alignItems: "center",
             marginBottom: 12,
+            color: COLORS.text
           }}
         >
           <div
             style={{
               padding: "10px 16px",
-              background: "linear-gradient(135deg,#e0e7ff,#c7d2fe)",
-              border: "2px solid #818cf8",
+              background: COLORS.totalBand,
+              border: `2px solid ${isDark?"#818cf8":"#818cf8"}`,
               borderRadius: 10,
-              color: "#312e81",
+              color: isDark?"#c7d2fe":"#312e81",
               fontWeight: 700,
               fontSize: 14,
             }}
@@ -2158,10 +2244,10 @@ Le stock sera automatiquement restauré pour tous les articles de cette vente.`)
           <div
             style={{
               padding: "10px 16px",
-              background: "linear-gradient(135deg,#f0fdf4,#dcfce7)",
-              border: "2px solid #86efac",
+              background: COLORS.okBand,
+              border: `2px solid ${isDark?"#34d399":"#86efac"}`,
               borderRadius: 10,
-              color: "#166534",
+              color: isDark?"#d1fae5":"#166534",
               fontWeight: 700,
               fontSize: 14,
             }}
@@ -2172,10 +2258,10 @@ Le stock sera automatiquement restauré pour tous les articles de cette vente.`)
       )}
 
       {/* Tableau des ventes avec PAGINATION */}
-      <div style={{background:"rgba(255,255,255,0.95)",backdropFilter:"blur(20px)",borderRadius:20,overflow:"hidden",border:"1px solid rgba(255,255,255,0.2)",boxShadow:"0 20px 40px rgba(0,0,0,0.1)"}}>
+      <div style={{background:COLORS.cardBg,backdropFilter:"blur(20px)",borderRadius:20,overflow:"hidden",border:`1px solid ${COLORS.border}`,boxShadow:"0 20px 40px rgba(0,0,0,0.1)"}}>
         <div style={{ overflowX: "auto", maxHeight: "70vh", overflowY: "auto" }}>
-          <table style={{ width: "100%", minWidth: 1000, borderCollapse: "collapse" }}>
-            <thead style={{ position: "sticky", top: 0, background: "linear-gradient(135deg, #1e293b, #334155)", color: "white", zIndex: 10 }}>
+          <table style={{ width: "100%", minWidth: 1000, borderCollapse: "collapse", color: COLORS.text }}>
+            <thead style={{ position: "sticky", top: 0, background: COLORS.tableHead, color: "white", zIndex: 10 }}>
               <tr>
                 <th style={{ padding: 16, textAlign: "left", fontWeight: 700, fontSize: 13, borderRight: "1px solid rgba(255,255,255,0.1)" }}>N° VENTE</th>
                 <th style={{ padding: 16, textAlign: "left", fontWeight: 700, fontSize: 13, borderRight: "1px solid rgba(255,255,255,0.1)" }}>CLIENT</th>
@@ -2189,12 +2275,12 @@ Le stock sera automatiquement restauré pour tous les articles de cette vente.`)
             <tbody>
               {paginatedVentes.length === 0 ? (
                 <tr>
-                  <td colSpan={7} style={{ padding: "50px 20px", textAlign: "center", color: "#6b7280", fontSize: 17, fontWeight: 500 }}>
+                  <td colSpan={7} style={{ padding: "50px 20px", textAlign: "center", color: COLORS.muted, fontSize: 17, fontWeight: 500 }}>
                     <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 14 }}>
                       <div style={{ width: 56, height: 56, borderRadius: "50%", background: "linear-gradient(135deg, #e5e7eb, #d1d5db)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22 }}>📊</div>
                       <div>
-                        <h3 style={{ margin: "0 0 6px", color: "#374151" }}>{ventes.length === 0 ? "Aucune vente enregistrée" : "Aucun résultat"}</h3>
-                        <p style={{ margin: 0, color: "#9ca3af" }}>{ventes.length === 0 ? "Commencez par créer votre première vente" : "Aucune vente ne correspond aux critères de filtrage"}</p>
+                        <h3 style={{ margin: "0 0 6px", color: COLORS.text }}>{ventes.length === 0 ? "Aucune vente enregistrée" : "Aucun résultat"}</h3>
+                        <p style={{ margin: 0, color: COLORS.muted }}>{ventes.length === 0 ? "Commencez par créer votre première vente" : "Aucune vente ne correspond aux critères de filtrage"}</p>
                       </div>
                     </div>
                   </td>
@@ -2212,6 +2298,7 @@ Le stock sera automatiquement restauré pour tous les articles de cette vente.`)
                     onPrint={handlePrintVente}
                     onDelete={handleDeleteVente}
                     onSyncPaiement={syncPaiementFromPaiements}
+                    isDark={isDark}
                   />
                 ))
               )}
@@ -2233,10 +2320,10 @@ Le stock sera automatiquement restauré pour tous les articles de cette vente.`)
              aria-label={`Détails de la vente ${(selectedVente?.id || "").slice(-6).toUpperCase()}`}
              onClick={(e) => { if (e.target === e.currentTarget) setShowDetails(false); }}
              style={{position:"fixed",inset:0,background:"rgba(0, 0, 0, 0.5)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:20000,backdropFilter:"blur(5px)",padding:16}}>
-          <div style={{background:"linear-gradient(135deg,#ffffff,#f9fafb)",borderRadius:18,padding:20,width:"min(100%, 900px)",maxHeight:"90vh",overflowY:"auto",overflowX:"hidden",boxShadow:"0 20px 50px rgba(0,0,0,0.2)",border:"1px solid rgba(0,0,0,0.05)",position:"relative"}}
+          <div style={{background:COLORS.stickyBg,borderRadius:18,padding:20,width:"min(100%, 900px)",maxHeight:"90vh",overflowY:"auto",overflowX:"hidden",boxShadow:"0 20px 50px rgba(0,0,0,0.3)",border:`1px solid ${COLORS.border}`,position:"relative", color: COLORS.text}}
                onKeyDown={(e) => { if (e.key === "Escape") setShowDetails(false); }} tabIndex={-1}>
-            <div style={{position:"sticky",top:0,zIndex:2,background:"linear-gradient(135deg,#ffffff,#f9fafb)",padding:"10px 36px 10px 0",margin:"-20px -20px 16px",borderBottom:"1px solid rgba(0,0,0,0.06)",display:"flex",alignItems:"center",minHeight:44}}>
-              <h2 style={{margin:0,fontSize:"clamp(17px, 2.5vw, 24px)",fontWeight:700,color:"#1f2937",lineHeight:1.2,flex:1}}>
+            <div style={{position:"sticky",top:0,zIndex:2,background:COLORS.stickyBg,padding:"10px 36px 10px 0",margin:"-20px -20px 16px",borderBottom:`1px solid ${isDark?"rgba(148,163,184,0.12)":"rgba(0,0,0,0.06)"}`,display:"flex",alignItems:"center",minHeight:44}}>
+              <h2 style={{margin:0,fontSize:"clamp(17px, 2.5vw, 24px)",fontWeight:700,color:COLORS.text,lineHeight:1.2,flex:1}}>
                 Détails de la vente #{(selectedVente?.id || "").slice(-6).toUpperCase()}
                 {selectedVente?.stockSource && (
                   <span style={{marginLeft:10,background:selectedVente.stockSource === "stock2" ? "linear-gradient(135deg,#10b981,#059669)" : "linear-gradient(135deg,#3b82f6,#2563eb)",color:"white",padding:"3px 10px",borderRadius:10,fontSize:"clamp(11px,1.5vw,14px)",fontWeight:600}}>
@@ -2245,47 +2332,47 @@ Le stock sera automatiquement restauré pour tous les articles de cette vente.`)
                 )}
               </h2>
               <button onClick={() => setShowDetails(false)} aria-label="Fermer"
-                      style={{position:"absolute",right:10,top:10,width:32,height:32,display:"grid",placeItems:"center",border:"none",borderRadius:8,fontSize:22,lineHeight:1,color:"#111827",cursor:"pointer"}}>×</button>
+                      style={{position:"absolute",right:10,top:10,width:32,height:32,display:"grid",placeItems:"center",border:"none",borderRadius:8,fontSize:22,lineHeight:1,color:COLORS.text,cursor:"pointer"}}>×</button>
             </div>
 
             {/* résumé vente */}
             <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit, minmax(160px, 1fr))",gap:10,marginBottom:18}}>
-              <div style={{background:"linear-gradient(135deg,#dbeafe,#bfdbfe)",borderRadius:12,padding:14}}>
-                <h4 style={{margin:"0 0 4px",color:"#1d4ed8",fontSize:13,fontWeight:600}}>Client</h4>
-                <p style={{margin:0,fontSize:15,fontWeight:700,color:"#1f2937",wordBreak:"break-word"}}>{selectedVente?.client || "-"}</p>
+              <div style={{background:isDark?"linear-gradient(135deg,#1e3a8a,#1e40af)":"linear-gradient(135deg,#dbeafe,#bfdbfe)",borderRadius:12,padding:14,color:"#fff"}}>
+                <h4 style={{margin:"0 0 4px",color:"#e0e7ff",fontSize:13,fontWeight:600}}>Client</h4>
+                <p style={{margin:0,fontSize:15,fontWeight:700,color:"#fff",wordBreak:"break-word"}}>{selectedVente?.client || "-"}</p>
               </div>
-              <div style={{background:"linear-gradient(135deg,#dcfce7,#bbf7d0)",borderRadius:12,padding:14}}>
-                <h4 style={{margin:"0 0 4px",color:"#15803d",fontSize:13,fontWeight:600}}>Date</h4>
-                <p style={{margin:0,fontSize:15,fontWeight:700,color:"#1f2937"}}>{formatDateSafe(selectedVente?.date)}</p>
+              <div style={{background:isDark?"linear-gradient(135deg,#065f46,#047857)":"linear-gradient(135deg,#dcfce7,#bbf7d0)",borderRadius:12,padding:14,color:"#fff"}}>
+                <h4 style={{margin:"0 0 4px",color:"#d1fae5",fontSize:13,fontWeight:600}}>Date</h4>
+                <p style={{margin:0,fontSize:15,fontWeight:700,color:"#fff"}}>{formatDateSafe(selectedVente?.date)}</p>
               </div>
-              <div style={{background:"linear-gradient(135deg,#fef3c7,#fde68a)",borderRadius:12,padding:14}}>
-                <h4 style={{margin:"0 0 4px",color:"#b45309",fontSize:13,fontWeight:600}}>Statut</h4>
-                <p style={{margin:0,fontSize:15,fontWeight:700,color:"#1f2937"}}>{selectedVente?.statutPaiement || "-"}</p>
+              <div style={{background:isDark?"linear-gradient(135deg,#854d0e,#a16207)":"linear-gradient(135deg,#fef3c7,#fde68a)",borderRadius:12,padding:14,color:isDark?"#fff":"#1f2937"}}>
+                <h4 style={{margin:"0 0 4px",color:isDark?"#fde68a":"#b45309",fontSize:13,fontWeight:600}}>Statut</h4>
+                <p style={{margin:0,fontSize:15,fontWeight:700}}>{selectedVente?.statutPaiement || "-"}</p>
               </div>
-              <div style={{background:"linear-gradient(135deg,#f3e8ff,#e9d5ff)",borderRadius:12,padding:14}}>
-                <h4 style={{margin:"0 0 4px",color:"#7e22ce",fontSize:13,fontWeight:600}}>Mode</h4>
-                <p style={{margin:0,fontSize:15,fontWeight:700,color:"#1f2937"}}>{selectedVente?.modePaiement || "Espèces"}</p>
+              <div style={{background:isDark?"linear-gradient(135deg,#6d28d9,#5b21b6)":"linear-gradient(135deg,#f3e8ff,#e9d5ff)",borderRadius:12,padding:14,color:isDark?"#fff":"#1f2937"}}>
+                <h4 style={{margin:"0 0 4px",color:isDark?"#e9d5ff":"#7e22ce",fontSize:13,fontWeight:600}}>Mode</h4>
+                <p style={{margin:0,fontSize:15,fontWeight:700}}>{selectedVente?.modePaiement || "Espèces"}</p>
               </div>
-              <div style={{background:"linear-gradient(135deg,#d1fae5,#a7f3d0)",borderRadius:12,padding:14}}>
-                <h4 style={{margin:"0 0 4px",color:"#065f46",fontSize:13,fontWeight:600}}>Total</h4>
-                <p style={{margin:0,fontSize:15,fontWeight:800,color:"#1f2937"}}>{safeToFixed(selectedVente?.montantTotal)} DHS</p>
+              <div style={{background:isDark?"linear-gradient(135deg,#064e3b,#059669)":"linear-gradient(135deg,#d1fae5,#a7f3d0)",borderRadius:12,padding:14,color:"#fff"}}>
+                <h4 style={{margin:"0 0 4px",color:"#bbf7d0",fontSize:13,fontWeight:600}}>Total</h4>
+                <p style={{margin:0,fontSize:15,fontWeight:800}}>{safeToFixed(selectedVente?.montantTotal)} DHS</p>
               </div>
               {safeNumber(selectedVente?.montantPaye) > 0 && (
-                <div style={{background:"linear-gradient(135deg,#dcfce7,#bbf7d0)",borderRadius:12,padding:14}}>
-                  <h4 style={{margin:"0 0 4px",color:"#166534",fontSize:13,fontWeight:700}}>Payé</h4>
-                  <p style={{margin:0,fontSize:15,fontWeight:800,color:"#166534"}}>{safeToFixed(selectedVente?.montantPaye)} DHS</p>
+                <div style={{background:isDark?"linear-gradient(135deg,#065f46,#10b981)":"linear-gradient(135deg,#dcfce7,#bbf7d0)",borderRadius:12,padding:14,color:"#fff"}}>
+                  <h4 style={{margin:"0 0 4px",color:"#d1fae5",fontSize:13,fontWeight:700}}>Payé</h4>
+                  <p style={{margin:0,fontSize:15,fontWeight:800}}>{safeToFixed(selectedVente?.montantPaye)} DHS</p>
                 </div>
               )}
             </div>
 
-            <h3 style={{margin:"0 0 10px",fontSize:"clamp(15px, 2.2vw, 18px)",fontWeight:600,color:"#374151"}}>
+            <h3 style={{margin:"0 0 10px",fontSize:"clamp(15px, 2.2vw, 18px)",fontWeight:600,color:COLORS.text}}>
               Produits distincts ({distinctCountByProduit(selectedVente?.articles || [])})
             </h3>
 
-            <div style={{background:"#fff",borderRadius:12,boxShadow:"0 8px 20px rgba(0, 0, 0, 0.05)",marginBottom:16,overflowX:"auto"}}>
-              <table style={{ width: "100%", minWidth: 700, borderCollapse: "collapse" }}>
+            <div style={{background:isDark?"#0b1220":"#fff",borderRadius:12,boxShadow:"0 8px 20px rgba(0, 0, 0, 0.15)",marginBottom:16,overflowX:"auto", border:`1px solid ${COLORS.border}`}}>
+              <table style={{ width: "100%", minWidth: 700, borderCollapse: "collapse", color: COLORS.text }}>
                 <thead>
-                  <tr style={{ background: "linear-gradient(135deg, #6d28d9, #5b21b6)", color: "white" }}>
+                  <tr style={{ background: isDark?"linear-gradient(135deg, #6d28d9, #5b21b6)":"linear-gradient(135deg, #6d28d9, #5b21b6)", color: "white" }}>
                     <th style={{ padding: 11, textAlign: "left", fontSize: 12 }}>Produit / Traçabilité</th>
                     <th style={{ padding: 11, textAlign: "center", fontSize: 12 }}>Qté</th>
                     <th style={{ padding: 11, textAlign: "right", fontSize: 12 }}>Prix Unit.</th>
@@ -2302,11 +2389,11 @@ Le stock sera automatiquement restauré pour tous les articles de cette vente.`)
                     const isApplied = appliedSet.has(opId);
                     const isDismissed = dismissedSet.has(opId);
                     return (
-                      <tr key={i} style={{ borderBottom: "1px solid #f1f5f9" }}>
+                      <tr key={i} style={{ borderBottom: `1px solid ${isDark?"rgba(148,163,184,0.12)":"#f1f5f9"}` }}>
                         <td style={{ padding: 11, verticalAlign: "top" }}>
                           <strong style={{ fontSize: 13 }}>{a?.produit || "-"}</strong>
                           {(a?.numeroArticle || a?.numeroLot || a?.fournisseur || a?.datePeremption) && (
-                            <div style={{ fontSize: 11, color: "#6b7280", marginTop: 3 }}>
+                            <div style={{ fontSize: 11, color: COLORS.muted, marginTop: 3 }}>
                               {a?.numeroArticle ? `N° article: ${a.numeroArticle}` : ""}
                               {a?.numeroLot ? `${a?.numeroArticle ? " | " : ""}Lot: ${a.numeroLot}` : ""}
                               {a?.fournisseur ? `${a?.numeroArticle || a?.numeroLot ? " | " : ""}Fournisseur: ${a.fournisseur}` : ""}

@@ -1,5 +1,6 @@
 // src/components/paiements/Paiements.js
-// Version enrichie avec Charges + TOTAUX PAR TABLE + LIEN VENTES (venteId/linkedSaleId) + modePaiement normalisé
+// Version enrichie avec Charges + TOTAUX + LIEN VENTES + modePaiement normalisé
+// 🚀 AJOUT DU MODE SOMBRE / CLAIR
 
 import React, { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import { db } from "../../firebase/config";
@@ -192,60 +193,216 @@ function isValidAchat(achat) {
 }
 
 /* ================= Styles (injection) ================= */
+// 🚀 MISE À JOUR POUR MODE SOMBRE / CLAIR
 const useInjectStyles = () => {
   useEffect(() => {
     if (document.getElementById("paie-styles")) return;
     const style = document.createElement("style");
     style.id = "paie-styles";
     style.textContent = `
-      :root{
-        --p:#6366f1; --p2:#8b5cf6; --bg:#f8fafc; --card:#ffffff; --border:#e5e7eb; --text:#111827;
+      :root, html[data-theme='light'] {
+        /* Couleurs de base */
+        --p: #6366f1;
+        --p-light: #c7d2fe;
+        --p2: #8b5cf6;
+        --bg: #f8fafc;
+        --card: #ffffff;
+        --border: #e5e7eb;
+        --text: #111827;
+        --text-soft: #6b7280;
+        --text-on-primary: #ffffff;
+        
+        /* Sémantique */
+        --success: #10b981;
+        --success-text: #ffffff;
+        --warn: #f59e0b;
+        --warn-text: #ffffff;
+        --danger: #ef4444;
+        --danger-text: #ffffff;
+        --secondary: #6b7280;
+        --secondary-text: #ffffff;
+        
+        /* Notices */
+        --notice-success-bg: #dcfce7;
+        --notice-success-text: #065f46;
+        --notice-error-bg: #fee2e2;
+        --notice-error-text: #7f1d1d;
+        --notice-warning-bg: #fef3c7;
+        --notice-warning-text: #92400e;
+        --notice-info-bg: #dbeafe;
+        --notice-info-text: #1e40af;
+
+        /* Composants */
+        --input-bg: #ffffff;
+        --input-focus-border: var(--p);
+        --input-focus-shadow: rgba(99, 102, 241, 0.1);
+        --table-header-bg: linear-gradient(135deg, #f8fafc, #eef2ff);
+        --table-header-text: #111827;
+        --table-row-text: #0f172a;
+        --table-row-bg-hover: #eef2ff;
+        --table-footer-bg: #f8fafc;
+        --subcard-bg: #f8fafc;
+        --modal-overlay-bg: rgba(0, 0, 0, 0.5);
+        --modal-content-bg: #ffffff;
+        --modal-close-hover-bg: #f3f4f6;
+        --modal-close-hover-text: #1f2937;
+        --chip-bg: #eef2ff;
+        --chip-text: var(--p);
+      }
+      
+      html[data-theme='dark'] {
+        /* Couleurs de base */
+        --p: #6366f1;
+        --p-light: #4f46e5;
+        --p2: #8b5cf6;
+        --bg: #111827;
+        --card: #1f2937;
+        --border: #374151;
+        --text: #f3f4f6;
+        --text-soft: #9ca3af;
+        --text-on-primary: #ffffff;
+
+        /* Sémantique (les couleurs restent vives) */
+        --success: #10b981;
+        --success-text: #ffffff;
+        --warn: #f59e0b;
+        --warn-text: #ffffff;
+        --danger: #ef4444;
+        --danger-text: #ffffff;
+        --secondary: #6b7280;
+        --secondary-text: #ffffff;
+        
+        /* Notices (inversées) */
+        --notice-success-bg: #065f46;
+        --notice-success-text: #dcfce7;
+        --notice-error-bg: #7f1d1d;
+        --notice-error-text: #fee2e2;
+        --notice-warning-bg: #92400e;
+        --notice-warning-text: #fef3c7;
+        --notice-info-bg: #1e40af;
+        --notice-info-text: #dbeafe;
+        
+        /* Composants */
+        --input-bg: #374151;
+        --input-focus-border: var(--p);
+        --input-focus-shadow: rgba(99, 102, 241, 0.2);
+        --table-header-bg: linear-gradient(135deg, #1f2937, #374151);
+        --table-header-text: #f3f4f6;
+        --table-row-text: #e5e7eb;
+        --table-row-bg-hover: #374151;
+        --table-footer-bg: #1f2937;
+        --subcard-bg: #1f2937;
+        --modal-overlay-bg: rgba(0, 0, 0, 0.7);
+        --modal-content-bg: #1f2937;
+        --modal-close-hover-bg: #4b5563;
+        --modal-close-hover-text: #f3f4f6;
+        --chip-bg: rgba(99, 102, 241, 0.2);
+        --chip-text: #a5b4fc;
+      }
+      
+      body {
+        background: var(--bg);
+        color: var(--text);
+        transition: background 0.2s, color 0.2s;
       }
       .paie-wrap{ max-width:1280px; margin:0 auto; padding:16px; }
-      .hdr{ background:linear-gradient(135deg,var(--p),var(--p2)); color:#fff; border-radius:16px; padding:16px; margin-bottom:16px; box-shadow:0 12px 30px rgba(99,102,241,.25); }
+      .hdr{ 
+        display:flex; 
+        justify-content:space-between; 
+        align-items:flex-start;
+        background:linear-gradient(135deg,var(--p),var(--p2)); 
+        color:var(--text-on-primary); 
+        border-radius:16px; 
+        padding:16px; 
+        margin-bottom:16px; 
+        box-shadow:0 12px 30px rgba(99,102,241,.25); 
+      }
+      .theme-toggle {
+        background: rgba(255,255,255,0.2);
+        color: #fff;
+        border: 1px solid rgba(255,255,255,0.3);
+        font-size: 18px;
+        width: 44px;
+        height: 44px;
+        padding: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+        border-radius: 10px;
+        cursor: pointer;
+        transition: all 0.2s ease;
+      }
+      .theme-toggle:hover {
+        background: rgba(255,255,255,0.3);
+        box-shadow: none;
+        transform: translateY(0);
+      }
       .card{ background:var(--card); border:1px solid var(--border); border-radius:14px; padding:16px; box-shadow:0 6px 20px rgba(99,102,241,.06); }
       .controls{ display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
-      .btn{ padding:8px 12px; border-radius:10px; border:1px solid var(--border); cursor:pointer; font-weight:700; transition:all 0.2s ease; }
+      .btn{ padding:8px 12px; border-radius:10px; border:1px solid var(--border); cursor:pointer; font-weight:700; transition:all 0.2s ease; background: var(--card); color: var(--text); }
       .btn:hover{ transform:translateY(-1px); box-shadow:0 4px 12px rgba(0,0,0,0.1); }
-      .btn.on{ background:#10b981; color:#fff; border-color:#10b981; }
-      .btn.primary{ background:linear-gradient(135deg,var(--p),var(--p2)); color:#fff; border:0; }
-      .btn.warn{ background:#f59e0b; color:#fff; border:0; }
-      .btn.danger{ background:#ef4444; color:#fff; border:0; }
-      .btn.secondary{ background:#6b7280; color:#fff; border:0; }
-      .select,.field,.form-input{ padding:8px 10px; border-radius:10px; border:1px solid var(--border); background:#fff; }
+      
+      .btn.on{ background:var(--success); color:var(--success-text); border-color:var(--success); }
+      .btn.primary{ background:linear-gradient(135deg,var(--p),var(--p2)); color:var(--text-on-primary); border:0; }
+      .btn.warn{ background:var(--warn); color:var(--warn-text); border:0; }
+      .btn.danger{ background:var(--danger); color:var(--danger-text); border:0; }
+      .btn.secondary{ background:var(--secondary); color:var(--secondary-text); border:0; }
+      
+      .select,.field,.form-input{ padding:8px 10px; border-radius:10px; border:1px solid var(--border); background:var(--input-bg); color: var(--text); }
+      
       .notice{ border-radius:12px; padding:12px; font-weight:600; margin-bottom:12px; }
-      .notice.success{ background:#dcfce7; color:#065f46; }
-      .notice.error{ background:#fee2e2; color:#7f1d1d; }
-      .notice.warning{ background:#fef3c7; color:#92400e; }
-      .tbl-wrap{ width:100%; overflow-x:auto; -webkit-overflow-scrolling:touch; border:1px solid var(--border); border-radius:12px; background:#fff; }
+      .notice.success{ background:var(--notice-success-bg); color:var(--notice-success-text); }
+      .notice.error{ background:var(--notice-error-bg); color:var(--notice-error-text); }
+      .notice.warning{ background:var(--notice-warning-bg); color:var(--notice-warning-text); }
+      
+      .tbl-wrap{ width:100%; overflow-x:auto; -webkit-overflow-scrolling:touch; border:1px solid var(--border); border-radius:12px; background:var(--card); }
       table.tbl{ width:100%; min-width:1100px; border-collapse:collapse; }
-      .tbl thead th{ position:sticky; top:0; background:linear-gradient(135deg,#f8fafc,#eef2ff); color:#111827; font-weight:800; font-size:12px; letter-spacing:.5px; border-bottom:1px solid var(--border); padding:10px; text-align:center; z-index:1; }
-      .tbl tbody td{ padding:10px; border-bottom:1px solid var(--border); text-align:center; color:#0f172a; font-weight:600; }
+      .tbl thead th{ position:sticky; top:0; background:var(--table-header-bg); color:var(--table-header-text); font-weight:800; font-size:12px; letter-spacing:.5px; border-bottom:1px solid var(--border); padding:10px; text-align:center; z-index:1; }
+      .tbl tbody tr { background: var(--card); }
+      .tbl tbody tr.expanded-row { background: var(--table-row-bg-hover); }
+      .tbl tbody td{ padding:10px; border-bottom:1px solid var(--border); text-align:center; color:var(--table-row-text); font-weight:600; }
+      .tbl tbody td.expanded-content { padding: 0; background: var(--subcard-bg); }
+      
       .left{text-align:left}
-      .chip{ padding:4px 8px; border-radius:8px; background:#eef2ff; color:var(--p); font-weight:800; display:inline-block; }
-      .soft{ color:#6b7280; }
+      .chip{ padding:4px 8px; border-radius:8px; background:var(--chip-bg); color:var(--chip-text); font-weight:800; display:inline-block; }
+      .soft{ color:var(--text-soft); }
       .money{ color:var(--p); font-weight:800; }
-      .tbl tfoot td{ padding:12px 10px; font-weight:900; border-top:2px solid var(--border); background:#f8fafc; }
+      .tbl tfoot td{ padding:12px 10px; font-weight:900; border-top:2px solid var(--border); background:var(--table-footer-bg); color: var(--text); }
       .mode-summary{ display:inline-flex; align-items:center; gap:4px; padding:3px 8px; border-radius:6px; font-size:11px; font-weight:700; margin:2px; }
-      .modal-overlay{ position:fixed; inset:0; background:rgba(0,0,0,0.5); display:flex; align-items:center; justify-content:center; z-index:1000; padding:16px; backdrop-filter:blur(4px); }
-      .modal-content{ background:#fff; border-radius:16px; padding:24px; max-width:800px; width:100%; max-height:90vh; overflow-y:auto; box-shadow:0 20px 60px rgba(0,0,0,0.3); }
+      
+      .modal-overlay{ position:fixed; inset:0; background:var(--modal-overlay-bg); display:flex; align-items:center; justify-content:center; z-index:1000; padding:16px; backdrop-filter:blur(4px); }
+      .modal-content{ background:var(--modal-content-bg); border-radius:16px; padding:24px; max-width:800px; width:100%; max-height:90vh; overflow-y:auto; box-shadow:0 20px 60px rgba(0,0,0,0.3); }
       .modal-header{ display:flex; justify-content:space-between; align-items:center; margin-bottom:20px; padding-bottom:12px; border-bottom:2px solid var(--border); }
-      .modal-close{ background:transparent; border:0; font-size:28px; cursor:pointer; color:#6b7280; padding:0; width:32px; height:32px; display:flex; align-items:center; justify-content:center; border-radius:8px; }
-      .modal-close:hover{ background:#f3f4f6; color:#1f2937; }
+      .modal-close{ background:transparent; border:0; font-size:28px; cursor:pointer; color:var(--text-soft); padding:0; width:32px; height:32px; display:flex; align-items:center; justify-content:center; border-radius:8px; }
+      .modal-close:hover{ background:var(--modal-close-hover-bg); color:var(--modal-close-hover-text); }
+      
       .form-group{ margin-bottom:16px; }
-      .form-label{ display:block; font-size:13px; font-weight:700; color:#374151; margin-bottom:6px; }
-      .form-input:focus{ outline:none; border-color:var(--p); box-shadow:0 0 0 3px rgba(99,102,241,0.1); }
+      .form-label{ display:block; font-size:13px; font-weight:700; color:var(--text); margin-bottom:6px; }
+      .form-input:focus{ outline:none; border-color:var(--input-focus-border); box-shadow:0 0 0 3px var(--input-focus-shadow); }
+      
       .main-tabs{ display:flex; gap:8px; margin-bottom:16px; border-bottom:3px solid var(--border); }
-      .main-tab-btn{ padding:12px 24px; border:none; background:transparent; cursor:pointer; font-weight:700; color:#6b7280; border-bottom:3px solid transparent; transition:all 0.2s; font-size:15px; }
+      .main-tab-btn{ padding:12px 24px; border:none; background:transparent; cursor:pointer; font-weight:700; color:var(--text-soft); border-bottom:3px solid transparent; transition:all 0.2s; font-size:15px; }
       .main-tab-btn:hover{ color:var(--p); }
       .main-tab-btn.active{ color:var(--p); border-bottom-color:var(--p); }
+      
       .badge-type{ display:inline-block; padding:4px 10px; border-radius:6px; font-size:11px; font-weight:700; }
       .mode-badge{ display:inline-flex; align-items:center; gap:6px; padding:6px 12px; border-radius:8px; font-weight:700; font-size:12px; box-shadow:0 2px 6px rgba(0,0,0,.08); }
-      .subcard{ background:#f8fafc; border:1px solid #e5e7eb; border-radius:12px; padding:16px; margin-top:12px; }
+      .subcard{ background:var(--subcard-bg); border:1px solid var(--border); border-radius:12px; padding:16px; margin-top:12px; }
       .grid-add{ display:grid; grid-template-columns:100px 150px 120px 130px 150px 120px 1fr 80px; gap:8px; align-items:center; }
-      .rowbtn{ background:var(--p); color:#fff; border:0; padding:6px 12px; border-radius:8px; cursor:pointer; font-weight:700; font-size:12px; }
+      .grid-add > div { font-weight: 800; color: var(--text); }
+      .rowbtn{ background:var(--p); color:var(--text-on-primary); border:0; padding:6px 12px; border-radius:8px; cursor:pointer; font-weight:700; font-size:12px; }
       .rowbtn:hover{ background:var(--p2); }
-      @media print { .no-print{ display:none !important; } }
+      @media print { 
+        .no-print{ display:none !important; } 
+        body, .card, .tbl, .tbl tbody tr, .tbl tfoot td, .subcard {
+          background: #fff !important;
+          color: #000 !important;
+        }
+        .hdr {
+          display: none;
+        }
+      }
     `;
     document.head.appendChild(style);
   }, []);
@@ -255,6 +412,23 @@ const useInjectStyles = () => {
 export default function Paiements() {
   useInjectStyles();
   const { societeId, user, role, loading } = useUserRole();
+
+  // 🔽 NOUVEAU: Gestion du thème
+  const [theme, setTheme] = useState(() => {
+    // Lire le thème depuis localStorage, 'light' par défaut
+    return localStorage.getItem("app-theme") || "light";
+  });
+
+  useEffect(() => {
+    // Mettre à jour localStorage ET l'attribut <html>
+    localStorage.setItem("app-theme", theme);
+    document.documentElement.setAttribute("data-theme", theme);
+  }, [theme]);
+
+  const toggleTheme = useCallback(() => {
+    setTheme((prevTheme) => (prevTheme === "light" ? "dark" : "light"));
+  }, []);
+  // 🔼 FIN: Gestion du thème
 
   // 🆕 Onglet principal : documents, chargesPersonnels, chargesDivers
   const [mainTab, setMainTab] = useState("documents");
@@ -1429,19 +1603,30 @@ export default function Paiements() {
   }
 
   if (loading) return <div style={{ padding: 16 }}>Chargement…</div>;
-  if (!user) return <div style={{ padding: 16, color: "#e11d48" }}>Non connecté.</div>;
-  if (!societeId) return <div style={{ padding: 16, color: "#e11d48" }}>Aucune société.</div>;
+  if (!user) return <div style={{ padding: 16, color: "var(--danger)" }}>Non connecté.</div>;
+  if (!societeId) return <div style={{ padding: 16, color: "var(--danger)" }}>Aucune société.</div>;
 
   const isVendeuse = role === "vendeuse";
 
   return (
     <div className="paie-wrap">
+      {/* 🔽 MODIFIÉ: Ajout de flex et du bouton de thème 🔽 */}
       <div className="hdr">
-        <h1 style={{ margin: 0, fontWeight: 900 }}>💰 Gestion des Paiements</h1>
-        <div style={{ opacity: 0.9, marginTop: 6 }}>
-          Suivi complet : Documents, Charges Personnels, Charges Divers
+        <div>
+          <h1 style={{ margin: 0, fontWeight: 900 }}>💰 Gestion des Paiements</h1>
+          <div style={{ opacity: 0.9, marginTop: 6 }}>
+            Suivi complet : Documents, Charges Personnels, Charges Divers
+          </div>
         </div>
+        <button 
+          className="btn theme-toggle no-print" 
+          onClick={toggleTheme}
+          title={theme === 'light' ? 'Passer au mode sombre' : 'Passer au mode clair'}
+        >
+          {theme === 'light' ? '🌙' : '☀️'}
+        </button>
       </div>
+      {/* 🔼 FIN MODIFIÉ 🔼 */}
 
       {notification && (
         <div className={`notice ${notification.type || "success"}`} role="alert">
@@ -1553,7 +1738,7 @@ export default function Paiements() {
                 <option value="due">Avec solde</option>
               </select>
 
-              <button className="btn primary" onClick={handlePrint} title="Imprimer l'état filtré">
+              <button className="btn primary no-print" onClick={handlePrint} title="Imprimer l'état filtré">
                 🖨️ Imprimer
               </button>
             </div>
@@ -1642,14 +1827,14 @@ export default function Paiements() {
               {payMode !== "Espèces" && createInstr.length > 0 && (
                 <div style={{ width: "100%", overflowX: "auto" }}>
                   <div className="grid-add" style={{ minWidth: 900 }}>
-                    <div style={{ fontWeight: 800 }}>Type</div>
-                    <div style={{ fontWeight: 800 }}>Banque</div>
-                    <div style={{ fontWeight: 800 }}>N°</div>
-                    <div style={{ fontWeight: 800 }}>Échéance</div>
-                    <div style={{ fontWeight: 800 }}>Titulaire</div>
-                    <div style={{ fontWeight: 800 }}>Montant</div>
-                    <div style={{ fontWeight: 800 }}>Résumé</div>
-                    <div style={{ fontWeight: 800 }}>—</div>
+                    <div>Type</div>
+                    <div>Banque</div>
+                    <div>N°</div>
+                    <div>Échéance</div>
+                    <div>Titulaire</div>
+                    <div>Montant</div>
+                    <div>Résumé</div>
+                    <div>—</div>
 
                     {createInstr.map((it, i) => (
                       <React.Fragment key={i}>
@@ -1752,7 +1937,9 @@ export default function Paiements() {
                     );
                     return (
                       <React.Fragment key={d.id}>
-                        <tr style={{ background: expanded ? "#eef2ff" : "#fff" }}>
+                        {/* 🔽 MODIFIÉ: Remplacement de style en ligne par className 🔽 */}
+                        <tr className={expanded ? "expanded-row" : ""}>
+                        {/* 🔼 FIN MODIFIÉ 🔼 */}
                           <td className="left">{meta.name}</td>
                           <td>{meta.numberStr}</td>
                           <td className="soft">{meta.dateStr}</td>
@@ -1760,7 +1947,7 @@ export default function Paiements() {
                           <td>{fmtDH(meta.paid)}</td>
                           <td
                             style={{
-                              color: meta.solde > 0.01 ? "#ef4444" : "#10b981",
+                              color: meta.solde > 0.01 ? "var(--danger)" : "var(--success)",
                               fontWeight: 800,
                             }}
                           >
@@ -1770,7 +1957,7 @@ export default function Paiements() {
                             <span
                               className="chip"
                               style={{
-                                background: meta.solde > 0.01 ? "#f59e0b" : "#10b981",
+                                background: meta.solde > 0.01 ? "var(--warn)" : "var(--success)",
                                 color: "#fff",
                               }}
                             >
@@ -1816,8 +2003,10 @@ export default function Paiements() {
                         </tr>
 
                         {expanded && (
+                          // 🔽 MODIFIÉ: Remplacement de style en ligne par className 🔽
                           <tr>
-                            <td colSpan="9" style={{ padding: 0, background: "#f8fafc" }}>
+                            <td colSpan="9" className="expanded-content">
+                            {/* 🔼 FIN MODIFIÉ 🔼 */}
                               <div style={{ padding: 16 }}>
                                 <h4 style={{ margin: "0 0 8px 0" }}>Paiements enregistrés</h4>
                                 {paysFiltered.length === 0 ? (
@@ -1914,7 +2103,7 @@ export default function Paiements() {
                     <td className="left" colSpan={3}>TOTAL (docs filtrés)</td>
                     <td className="money">{fmtDH(docsTotals.total)}</td>
                     <td style={{ fontWeight: 900 }}>{fmtDH(docsTotals.paid)}</td>
-                    <td style={{ fontWeight: 900, color: docsTotals.solde > 0.01 ? "#ef4444" : "#10b981" }}>
+                    <td style={{ fontWeight: 900, color: docsTotals.solde > 0.01 ? "var(--danger)" : "var(--success)" }}>
                       {fmtDH(docsTotals.solde)}
                     </td>
                     <td colSpan={3} style={{ textAlign: "left" }}>
@@ -1992,7 +2181,16 @@ export default function Paiements() {
               </button>
             </div>
             
-            <div className="notice" style={{ background: "#dbeafe", color: "#1e40af", marginTop: 12 }}>
+            {/* 🔽 MODIFIÉ: Remplacement de style en ligne par variables CSS 🔽 */}
+            <div 
+              className="notice" 
+              style={{ 
+                background: "var(--notice-info-bg)", 
+                color: "var(--notice-info-text)", 
+                marginTop: 12 
+              }}
+            >
+            {/* 🔼 FIN MODIFIÉ 🔼 */}
               👤 Total charges personnels chargées : <strong>{chargesPersonnels.length}</strong>
               {" • "}Filtrées : <strong>{filteredChargesPersonnels.length}</strong>
               {" • "}💡 Les paiements en espèces sont gérés directement dans la page Charges Personnels
@@ -2041,7 +2239,7 @@ export default function Paiements() {
                         <td>{charge.poste || "—"}</td>
                         <td>{charge.date || "—"}</td>
                         <td className="money">{fmtDH(charge.salaire || 0)}</td>
-                        <td style={{ fontWeight: 700, color: "#667eea" }}>
+                        <td style={{ fontWeight: 700, color: "var(--p)" }}>
                           {fmtDH(charge.total || 0)}
                         </td>
                         <td>
@@ -2065,7 +2263,7 @@ export default function Paiements() {
                     <tr>
                       <td className="left" colSpan={3}>TOTAL (charges personnels filtrées)</td>
                       <td className="money">{fmtDH(totalsChargesPersonnels.salaire)}</td>
-                      <td style={{ fontWeight: 900 }}>{fmtDH(totalsChargesPersonnels.total)}</td>
+                      <td style={{ fontWeight: 900, color: "var(--p)" }}>{fmtDH(totalsChargesPersonnels.total)}</td>
                       <td colSpan={3} style={{ textAlign: "left" }}>
                         {Object.entries(totalsChargesPersonnels.byMode).map(([m, v]) =>
                           v > 0 ? (
@@ -2145,7 +2343,16 @@ export default function Paiements() {
               </button>
             </div>
             
-            <div className="notice" style={{ background: "#dbeafe", color: "#1e40af", marginTop: 12 }}>
+            {/* 🔽 MODIFIÉ: Remplacement de style en ligne par variables CSS 🔽 */}
+            <div 
+              className="notice" 
+              style={{ 
+                background: "var(--notice-info-bg)", 
+                color: "var(--notice-info-text)", 
+                marginTop: 12 
+              }}
+            >
+            {/* 🔼 FIN MODIFIÉ 🔼 */}
               📊 Total charges divers chargées : <strong>{chargesDivers.length}</strong> 
               {" • "}Filtrées : <strong>{filteredChargesDivers.length}</strong>
               {" • "}💡 Les paiements en espèces sont gérés directement dans la page Charges Divers
@@ -2195,8 +2402,9 @@ export default function Paiements() {
                           <span
                             className="badge-type"
                             style={{
-                              background: "#f3f4f6",
-                              color: "#374151",
+                              background: "var(--subcard-bg)",
+                              color: "var(--text-soft)",
+                              border: "1px solid var(--border)"
                             }}
                           >
                             {charge.categorie || "—"}
@@ -2205,7 +2413,7 @@ export default function Paiements() {
                         <td className="left">{charge.libelle || "—"}</td>
                         <td className="left">{charge.fournisseur || "—"}</td>
                         <td>{charge.date || "—"}</td>
-                        <td style={{ fontWeight: 700, color: "#667eea" }}>
+                        <td style={{ fontWeight: 700, color: "var(--p)" }}>
                           {fmtDH(charge.montant || 0)}
                         </td>
                         <td>
@@ -2225,8 +2433,8 @@ export default function Paiements() {
                           <span
                             className="chip"
                             style={{
-                              background: "#10b981",
-                              color: "#fff",
+                              background: "var(--success)",
+                              color: "var(--success-text)",
                               fontSize: 10,
                             }}
                           >
@@ -2240,7 +2448,7 @@ export default function Paiements() {
                   <tfoot>
                     <tr>
                       <td className="left" colSpan={4}>TOTAL (charges divers filtrées)</td>
-                      <td style={{ fontWeight: 900, color: "#667eea" }}>{fmtDH(totalsChargesDivers.montant)}</td>
+                      <td style={{ fontWeight: 900, color: "var(--p)" }}>{fmtDH(totalsChargesDivers.montant)}</td>
                       <td colSpan={4} style={{ textAlign: "left" }}>
                         {Object.entries(totalsChargesDivers.byMode).map(([m, v]) =>
                           v > 0 ? (
@@ -2273,7 +2481,7 @@ export default function Paiements() {
           className="card"
           style={{
             marginTop: 16,
-            borderColor: "#fbbf24",
+            borderColor: "var(--warn)", // 🚀 MODIFIÉ
             boxShadow: "0 8px 20px rgba(251,191,36,.12)",
           }}
         >
@@ -2319,14 +2527,14 @@ export default function Paiements() {
                 {editPaymentInstruments.length > 0 && (
                   <div style={{ width: "100%", overflowX: "auto" }}>
                     <div className="grid-add" style={{ minWidth: 900 }}>
-                      <div style={{ fontWeight: 800 }}>Type</div>
-                      <div style={{ fontWeight: 800 }}>Banque</div>
-                      <div style={{ fontWeight: 800 }}>N°</div>
-                      <div style={{ fontWeight: 800 }}>Échéance</div>
-                      <div style={{ fontWeight: 800 }}>Titulaire</div>
-                      <div style={{ fontWeight: 800 }}>Montant</div>
-                      <div style={{ fontWeight: 800 }}>Résumé</div>
-                      <div style={{ fontWeight: 800 }}>—</div>
+                      <div>Type</div>
+                      <div>Banque</div>
+                      <div>N°</div>
+                      <div>Échéance</div>
+                      <div>Titulaire</div>
+                      <div>Montant</div>
+                      <div>Résumé</div>
+                      <div>—</div>
 
                       {editPaymentInstruments.map((it, i) => (
                         <React.Fragment key={i}>
@@ -2393,7 +2601,7 @@ export default function Paiements() {
                   </div>
                 )}
 
-                <div style={{ marginTop: 8, fontSize: 14, color: "#6b7280" }}>
+                <div style={{ marginTop: 8, fontSize: 14, color: "var(--text-soft)" }}>
                   <strong>Total instruments:</strong>{" "}
                   {fmtDH(
                     editPaymentInstruments.reduce(
@@ -2435,13 +2643,13 @@ export default function Paiements() {
           className="card"
           style={{
             marginTop: 16,
-            borderColor: "#c7d2fe",
+            borderColor: "var(--p-light)", // 🚀 MODIFIÉ
             boxShadow: "0 8px 20px rgba(99,102,241,.12)",
           }}
         >
           <h3 style={{ marginTop: 0 }}>
             🔧 Instruments pour {editingInstrumentsFor.mode} —{" "}
-            <span style={{ color: "#6b7280" }}>
+            <span style={{ color: "var(--text-soft)" }}>
               Paiement de {docIndex[editingInstrumentsFor.docId]?.name || "—"} •{" "}
               {docIndex[editingInstrumentsFor.docId]?.numberStr || "—"}
             </span>
@@ -2459,14 +2667,14 @@ export default function Paiements() {
           ) : (
             <div style={{ width: "100%", overflowX: "auto" }}>
               <div className="grid-add" style={{ minWidth: 900 }}>
-                <div style={{ fontWeight: 800 }}>Type</div>
-                <div style={{ fontWeight: 800 }}>Banque</div>
-                <div style={{ fontWeight: 800 }}>N°</div>
-                <div style={{ fontWeight: 800 }}>Échéance</div>
-                <div style={{ fontWeight: 800 }}>Titulaire</div>
-                <div style={{ fontWeight: 800 }}>Montant</div>
-                <div style={{ fontWeight: 800 }}>Résumé</div>
-                <div style={{ fontWeight: 800 }}>—</div>
+                <div>Type</div>
+                <div>Banque</div>
+                <div>N°</div>
+                <div>Échéance</div>
+                <div>Titulaire</div>
+                <div>Montant</div>
+                <div>Résumé</div>
+                <div>—</div>
 
                 {draftInstruments.map((it, i) => (
                   <React.Fragment key={i}>

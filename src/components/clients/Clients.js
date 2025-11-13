@@ -37,35 +37,69 @@ const statusLabel = {
 };
 
 const StatusBadge = ({ status }) => {
-  const color =
-    { nouvelle:'#f59e0b', en_preparation:'#3b82f6', pretes:'#10b981', livree:'#6366f1', annulee:'#ef4444' }[status] || '#6b7280';
+  const colorMap = {
+    nouvelle: 'var(--badge-new)',
+    en_preparation: 'var(--badge-prep)',
+    pretes: 'var(--badge-ready)',
+    livree: 'var(--badge-done)',
+    annulee: 'var(--badge-cancel)'
+  };
+  const color = colorMap[status] || 'var(--text-muted)';
   return (
-    <span style={{display:'inline-block',padding:'4px 10px',borderRadius:999,background:`${color}22`,color,fontWeight:600,fontSize:12,whiteSpace:'nowrap'}}>
+    <span
+      style={{
+        display:'inline-block',
+        padding:'4px 10px',
+        borderRadius:999,
+        background:'var(--badge-bg)',
+        color,
+        fontWeight:600,
+        fontSize:12,
+        whiteSpace:'nowrap',
+        border: '1px solid var(--border-subtle)'
+      }}
+    >
       {statusLabel[status] || status}
     </span>
   );
 };
 
-function btn(bg, color, outlined=false, borderColor){
+function btn(bgVar, colorVar, outlined=false, borderColorVar){
   return {
-    padding:'10px 12px', borderRadius:8,
-    border: outlined ? `1px solid ${borderColor || color}` : 'none',
-    background: outlined ? 'transparent' : bg,
-    color, fontWeight:700, cursor:'pointer', whiteSpace:'nowrap'
+    padding:'10px 12px',
+    borderRadius:8,
+    border: outlined ? `1px solid ${borderColorVar || colorVar}` : 'none',
+    background: outlined ? 'transparent' : `var(${bgVar})`,
+    color: `var(${colorVar})`,
+    fontWeight:700,
+    cursor:'pointer',
+    whiteSpace:'nowrap'
   };
 }
 
-const modalBackdrop = { 
-  position:'fixed', inset:0, background:'rgba(0,0,0,.5)', 
-  display:'flex', alignItems:'center', justifyContent:'center', 
-  zIndex:1000, padding:'16px', overflowY:'auto'
-};
-
-const modalTitle = { fontSize:18, fontWeight:800, color:'#e5edff', marginBottom:12 };
+/* ====================== Thème (clair/sombre) ====================== */
+function getInitialTheme() {
+  try {
+    const saved = localStorage.getItem('theme');
+    if (saved === 'light' || saved === 'dark') return saved;
+  } catch {}
+  if (typeof window !== 'undefined' && window.matchMedia) {
+    return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+  }
+  return 'dark';
+}
 
 /* ====================== Composant principal ====================== */
 export default function Clients(){
   const { societeId, user } = useUserRole();
+
+  // Thème
+  const [theme, setTheme] = useState(getInitialTheme());
+  useEffect(() => {
+    try { localStorage.setItem('theme', theme); } catch {}
+  }, [theme]);
+
+  const toggleTheme = () => setTheme((t) => (t === 'dark' ? 'light' : 'dark'));
 
   // Onglets / recherche
   const [tab, setTab] = useState('nouvelle');
@@ -109,16 +143,103 @@ export default function Clients(){
     }],
   });
 
-  /* ==================== 🆕 Styles Responsive + Scroll Horizontal ==================== */
+  /* ==================== Styles (Dark/Light via CSS vars) ==================== */
   const Styles = () => (
     <style>{`
       * { box-sizing: border-box; }
-      
+
+      /* Palette via variables */
+      .clients-root[data-theme="dark"] {
+        --bg-app: linear-gradient(135deg, #0b0f1a 0%, #1a1f35 100%);
+        --bg-header: rgba(11, 15, 26, 0.95);
+        --bg-card: rgba(14, 23, 48, 0.6);
+        --bg-card-strong: #0e1730;
+        --bg-modal: linear-gradient(135deg, #1e293b, #0f172a);
+        --bg-input: rgba(17, 24, 39, 0.8);
+        --bg-input-focus-shadow: rgba(99,102,241,0.1);
+
+        --text-main: #e5edff;
+        --text-muted: #9fb3c8;
+        --text-accent: #6366f1;
+        --text-warning: #f59e0b;
+
+        --border-strong: rgba(31, 42, 68, 0.8);
+        --border-subtle: #334155;
+
+        --shadow-1: 0 4px 20px rgba(0, 0, 0, 0.3);
+        --shadow-2: 0 8px 32px rgba(0, 0, 0, 0.4);
+        --shadow-3: 0 20px 60px rgba(0, 0, 0, 0.5);
+
+        --gradient-title: linear-gradient(135deg, #6366f1, #a855f7);
+        --gradient-hover: linear-gradient(135deg, #4f46e5, #9333ea);
+
+        --ok: #10b981;
+        --ok-bg: rgba(16,185,129,0.1);
+
+        --btn-primary-bg: #6366f1;
+        --btn-info-bg: #0ea5e9;
+        --btn-success-bg: #10b981;
+        --btn-blue-bg: #3b82f6;
+        --btn-purple-bg: #6366f1;
+
+        --chip-bg: rgba(17,24,39,0.5);
+
+        --badge-bg: rgba(17,24,39,0.5);
+        --badge-new: #f59e0b;
+        --badge-prep: #3b82f6;
+        --badge-ready: #10b981;
+        --badge-done: #6366f1;
+        --badge-cancel: #ef4444;
+      }
+
+      .clients-root[data-theme="light"] {
+        --bg-app: linear-gradient(135deg, #eef2ff 0%, #ffffff 100%);
+        --bg-header: rgba(255, 255, 255, 0.9);
+        --bg-card: rgba(255, 255, 255, 0.8);
+        --bg-card-strong: #ffffff;
+        --bg-modal: linear-gradient(135deg, #ffffff, #f5f7ff);
+        --bg-input: #ffffff;
+        --bg-input-focus-shadow: rgba(99,102,241,0.15);
+
+        --text-main: #0f172a;
+        --text-muted: #475569;
+        --text-accent: #4f46e5;
+        --text-warning: #b45309;
+
+        --border-strong: rgba(100, 116, 139, 0.5);
+        --border-subtle: #cbd5e1;
+
+        --shadow-1: 0 4px 20px rgba(0, 0, 0, 0.08);
+        --shadow-2: 0 8px 32px rgba(0, 0, 0, 0.08);
+        --shadow-3: 0 20px 60px rgba(0, 0, 0, 0.12);
+
+        --gradient-title: linear-gradient(135deg, #4f46e5, #9333ea);
+        --gradient-hover: linear-gradient(135deg, #6366f1, #a855f7);
+
+        --ok: #059669;
+        --ok-bg: rgba(5,150,105,0.12);
+
+        --btn-primary-bg: #4f46e5;
+        --btn-info-bg: #0284c7;
+        --btn-success-bg: #16a34a;
+        --btn-blue-bg: #2563eb;
+        --btn-purple-bg: #4f46e5;
+
+        --chip-bg: rgba(99,102,241,0.08);
+
+        --badge-bg: rgba(99,102,241,0.08);
+        --badge-new: #b45309;
+        --badge-prep: #1d4ed8;
+        --badge-ready: #16a34a;
+        --badge-done: #4f46e5;
+        --badge-cancel: #b91c1c;
+      }
+
       .clients-root { 
         min-height: 100vh; 
         display: flex; 
         flex-direction: column;
-        background: linear-gradient(135deg, #0b0f1a 0%, #1a1f35 100%);
+        background: var(--bg-app);
         padding: 12px;
       }
       
@@ -126,12 +247,13 @@ export default function Clients(){
         position: sticky; 
         top: 0; 
         z-index: 10; 
-        background: rgba(11, 15, 26, 0.95);
+        background: var(--bg-header);
         backdrop-filter: blur(10px);
         padding: 16px;
         border-radius: 16px;
         margin-bottom: 16px;
-        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+        box-shadow: var(--shadow-1);
+        border: 1px solid var(--border-strong);
       }
       
       .clients-content { 
@@ -143,52 +265,50 @@ export default function Clients(){
       .fullscreen-table-title {
         font-size: clamp(20px, 4vw, 28px);
         font-weight: 800;
-        color: #e5edff;
+        color: var(--text-main);
         margin-bottom: 16px;
-        background: linear-gradient(135deg, #6366f1, #a855f7);
+        background: var(--gradient-title);
         -webkit-background-clip: text;
         -webkit-text-fill-color: transparent;
         background-clip: text;
       }
 
-      /* 🆕 Container avec scroll horizontal */
+      /* Container avec scroll horizontal */
       .table-scroll-container {
         overflow-x: auto;
         overflow-y: visible;
         -webkit-overflow-scrolling: touch;
         border-radius: 12px;
-        background: #0e1730;
-        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+        background: var(--bg-card-strong);
+        box-shadow: var(--shadow-2);
+        border: 1px solid var(--border-strong);
       }
 
       .table-scroll-container::-webkit-scrollbar {
         height: 8px;
       }
-
       .table-scroll-container::-webkit-scrollbar-track {
-        background: #111827;
+        background: var(--bg-card-strong);
         border-radius: 4px;
       }
-
       .table-scroll-container::-webkit-scrollbar-thumb {
-        background: linear-gradient(135deg, #6366f1, #a855f7);
+        background: var(--gradient-title);
         border-radius: 4px;
       }
-
       .table-scroll-container::-webkit-scrollbar-thumb:hover {
-        background: linear-gradient(135deg, #4f46e5, #9333ea);
+        background: var(--gradient-hover);
       }
 
-      /* Grille responsive du tableau */
+      /* Grille */
       .table-grid {
         display: grid;
         grid-template-columns: 
-          minmax(180px, 1.2fr)   /* Client */
-          minmax(200px, 1.2fr)   /* Médecin/Infos */
-          minmax(220px, 1.3fr)   /* Articles */
-          minmax(120px, 0.9fr)   /* Statut */
-          minmax(100px, 0.7fr)   /* Total */
-          minmax(180px, 1.1fr);  /* Actions */
+          minmax(180px, 1.2fr)
+          minmax(200px, 1.2fr)
+          minmax(220px, 1.3fr)
+          minmax(120px, 0.9fr)
+          minmax(100px, 0.7fr)
+          minmax(180px, 1.1fr);
         gap: 12px;
         padding: 16px;
         min-width: 1000px;
@@ -196,63 +316,47 @@ export default function Clients(){
       }
 
       .table-header {
-        background: linear-gradient(135deg, #1e293b, #334155);
+        background: var(--bg-modal);
         border-radius: 12px 12px 0 0;
-        color: #cbd5e1;
+        color: var(--text-muted);
         font-weight: 700;
         font-size: 13px;
         position: sticky;
         top: 0;
         z-index: 5;
+        border-bottom: 1px solid var(--border-strong);
       }
 
       .table-row {
-        background: #0e1730;
-        border-bottom: 1px solid rgba(31, 42, 68, 0.5);
+        background: var(--bg-card-strong);
+        border-bottom: 1px solid var(--border-strong);
         transition: all 0.3s ease;
+        color: var(--text-main);
       }
-
       .table-row:hover {
         background: rgba(99, 102, 241, 0.05);
         transform: translateX(4px);
       }
-
       .table-row:last-child {
         border-bottom: none;
         border-radius: 0 0 12px 12px;
       }
 
-      /* Grilles responsive pour formulaires */
-      .r-grid-2 { 
-        display: grid; 
-        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); 
-        gap: 12px; 
-      }
-      
-      .r-grid-3 { 
-        display: grid; 
-        grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); 
-        gap: 12px; 
-      }
-      
-      .r-grid-4 { 
-        display: grid; 
-        grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); 
-        gap: 12px; 
-      }
+      .r-grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }
+      .r-grid-3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
+      .r-grid-4 { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; }
 
-      /* Modale responsive */
       .modal-card { 
-        background: linear-gradient(135deg, #1e293b, #0f172a);
+        background: var(--bg-modal);
         border-radius: 16px;
         padding: 20px;
-        box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+        box-shadow: var(--shadow-3);
         max-width: 95vw;
         width: 1000px;
         max-height: 60vh;
         display: flex;
         flex-direction: column;
-        border: 1px solid rgba(99, 102, 241, 0.2);
+        border: 1px solid var(--border-strong);
       }
       
       .modal-body-scroll { 
@@ -262,242 +366,119 @@ export default function Clients(){
         min-height: 0;
         padding-right: 8px;
       }
+      .modal-body-scroll::-webkit-scrollbar { width: 6px; }
+      .modal-body-scroll::-webkit-scrollbar-track { background: var(--bg-card-strong); border-radius: 3px; }
+      .modal-body-scroll::-webkit-scrollbar-thumb { background: var(--gradient-title); border-radius: 3px; }
 
-      .modal-body-scroll::-webkit-scrollbar {
-        width: 6px;
-      }
-
-      .modal-body-scroll::-webkit-scrollbar-track {
-        background: #111827;
-        border-radius: 3px;
-      }
-
-      .modal-body-scroll::-webkit-scrollbar-thumb {
-        background: linear-gradient(135deg, #6366f1, #a855f7);
-        border-radius: 3px;
-      }
-
-      /* Paper card */
       .paper-card {
-        background: rgba(14, 23, 48, 0.6);
+        background: var(--bg-card);
         backdrop-filter: blur(10px);
         border-radius: 12px;
         padding: 16px;
-        border: 1px solid rgba(31, 42, 68, 0.8);
+        border: 1px solid var(--border-strong);
+        color: var(--text-main);
       }
 
-      /* Form inputs */
       .form-input {
         width: 100%;
         padding: 10px 12px;
         border-radius: 8px;
-        border: 1px solid #334155;
-        background: rgba(17, 24, 39, 0.8);
-        color: #e5edff;
+        border: 1px solid var(--border-subtle);
+        background: var(--bg-input);
+        color: var(--text-main);
         font-size: 14px;
         transition: all 0.3s ease;
       }
-
       .form-input:focus {
         outline: none;
-        border-color: #6366f1;
-        box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
+        border-color: var(--text-accent);
+        box-shadow: 0 0 0 3px var(--bg-input-focus-shadow);
       }
+      .form-input:disabled { opacity: 0.5; cursor: not-allowed; }
 
-      .form-input:disabled {
-        opacity: 0.5;
-        cursor: not-allowed;
-      }
+      .form-label { display: block; color: var(--text-muted); font-size: 13px; font-weight: 600; margin-bottom: 6px; }
 
-      .form-label {
-        display: block;
-        color: #cbd5e1;
-        font-size: 13px;
-        font-weight: 600;
-        margin-bottom: 6px;
-      }
-
-      /* Onglets responsive */
       .tabs-container {
         display: flex;
         gap: 8px;
-        background: #111827;
+        background: var(--bg-card-strong);
         padding: 6px;
         border-radius: 12px;
         overflow-x: auto;
         -webkit-overflow-scrolling: touch;
+        border: 1px solid var(--border-strong);
       }
-
-      .tabs-container::-webkit-scrollbar {
-        height: 4px;
-      }
-
-      .tabs-container::-webkit-scrollbar-thumb {
-        background: #334155;
-        border-radius: 2px;
-      }
+      .tabs-container::-webkit-scrollbar { height: 4px; }
+      .tabs-container::-webkit-scrollbar-thumb { background: var(--border-subtle); border-radius: 2px; }
 
       .tab-button {
         padding: 10px 16px;
         border-radius: 8px;
         border: none;
         cursor: pointer;
-        color: #fff;
+        color: var(--text-main);
         font-weight: 700;
         white-space: nowrap;
         transition: all 0.3s ease;
         font-size: 14px;
-      }
-
-      .tab-button.active {
-        background: linear-gradient(135deg, #6366f1, #a855f7);
-        box-shadow: 0 4px 12px rgba(99, 102, 241, 0.4);
-      }
-
-      .tab-button:not(.active) {
         background: transparent;
       }
-
+      .tab-button.active {
+        background: var(--gradient-title);
+        box-shadow: 0 4px 12px rgba(99, 102, 241, 0.4);
+        color: #fff;
+      }
       .tab-button:not(.active):hover {
         background: rgba(99, 102, 241, 0.1);
       }
 
-      /* Actions flexibles */
-      .actions-container {
-        display: flex;
-        gap: 8px;
-        justify-content: flex-end;
-        flex-wrap: wrap;
-      }
+      .actions-container { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }
 
-      /* Empty state */
-      .empty-state {
-        padding: 60px 20px;
-        text-align: center;
-        color: #9fb3c8;
-      }
-
+      .empty-state { padding: 60px 20px; text-align: center; color: var(--text-muted); }
       .empty-icon {
-        width: 80px;
-        height: 80px;
-        margin: 0 auto 16px;
-        border-radius: 50%;
-        background: linear-gradient(135deg, rgba(99, 102, 241, 0.1), rgba(168, 85, 247, 0.1));
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        font-size: 40px;
+        width: 80px; height: 80px; margin: 0 auto 16px; border-radius: 50%;
+        background: var(--badge-bg);
+        display: flex; align-items: center; justify-content: center; font-size: 40px;
+        border: 1px dashed var(--border-subtle);
       }
 
-      /* 📱 Media Queries Mobile */
+      /* Mobile */
       @media (max-width: 768px) {
-        .clients-root {
-          padding: 8px;
-        }
-
-        .clients-header {
-          padding: 12px;
-        }
-
-        .fullscreen-table-title {
-          font-size: 20px;
-          margin-bottom: 12px;
-        }
-
-        .table-grid {
-          padding: 12px;
-          gap: 8px;
-        }
-
-        .modal-card {
-          padding: 16px;
-          max-height: 60vh;
-        }
-
-        .tab-button {
-          padding: 8px 12px;
-          font-size: 13px;
-        }
-
-        .r-grid-2,
-        .r-grid-3,
-        .r-grid-4 {
-          grid-template-columns: 1fr;
-        }
-
-        .actions-container {
-          width: 100%;
-        }
-
-        .actions-container button {
-          flex: 1;
-          min-width: 0;
-        }
+        .clients-root { padding: 8px; }
+        .clients-header { padding: 12px; }
+        .fullscreen-table-title { font-size: 20px; margin-bottom: 12px; }
+        .table-grid { padding: 12px; gap: 8px; }
+        .modal-card { padding: 16px; max-height: 60vh; }
+        .tab-button { padding: 8px 12px; font-size: 13px; }
+        .r-grid-2, .r-grid-3, .r-grid-4 { grid-template-columns: 1fr; }
+        .actions-container { width: 100%; }
+        .actions-container button { flex: 1; min-width: 0; }
       }
-
       @media (max-width: 480px) {
-        .clients-root {
-          padding: 4px;
-        }
-
-        .clients-header {
-          padding: 8px;
-          margin-bottom: 8px;
-        }
-
-        .fullscreen-table-title {
-          font-size: 18px;
-        }
-
-        .modal-card {
-          padding: 12px;
-          max-height: 60vh;
-        }
-
-        .table-grid {
-          padding: 8px;
-          min-width: 900px;
-        }
+        .clients-root { padding: 4px; }
+        .clients-header { padding: 8px; margin-bottom: 8px; }
+        .fullscreen-table-title { font-size: 18px; }
+        .modal-card { padding: 12px; max-height: 60vh; }
+        .table-grid { padding: 8px; min-width: 900px; }
       }
 
-      /* Animations */
-      @keyframes slideIn {
-        from {
-          opacity: 0;
-          transform: translateY(-10px);
-        }
-        to {
-          opacity: 1;
-          transform: translateY(0);
-        }
-      }
+      @keyframes slideIn { from { opacity: 0; transform: translateY(-10px); } to { opacity: 1; transform: translateY(0); } }
+      .table-row { animation: slideIn 0.3s ease; }
 
-      .table-row {
-        animation: slideIn 0.3s ease;
-      }
-
-      /* Scroll hint (indicateur de scroll) */
       .scroll-hint {
-        position: absolute;
-        right: 0;
-        top: 50%;
+        position: absolute; right: 0; top: 50%;
         transform: translateY(-50%);
-        background: linear-gradient(90deg, transparent, rgba(11, 15, 26, 0.9));
-        padding: 20px 10px;
-        pointer-events: none;
-        color: #6366f1;
-        font-size: 24px;
-        opacity: 0.6;
-        animation: pulse 2s infinite;
+        background: linear-gradient(90deg, transparent, var(--bg-header));
+        padding: 20px 10px; pointer-events: none;
+        color: var(--text-accent); font-size: 24px; opacity: 0.6; animation: pulse 2s infinite;
       }
+      @keyframes pulse { 0%, 100% { opacity: 0.6; } 50% { opacity: 1; } }
+      .table-scroll-container:hover .scroll-hint { opacity: 0; }
 
-      @keyframes pulse {
-        0%, 100% { opacity: 0.6; }
-        50% { opacity: 1; }
-      }
-
-      .table-scroll-container:hover .scroll-hint {
-        opacity: 0;
+      .theme-toggle {
+        display:flex; align-items:center; gap:8px; border:1px solid var(--border-subtle);
+        background: var(--bg-card); color: var(--text-main); padding:8px 10px; border-radius:10px;
+        font-weight:700; cursor:pointer;
       }
     `}</style>
   );
@@ -792,28 +773,41 @@ export default function Clients(){
   /* ====================== UI ====================== */
   if (!societeId) {
     return (
-      <div style={{ minHeight:'100vh', display:'flex', alignItems:'center', justifyContent:'center', padding:20 }}>
-        <div className="paper-card" style={{ maxWidth: 560, textAlign:'center' }}>
-          <div style={{ fontSize:24, fontWeight:800, color:'#e5edff', marginBottom:16 }}>
-            Clients & Suivi des Ordonnances
+      <div className="clients-root" data-theme={theme}>
+        <Styles />
+        <div style={{ minHeight:'100vh', display:'flex', alignItems:'center', justifyContent:'center', padding:20 }}>
+          <div className="paper-card" style={{ maxWidth: 560, textAlign:'center' }}>
+            <div style={{ fontSize:24, fontWeight:800, color:'var(--text-main)', marginBottom:16 }}>
+              Clients & Suivi des Ordonnances
+            </div>
+            <h3 style={{ color:'var(--text-main)', marginBottom:12 }}>Compte non rattaché</h3>
+            <p style={{ color:'var(--text-muted)' }}>
+              Votre compte n'est rattaché à aucune pharmacie. Demandez au propriétaire de vous inviter, 
+              ou rattachez-vous avec un code d'invitation.
+            </p>
+            <div style={{marginTop:16, display:'flex', justifyContent:'center'}}>
+              <button onClick={toggleTheme} className="theme-toggle" title="Basculer thème">
+                {theme === 'dark' ? '🌙 Sombre' : '☀️ Clair'}
+              </button>
+            </div>
           </div>
-          <h3 style={{ color:'#e5edff', marginBottom:12 }}>Compte non rattaché</h3>
-          <p style={{ color:'#9fb3c8' }}>
-            Votre compte n'est rattaché à aucune pharmacie. Demandez au propriétaire de vous inviter, 
-            ou rattachez-vous avec un code d'invitation.
-          </p>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="clients-root">
+    <div className="clients-root" data-theme={theme}>
       <Styles />
 
       {/* Header (sticky) */}
       <div className="clients-header">
-        <div className="fullscreen-table-title">Clients & Suivi des Ordonnances</div>
+        <div style={{display:'flex', alignItems:'center', gap:12, justifyContent:'space-between', flexWrap:'wrap'}}>
+          <div className="fullscreen-table-title">Clients & Suivi des Ordonnances</div>
+          <button onClick={toggleTheme} className="theme-toggle" title="Basculer thème">
+            {theme === 'dark' ? '🌙 Mode sombre' : '☀️ Mode clair'}
+          </button>
+        </div>
 
         {/* Bandeaux UI */}
         {uiError && (
@@ -837,7 +831,10 @@ export default function Clients(){
               onChange={(e)=>setQText(e.target.value)}
             />
           </div>
-          <button onClick={()=>setCreating(true)} style={{...btn('#10b981','#fff')}}>
+          <button
+            onClick={()=>setCreating(true)}
+            style={btn('--btn-success-bg','--text-main')}
+          >
             + Nouvelle ordonnance
           </button>
         </div>
@@ -861,7 +858,7 @@ export default function Clients(){
         </div>
       </div>
 
-      {/* 🆕 Contenu avec scroll horizontal */}
+      {/* Contenu avec scroll horizontal */}
       <div className="clients-content">
         <div className="table-scroll-container" style={{ position:'relative' }}>
           {/* Header du tableau */}
@@ -878,10 +875,10 @@ export default function Clients(){
           {filtered.length === 0 ? (
             <div className="empty-state">
               <div className="empty-icon">📋</div>
-              <div style={{ fontSize:18, fontWeight:700, color:'#e5edff', marginBottom:8 }}>
+              <div style={{ fontSize:18, fontWeight:700, color:'var(--text-main)', marginBottom:8 }}>
                 Aucune ordonnance
               </div>
-              <div style={{ color:'#9fb3c8' }}>
+              <div style={{ color:'var(--text-muted)' }}>
                 {tab === 'nouvelle' && "Aucune nouvelle ordonnance pour le moment"}
                 {tab === 'en_preparation' && "Aucune ordonnance en préparation"}
                 {tab === 'pretes' && "Aucune ordonnance prête"}
@@ -896,37 +893,37 @@ export default function Clients(){
                   <div key={o.id} className="table-grid table-row">
                     {/* Client */}
                     <div>
-                      <div style={{ color:'#e5edff', fontWeight:700, marginBottom:4 }}>
+                      <div style={{ color:'var(--text-main)', fontWeight:700, marginBottom:4 }}>
                         {o.clientName}
                       </div>
-                      <div style={{ color:'#9fb3c8', fontSize:12, marginBottom:2 }}>
+                      <div style={{ color:'var(--text-muted)', fontSize:12, marginBottom:2 }}>
                         {o.clientPhone}
                       </div>
-                      <div style={{ color:'#6366f1', fontSize:11, fontWeight:600 }}>
+                      <div style={{ color:'var(--text-accent)', fontSize:11, fontWeight:600 }}>
                         {o.numero || '—'}
                       </div>
                     </div>
 
                     {/* Médecin / Infos */}
                     <div>
-                      <div style={{ color:'#e5edff', fontWeight:600, marginBottom:4 }}>
-                        {o.doctorName || <i style={{color:'#9fb3c8'}}>—</i>}
+                      <div style={{ color:'var(--text-main)', fontWeight:600, marginBottom:4 }}>
+                        {o.doctorName || <i style={{color:'var(--text-muted)'}}>—</i>}
                       </div>
-                      <div style={{ color:'#9fb3c8', fontSize:12, marginBottom:2 }}>
+                      <div style={{ color:'var(--text-muted)', fontSize:12, marginBottom:2 }}>
                         {o.ordonnanceDate || <i>—</i>}
                       </div>
                       {o.dueAt && (
-                        <div style={{ color:'#f59e0b', fontSize:12, marginBottom:2 }}>
+                        <div style={{ color:'var(--text-warning)', fontSize:12, marginBottom:2 }}>
                           ⏰ Échéance: {new Date(o.dueAt).toLocaleDateString()}
                         </div>
                       )}
                       {o.mode==='livraison' && o.address && (
-                        <div style={{ color:'#9fb3c8', fontSize:12, marginTop:4, padding:'4px 8px', background:'rgba(99,102,241,0.1)', borderRadius:6 }}>
+                        <div style={{ color:'var(--text-muted)', fontSize:12, marginTop:4, padding:'4px 8px', background:'var(--chip-bg)', borderRadius:6 }}>
                           📍 {o.address}
                         </div>
                       )}
                       {o.notes && (
-                        <div style={{ color:'#9fb3c8', fontSize:11, marginTop:4, fontStyle:'italic' }}>
+                        <div style={{ color:'var(--text-muted)', fontSize:11, marginTop:4, fontStyle:'italic' }}>
                           💬 {o.notes}
                         </div>
                       )}
@@ -935,22 +932,22 @@ export default function Clients(){
                     {/* Articles */}
                     <div>
                       {(o.items||[]).map((it,i)=>(
-                        <div key={i} style={{ marginBottom:6, padding:'6px 8px', background:'rgba(17,24,39,0.5)', borderRadius:6, borderLeft:'3px solid #6366f1' }}>
+                        <div key={i} style={{ marginBottom:6, padding:'6px 8px', background:'var(--chip-bg)', borderRadius:6, borderLeft:'3px solid var(--text-accent)' }}>
                           <div style={{ display:'flex', alignItems:'center', gap:6, flexWrap:'wrap' }}>
-                            <span style={{ fontWeight:700, color:'#e5edff', fontSize:13 }}>
-                              {it.productName || <i style={{color:'#9fb3c8'}}>Produit</i>}
+                            <span style={{ fontWeight:700, color:'var(--text-main)', fontSize:13 }}>
+                              {it.productName || <i style={{color:'var(--text-muted)'}}>Produit</i>}
                             </span>
-                            <span style={{ fontSize:12, color:'#9fb3c8' }}>
+                            <span style={{ fontSize:12, color:'var(--text-muted)' }}>
                               × {it.qty}
                             </span>
                           </div>
                           {it.supplier && (
-                            <div style={{ fontSize:11, color:'#6366f1', marginTop:2 }}>
+                            <div style={{ fontSize:11, color:'var(--text-accent)', marginTop:2 }}>
                               🏭 {it.supplier}
                             </div>
                           )}
                           {it.dosage && (
-                            <div style={{ fontSize:11, color:'#9fb3c8', marginTop:2 }}>
+                            <div style={{ fontSize:11, color:'var(--text-muted)', marginTop:2 }}>
                               💊 {it.dosage}
                             </div>
                           )}
@@ -963,12 +960,12 @@ export default function Clients(){
                       <StatusBadge status={o.status || 'nouvelle'} />
                       {o.status==='pretes' && o.readyCode && (
                         <div style={{ marginTop:8 }}>
-                          <div style={{ fontSize:11, color:'#9fb3c8', marginBottom:2 }}>
+                          <div style={{ fontSize:11, color:'var(--text-muted)', marginBottom:2 }}>
                             Code:
                           </div>
                           <code style={{ 
-                            background:'linear-gradient(135deg, #6366f1, #a855f7)', 
-                            border:'1px solid #4f46e5', 
+                            background:'var(--gradient-title)', 
+                            border:'1px solid var(--btn-purple-bg)', 
                             padding:'4px 8px', 
                             borderRadius:6, 
                             color:'#fff',
@@ -984,13 +981,14 @@ export default function Clients(){
                     {/* Total */}
                     <div>
                       <div style={{ 
-                        color:'#10b981', 
+                        color:'var(--ok)', 
                         fontWeight:800, 
                         fontSize:16,
                         padding:'6px 10px',
-                        background:'rgba(16,185,129,0.1)',
+                        background:'var(--ok-bg)',
                         borderRadius:8,
-                        display:'inline-block'
+                        display:'inline-block',
+                        border:'1px solid var(--border-subtle)'
                       }}>
                         {total} DHS
                       </div>
@@ -1000,10 +998,10 @@ export default function Clients(){
                     <div className="actions-container">
                       {(!o.status || o.status==='nouvelle') && (
                         <>
-                          <button onClick={()=>markStartPreparation(o)} style={btn('#3b82f6','#fff')}>
+                          <button onClick={()=>markStartPreparation(o)} style={btn('--btn-blue-bg','--text-main')}>
                             ▶️ Démarrer
                           </button>
-                          <button onClick={()=>updateStatus(o.id,'annulee')} style={btn('transparent','#ef4444',true)}>
+                          <button onClick={()=>updateStatus(o.id,'annulee')} style={btn('--text-main','--badge-cancel',true,'var(--badge-cancel)')}>
                             ✕ Annuler
                           </button>
                         </>
@@ -1011,10 +1009,10 @@ export default function Clients(){
 
                       {o.status==='en_preparation' && (
                         <>
-                          <button onClick={()=>markReadyAndNotify(o)} style={btn('#10b981','#fff')} title="Marquer prête et notifier WhatsApp">
+                          <button onClick={()=>markReadyAndNotify(o)} style={btn('--btn-success-bg','--text-main')} title="Marquer prête et notifier WhatsApp">
                             ✅ Prête
                           </button>
-                          <button onClick={()=>updateStatus(o.id,'annulee')} style={btn('transparent','#ef4444',true)}>
+                          <button onClick={()=>updateStatus(o.id,'annulee')} style={btn('--text-main','--badge-cancel',true,'var(--badge-cancel)')}>
                             ✕
                           </button>
                         </>
@@ -1022,20 +1020,20 @@ export default function Clients(){
 
                       {o.status==='pretes' && (
                         <>
-                          <button onClick={()=>markReadyAndNotify(o)} style={btn('#3b82f6','#fff')} title="Relancer WhatsApp">
+                          <button onClick={()=>markReadyAndNotify(o)} style={btn('--btn-blue-bg','--text-main')} title="Relancer WhatsApp">
                             📲
                           </button>
-                          <button onClick={()=>markDeliveredWithCode(o)} style={btn('#6366f1','#fff')}>
+                          <button onClick={()=>markDeliveredWithCode(o)} style={btn('--btn-purple-bg','--text-main')}>
                             ✓ Livrée
                           </button>
-                          <button onClick={()=>updateStatus(o.id,'annulee')} style={btn('transparent','#ef4444',true)}>
+                          <button onClick={()=>updateStatus(o.id,'annulee')} style={btn('--text-main','--badge-cancel',true,'var(--badge-cancel)')}>
                             ✕
                           </button>
                         </>
                       )}
 
                       {(o.status==='livree' || o.status==='annulee') && (
-                        <button onClick={()=>removeOrdonnance(o.id)} style={btn('transparent','#e11d48',true)}>
+                        <button onClick={()=>removeOrdonnance(o.id)} style={btn('--text-main','--badge-cancel',true,'var(--badge-cancel)')}>
                           🗑️ Supprimer
                         </button>
                       )}
@@ -1044,9 +1042,9 @@ export default function Clients(){
                 );
               })}
 
-              {/* Indicateur de scroll (seulement si > 3 items) */}
+              {/* Indicateur de scroll */}
               {filtered.length > 3 && (
-                <div className="scroll-hint" style={{ display: window.innerWidth < 1000 ? 'block' : 'none' }}>
+                <div className="scroll-hint" style={{ display: typeof window !== 'undefined' && window.innerWidth < 1000 ? 'block' : 'none' }}>
                   →
                 </div>
               )}
@@ -1057,9 +1055,13 @@ export default function Clients(){
 
       {/* Modale création */}
       {creating && (
-        <div onClick={()=>setCreating(false)} style={modalBackdrop}>
+        <div onClick={()=>setCreating(false)} style={{
+          position:'fixed', inset:0, background:'rgba(0,0,0,.5)',
+          display:'flex', alignItems:'center', justifyContent:'center',
+          zIndex:1000, padding:'16px', overflowY:'auto'
+        }}>
           <div onClick={(e)=>e.stopPropagation()} className="paper-card modal-card">
-            <div style={modalTitle}>Nouvelle ordonnance</div>
+            <div style={{ fontSize:18, fontWeight:800, color:'var(--text-main)', marginBottom:12 }}>Nouvelle ordonnance</div>
 
             <div className="modal-body-scroll">
               <div style={{ display:'grid', gap:12 }}>
@@ -1142,8 +1144,8 @@ export default function Clients(){
                 </div>
 
                 {/* Items */}
-                <div className="paper-card" style={{ background:'#0b1220', border:'1px solid #1f2a44' }}>
-                  <div style={{ fontWeight:800, color:'#e5edff', marginBottom:8 }}>Médicaments / Produits</div>
+                <div className="paper-card" style={{ background:'var(--bg-card)', border:'1px solid var(--border-strong)' }}>
+                  <div style={{ fontWeight:800, color:'var(--text-main)', marginBottom:8 }}>Médicaments / Produits</div>
 
                   <div style={{ display:'grid', gap:10 }}>
                     {form.items.map((it, idx)=>(
@@ -1167,7 +1169,7 @@ export default function Clients(){
 
                           {/* Bloc création locale */}
                           {it.__showInline && (
-                            <div style={{ marginTop:8, padding:10, border:'1px dashed #334155', borderRadius:8 }}>
+                            <div style={{ marginTop:8, padding:10, border:'1px dashed var(--border-subtle)', borderRadius:8 }}>
                               <div className="r-grid-3">
                                 <input className="form-input" placeholder="Nom du médicament" value={it.newName}
                                   onChange={(e)=>updateItemField(idx,'newName',e.target.value)} />
@@ -1177,13 +1179,13 @@ export default function Clients(){
                                   onChange={(e)=>updateItemField(idx,'newSupplier',e.target.value)} />
                               </div>
                               <div style={{ display:'flex', gap:8, marginTop:8, flexWrap:'wrap' }}>
-                                <button onClick={()=>createInlineItem(idx)} style={btn('#0ea5e9','#fff')}>Insérer</button>
+                                <button onClick={()=>createInlineItem(idx)} style={btn('--btn-info-bg','--text-main')}>Insérer</button>
                                 <button onClick={()=>{
                                   updateItemField(idx,'__showInline',false);
                                   updateItemField(idx,'newName','');
                                   updateItemField(idx,'newPV','');
                                   updateItemField(idx,'newSupplier','');
-                                }} style={btn('transparent','#9fb3c8',true,'#334155')}>Annuler</button>
+                                }} style={btn('--text-main','--text-muted',true,'var(--border-subtle)')}>Annuler</button>
                               </div>
                             </div>
                           )}
@@ -1194,7 +1196,7 @@ export default function Clients(){
                           <label className="form-label">Prix unitaire (DHS)</label>
                           <input className="form-input" type="number" min={0} value={it.unitPrice}
                             onChange={(e)=>updateItemField(idx,'unitPrice',e.target.value)} placeholder="0.00" />
-                          {it.supplier && <div style={{ fontSize:11, color:'#6366f1', marginTop:4 }}>
+                          {it.supplier && <div style={{ fontSize:11, color:'var(--text-accent)', marginTop:4 }}>
                             🏭 {it.supplier}
                           </div>}
                         </div>
@@ -1208,7 +1210,7 @@ export default function Clients(){
 
                         {/* Actions */}
                         <div style={{ display:'flex', gap:6, paddingTop:28 }}>
-                          <button onClick={()=>removeItemRow(idx)} style={btn('transparent','#ef4444',true)} title="Supprimer ligne">
+                          <button onClick={()=>removeItemRow(idx)} style={btn('--text-main','--badge-cancel',true,'var(--badge-cancel)')} title="Supprimer ligne">
                             🗑️
                           </button>
                         </div>
@@ -1225,10 +1227,10 @@ export default function Clients(){
                   </div>
 
                   <div style={{ display:'flex', justifyContent:'space-between', marginTop:12, flexWrap:'wrap', gap:10, alignItems:'center' }}>
-                    <button onClick={addItemRow} style={btn('#111827','#fff',false,'#334155')}>+ Ajouter un article</button>
-                    <div style={{ color:'#e5edff', fontWeight:800, fontSize:14 }}>
-                      Total brut: <span style={{color:'#10b981'}}>{totalBrut.toFixed(2)}</span> DHS • 
-                      Total net: <span style={{color:'#10b981'}}>{totalNet.toFixed(2)}</span> DHS
+                    <button onClick={addItemRow} style={btn('--text-main','--text-main',true,'var(--border-subtle)')}>+ Ajouter un article</button>
+                    <div style={{ color:'var(--text-main)', fontWeight:800, fontSize:14 }}>
+                      Total brut: <span style={{color:'var(--ok)'}}>{totalBrut.toFixed(2)}</span> DHS • 
+                      Total net: <span style={{color:'var(--ok)'}}>{totalNet.toFixed(2)}</span> DHS
                     </div>
                   </div>
                 </div>
@@ -1237,8 +1239,8 @@ export default function Clients(){
 
             {/* Actions bas modale */}
             <div style={{ display:'flex', gap:8, marginTop:16, justifyContent:'flex-end', flexWrap:'wrap' }}>
-              <button onClick={()=>setCreating(false)} style={btn('transparent','#9fb3c8',true,'#334155')}>Annuler</button>
-              <button onClick={createOrdonnance} style={btn('#10b981','#fff')}>💾 Enregistrer</button>
+              <button onClick={()=>setCreating(false)} style={btn('--text-main','--text-muted',true,'var(--border-subtle)')}>Annuler</button>
+              <button onClick={createOrdonnance} style={btn('--btn-success-bg','--text-main')}>💾 Enregistrer</button>
             </div>
           </div>
         </div>

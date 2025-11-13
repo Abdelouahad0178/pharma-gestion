@@ -1,4 +1,4 @@
-// src/App.js - Synchro ventes -> stock + Clients + Analytics + Legal + Charges + BackToTop (complet)
+// src/App.js - Synchro ventes -> stock + Clients + Analytics + Legal + Charges + BackToTop + ThemeProvider (complet)
 
 import React, { useState, useEffect, useRef } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate, useLocation } from 'react-router-dom';
@@ -46,9 +46,11 @@ import CatalogueMedicaments from './components/catalogue/CatalogueMedicaments';
 // 🢁 Bouton flottant "Retour en haut"
 import BackToTop from './components/common/BackToTop';
 
+
 // Contexte & styles
 import { UserRoleProvider, useUserRole } from './contexts/UserRoleContext';
 import './styles/main.css';
+
 
 // 🔗 Synchro temps réel ventes -> stock
 import { db } from './firebase/config';
@@ -128,7 +130,7 @@ const AppLoader = ({ onLoadingComplete, minLoadingTime = 2500 }) => {
   return (
     <div style={{
       position: 'fixed', inset: 0,
-      background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+      background: 'linear-gradient(135deg, #667eea, #764ba2)',
       display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
       zIndex: 10000, color: '#fff', fontFamily: '"Inter",-apple-system,BlinkMacSystemFont,sans-serif'
     }}>
@@ -266,7 +268,7 @@ function BackupPage() {
 
 function UsersPage() {
   return (
-    <div style={{ minHeight: '100vh', background: 'linear-gradient(135deg,#667eea 0%,#764ba2 100%)' }}>
+    <div style={{ minHeight: '100vh', background: 'linear-gradient(135deg,#667eea,#764ba2)' }}>
       <UsersManagement />
     </div>
   );
@@ -274,7 +276,7 @@ function UsersPage() {
 
 function GestionRolesPage() {
   return (
-    <div style={{ minHeight: '100vh', background: 'linear-gradient(135deg,#223049 0%,#344060 100%)' }}>
+    <div style={{ minHeight: '100vh', background: 'linear-gradient(135deg,#223049,#344060)' }}>
       <GestionUtilisateurs />
     </div>
   );
@@ -395,7 +397,7 @@ function AppWrapper() {
 }
 
 /* -------------------------------------------
- * App racine
+ * App racine avec ThemeProvider 🎨
  * -----------------------------------------*/
 function App() {
   const [isLoading, setIsLoading] = useState(true);
@@ -406,11 +408,13 @@ function App() {
   }
 
   return (
-    <UserRoleProvider>
-      <Router>
-        <AppWrapper />
-      </Router>
-    </UserRoleProvider>
+   
+      <UserRoleProvider>
+        <Router>
+          <AppWrapper />
+        </Router>
+      </UserRoleProvider>
+    
   );
 }
 

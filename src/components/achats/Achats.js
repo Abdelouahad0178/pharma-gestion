@@ -453,7 +453,7 @@ export default function Achats() {
       .btn:hover{ transform:translateY(-2px); box-shadow:0 8px 20px rgba(0,0,0,.2); }
       .btn:active{ transform:translateY(0); }
       .btn-primary{ color:#fff; background:var(--cta-grad); }
-      .btn-outline{ background:#fff; color:var(--text); border:2px solid var(--border); box-shadow:0 2px 8px rgba(0,0,0,.08); }
+      .btn-outline{  color:var(--text); border:2px solid var(--border); box-shadow:0 2px 8px rgba(0,0,0,.08); }
       .btn-outline:hover{ border-color:var(--primary); }
       .btn-danger{ color:#fff; background:var(--danger-grad); }
       .btn-success{ color:#064E3B; background:linear-gradient(135deg,#ECFDF5 0%, #DCFCE7 100%); border:2px solid #86EFAC; font-weight:800; }
@@ -2209,7 +2209,7 @@ th{background:#0F172A;color:#F8FAFC;text-transform:uppercase;font-size:12px;lett
       <div className="page-header">
         <h1>🛒 Gestion des Achats</h1>
         <div className="page-sub">
-          ✨ Dates automatiques : Aujourd'hui • Impayé • Péremption +2 ans • Marge {tauxMarge}%
+          ✨  Marge {tauxMarge}%
         </div>
       </div>
       {notification && (
@@ -2466,7 +2466,7 @@ th{background:#0F172A;color:#F8FAFC;text-transform:uppercase;font-size:12px;lett
        {/* ===================== TRANSFERT STOCK1 → STOCK2 ===================== */}
       <div className="card" style={{ borderColor: "#D1FAE5", borderWidth: "2px" }}>
         <div className="section-title" style={{ justifyContent: "space-between" }}>
-          <span>🔄 Transfert mensuel — Stock1 → Stock2</span>
+          <span>🔄  Stock1 → Stock2</span>
           <button
             className="btn btn-outline"
             onClick={() => setShowTransfer((s) => !s)}

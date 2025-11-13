@@ -1409,9 +1409,7 @@ export default function StockManagement() {
             >
               Gestion du Stock
             </h1>
-            <p style={{ margin: "6px 0 0", color: "#6b7280" }}>
-              Synchronisation automatique Achats ↔ Stock ↔ Ventes
-            </p>
+            
             <div style={{ display: "flex", gap: 12, alignItems: "center", marginTop: 8 }}>
               {lastSyncTime && (
                 <div style={{ fontSize: 12, color: "#059669" }}>

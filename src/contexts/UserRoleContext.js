@@ -1,7 +1,7 @@
-// src/contexts/UserRoleContext.js — VERSION STABLE + RÉTRO-COMPAT
+// src/contexts/UserRoleContext.js — VERSION STABLE + REGISTRE D’ÉCOUTEURS
 // Hiérarchie: Propriétaire (SuperAdmin) > Admin > Docteur > Vendeuse/Assistant
 // Logique inversée conservée pour vendeuse: accès large sauf retraits explicites.
-// Ajouts: hasCustomPermissions() (function) + hasCustomPermissionsFlag (boolean) + getExtraPermissions()
+// Ajouts majeurs: watchRegistry (unique listener par ressource) + attachUniqueSnapshot()
 
 import React, {
   createContext,
@@ -21,11 +21,64 @@ import permissions, {
 } from "../utils/permissions";
 
 const UserRoleContext = createContext();
-
 export function useUserRole() {
   const ctx = useContext(UserRoleContext);
   if (!ctx) throw new Error("useUserRole doit être utilisé dans un UserRoleProvider");
   return ctx;
+}
+
+/* =========================================================
+   🧷 Registre module-scopé des écouteurs Firestore
+   - Un seul onSnapshot par clé (ex: "users/{uid}", "societe/{sid}")
+   - Toute nouvelle attache ferme l’ancienne proprement
+========================================================= */
+const watchRegistry = new Map();
+/**
+ * @param {string} key   ex: `users/${uid}`
+ * @param {import('firebase/firestore').DocumentReference} ref
+ * @param {(snap)=>void} onOk
+ * @param {(err)=>void} onErr
+ */
+function attachUniqueSnapshot(key, ref, onOk, onErr) {
+  // Ferme l’ancien listener s’il existe
+  try {
+    const prev = watchRegistry.get(key);
+    if (typeof prev === "function") {
+      prev();
+    }
+  } catch {
+    /* ignore */
+  }
+  // Attache le nouveau et mémorise l’unsub
+  const unsub = onSnapshot(ref, onOk, onErr);
+  watchRegistry.set(key, unsub);
+  return () => {
+    const cur = watchRegistry.get(key);
+    if (cur === unsub) {
+      try { cur(); } catch {}
+      watchRegistry.delete(key);
+    } else {
+      // Un autre s’est déjà enregistré -> on laisse celui en place
+      try { unsub(); } catch {}
+    }
+  };
+}
+
+/** Ferme et oublie une clé précisément (utile en cleanup ciblé) */
+function detachKey(key) {
+  const unsub = watchRegistry.get(key);
+  if (typeof unsub === "function") {
+    try { unsub(); } catch {}
+  }
+  watchRegistry.delete(key);
+}
+
+/** Tout fermer (au démontage provider) */
+function detachAll() {
+  for (const [, unsub] of watchRegistry) {
+    try { typeof unsub === "function" && unsub(); } catch {}
+  }
+  watchRegistry.clear();
 }
 
 export function UserRoleProvider({ children }) {
@@ -50,14 +103,14 @@ export function UserRoleProvider({ children }) {
   // ---------- Permissions retirées (logique inversée) ----------
   const [removedPermissions, setRemovedPermissions] = useState([]);
 
-  // ---------- Refs listeners ----------
+  // ---------- Refs de suivi ----------
   const authUnsubRef = useRef(null);
-  const userUnsubRef = useRef(null);
-  const socUnsubRef = useRef(null);
   const currentUserIdRef = useRef(null);
   const currentSocieteIdRef = useRef(null);
   const currentUserRef = useRef(null);
   const currentRoleRef = useRef(null);
+  const lastUserKeyRef = useRef(null);
+  const lastSocKeyRef = useRef(null);
 
   const safeLower = (s) => (typeof s === "string" ? s.toLowerCase() : "");
 
@@ -66,7 +119,7 @@ export function UserRoleProvider({ children }) {
     if (msg.includes("Target ID already exists")) {
       try {
         await disableFirestoreNetwork();
-        await new Promise((r) => setTimeout(r, 120));
+        await new Promise((r) => setTimeout(r, 150));
         await enableFirestoreNetwork();
       } catch {}
     }
@@ -78,18 +131,25 @@ export function UserRoleProvider({ children }) {
   useEffect(() => {
     const auth = getAuth();
 
-    // Cleanups
-    if (authUnsubRef.current) { authUnsubRef.current(); authUnsubRef.current = null; }
-    if (userUnsubRef.current) { userUnsubRef.current(); userUnsubRef.current = null; }
-    if (socUnsubRef.current)  { socUnsubRef.current();  socUnsubRef.current  = null; }
+    // Cleanup auth si existe
+    if (authUnsubRef.current) {
+      authUnsubRef.current();
+      authUnsubRef.current = null;
+    }
 
     authUnsubRef.current = onAuthStateChanged(auth, async (firebaseUser) => {
       setAuthReady(true);
 
-      // Déconnexion → reset total
+      // Déconnexion → reset + détacher les clés
       if (!firebaseUser) {
-        if (userUnsubRef.current) { userUnsubRef.current(); userUnsubRef.current = null; }
-        if (socUnsubRef.current)  { socUnsubRef.current();  socUnsubRef.current  = null; }
+        if (lastUserKeyRef.current) {
+          detachKey(lastUserKeyRef.current);
+          lastUserKeyRef.current = null;
+        }
+        if (lastSocKeyRef.current) {
+          detachKey(lastSocKeyRef.current);
+          lastSocKeyRef.current = null;
+        }
         currentUserIdRef.current = null;
         currentSocieteIdRef.current = null;
         currentRoleRef.current = null;
@@ -110,22 +170,33 @@ export function UserRoleProvider({ children }) {
         return;
       }
 
-      // Évite double attachement si même UID
+      // Même UID -> rien à ré-attacher
       if (currentUserIdRef.current === firebaseUser.uid) {
         setLoading(false);
         return;
       }
 
-      // Cleanup anciens listeners
-      if (userUnsubRef.current) { userUnsubRef.current(); userUnsubRef.current = null; }
-      if (socUnsubRef.current)  { socUnsubRef.current();  socUnsubRef.current  = null; }
+      // Détacher ancien user + soc
+      if (lastUserKeyRef.current) {
+        detachKey(lastUserKeyRef.current);
+        lastUserKeyRef.current = null;
+      }
+      if (lastSocKeyRef.current) {
+        detachKey(lastSocKeyRef.current);
+        lastSocKeyRef.current = null;
+      }
 
       currentUserIdRef.current = firebaseUser.uid;
 
-      // Attacher listener sur users/{uid}
+      // Attacher listener unique sur users/{uid}
       try {
         const userRef = doc(db, "users", firebaseUser.uid);
-        userUnsubRef.current = onSnapshot(
+        const userKey = `users/${firebaseUser.uid}`;
+
+        lastUserKeyRef.current = userKey;
+
+        attachUniqueSnapshot(
+          userKey,
           userRef,
           (snap) => {
             let base;
@@ -149,9 +220,7 @@ export function UserRoleProvider({ children }) {
                 removedPermissions: normalizedRemoved,
               };
             } else {
-              console.warn(
-                `[UserRoleContext] Pas de document pour ${firebaseUser.uid} - Rôle par défaut: docteur`
-              );
+              // Pas de doc user -> défaut: docteur
               base = {
                 uid: firebaseUser.uid,
                 email: firebaseUser.email || "",
@@ -219,7 +288,7 @@ export function UserRoleProvider({ children }) {
           }
         );
       } catch (e) {
-        console.error("[UserRoleContext] Erreur attachement listener:", e);
+        console.error("[UserRoleContext] Erreur attachement listener user:", e);
         const fb = {
           uid: firebaseUser.uid,
           email: firebaseUser.email || "",
@@ -254,9 +323,12 @@ export function UserRoleProvider({ children }) {
     });
 
     return () => {
-      if (authUnsubRef.current) { authUnsubRef.current(); authUnsubRef.current = null; }
-      if (userUnsubRef.current) { userUnsubRef.current(); userUnsubRef.current = null; }
-      if (socUnsubRef.current)  { socUnsubRef.current();  socUnsubRef.current  = null; }
+      if (authUnsubRef.current) {
+        authUnsubRef.current();
+        authUnsubRef.current = null;
+      }
+      // Fermer tout si le provider se démonte
+      detachAll();
     };
   }, []);
 
@@ -265,7 +337,10 @@ export function UserRoleProvider({ children }) {
   // =========================
   useEffect(() => {
     if (!user || !societeId || isDeleted) {
-      if (socUnsubRef.current) { socUnsubRef.current(); socUnsubRef.current = null; }
+      if (lastSocKeyRef.current) {
+        detachKey(lastSocKeyRef.current);
+        lastSocKeyRef.current = null;
+      }
       setSocieteName(null);
       currentSocieteIdRef.current = null;
       return;
@@ -273,12 +348,20 @@ export function UserRoleProvider({ children }) {
 
     if (currentSocieteIdRef.current === societeId) return;
 
-    if (socUnsubRef.current) { socUnsubRef.current(); socUnsubRef.current = null; }
+    // Détache l’ancien
+    if (lastSocKeyRef.current) {
+      detachKey(lastSocKeyRef.current);
+      lastSocKeyRef.current = null;
+    }
     currentSocieteIdRef.current = societeId;
 
     try {
       const ref = doc(db, "societe", societeId);
-      socUnsubRef.current = onSnapshot(
+      const socKey = `societe/${societeId}`;
+      lastSocKeyRef.current = socKey;
+
+      attachUniqueSnapshot(
+        socKey,
         ref,
         (snap) => {
           if (snap.exists()) {
@@ -300,7 +383,10 @@ export function UserRoleProvider({ children }) {
     }
 
     return () => {
-      if (socUnsubRef.current) { socUnsubRef.current(); socUnsubRef.current = null; }
+      if (lastSocKeyRef.current) {
+        detachKey(lastSocKeyRef.current);
+        lastSocKeyRef.current = null;
+      }
     };
   }, [user?.uid, societeId, isDeleted]);
 
@@ -333,13 +419,10 @@ export function UserRoleProvider({ children }) {
     const r = safeLower(role);
     return (r === "admin" || r === "docteur" || isOwner) && canAccessApp();
   };
-
   const isSuperAdmin = () => !!isOwner && canAccessApp();
 
   const canManageUsers = () => isAdmin();
-
   const canChangeRoles = () => isAdmin();
-
   const canDeleteSociete = () => isSuperAdmin();
 
   const canPromoteToOwner = () => false;
@@ -364,7 +447,6 @@ export function UserRoleProvider({ children }) {
     if (!canModifyUser(targetUserId, targetUserIsOwner, currentRole)) return false;
     const rNew = safeLower(newRole);
     if (!["docteur", "admin", "vendeuse", "assistant"].includes(rNew)) return false;
-
     if ((rNew === "admin" || rNew === "docteur") && !isSuperAdmin()) return false;
     return true;
   };
@@ -393,9 +475,7 @@ export function UserRoleProvider({ children }) {
       "promouvoir_utilisateur",
       "retrograder_utilisateur",
     ]);
-    if (ownerOnly.has(permission)) {
-      return isSuperAdmin();
-    }
+    if (ownerOnly.has(permission)) return isSuperAdmin();
 
     if (isOwner) return true;
 
@@ -409,23 +489,18 @@ export function UserRoleProvider({ children }) {
   };
 
   const getUserPermissions = () => [...effectivePermissions];
-
   const hasRestrictions = () => !!(removedPermissions && removedPermissions.length > 0);
-
   const getRemovedPermissions = () => removedPermissions || [];
-
   const hasFullAccess = () => {
     const r = safeLower(role);
     if (isOwner || r === "docteur" || r === "admin") return true;
     return !hasRestrictions();
   };
-
   const getPermissionStatus = (permission) => {
     if (DOCTOR_ONLY_PERMISSIONS.includes(permission)) return "doctor_only";
     if (!hasRestrictions()) return "allowed_full_access";
     return removedPermissions.includes(permission) ? "removed" : "allowed";
   };
-
   const getPermissionChanges = () => {
     const all = (permissions.docteur || []).filter(
       (p) => !DOCTOR_ONLY_PERMISSIONS.includes(p)
@@ -457,9 +532,9 @@ export function UserRoleProvider({ children }) {
   const refreshCustomPermissions = refreshRemovedPermissions;
 
   // --------- RÉTRO-COMPAT: helpers attendus ailleurs ----------
-  const hasCustomPermissions = () => hasRestrictions(); // fonction (nouvelle API)
-  const getExtraPermissions = () => [];                 // placeholder si utilisé par d'autres vues
-  const hasCustomPermissionsFlag = hasCustomPermissions(); // booléen (anciens composants)
+  const hasCustomPermissions = () => hasRestrictions(); // fonction
+  const getExtraPermissions = () => [];                 // placeholder
+  const hasCustomPermissionsFlag = hasCustomPermissions(); // booléen
 
   // ---------- Messages et stats ----------
   const getBlockMessage = () => {
@@ -582,9 +657,9 @@ export function UserRoleProvider({ children }) {
     canAccessApp,
 
     // === RÉTRO-COMPAT ===
-    hasCustomPermissions,           // fonction
+    hasCustomPermissions,                         // fonction
     hasCustomPermissionsFlag: hasCustomPermissions(), // booléen
-    getExtraPermissions,            // placeholder
+    getExtraPermissions,                          // placeholder
 
     // Rôles / hiérarchie
     isAdmin,
