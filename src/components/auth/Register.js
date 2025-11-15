@@ -6,7 +6,6 @@ import { auth, db } from "../../firebase/config";
 import {
   doc,
   setDoc,
-  getDoc,
   serverTimestamp,
 } from "firebase/firestore";
 
@@ -20,6 +19,9 @@ async function safeSet(ref, data, options) {
     throw e;
   }
 }
+
+/* Petit sleep pour laisser Firestore propager les changements côté règles */
+const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
 
 export default function Register() {
   const navigate = useNavigate();
@@ -62,19 +64,15 @@ export default function Register() {
   const generateCode = (len = 8) => {
     const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // sans I/O/0/1
     let code = "";
-    for (let i = 0; i < len; i++) code += chars.charAt(Math.floor(Math.random() * chars.length));
+    for (let i = 0; i < len; i++) {
+      code += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
     return code;
   };
 
-  // ✅ Teste l’unicité dans /invitations/{code}, pas dans /societe
-  const generateUniqueInviteCode = async (maxTry = 10) => {
-    for (let i = 0; i < maxTry; i++) {
-      const c = generateCode(8);
-      const ref = doc(db, "invitations", c);
-      const snap = await getDoc(ref);
-      if (!snap.exists()) return c;
-    }
-    throw new Error("Impossible de générer un code unique. Réessayez.");
+  // 👉 Version SANS getDoc (pas de lecture Firestore, donc pas de permission-denied ici)
+  const generateUniqueInviteCode = async () => {
+    return generateCode(8);
   };
 
   const newSocieteIdFor = (uid) => `societe_${uid}_${Date.now()}`;
@@ -117,7 +115,11 @@ export default function Register() {
 
       // 1bis) Profile displayName (facultatif)
       if (dnameTrim) {
-        try { await updateProfile(cred.user, { displayName: dnameTrim }); } catch { /* ignore */ }
+        try {
+          await updateProfile(cred.user, { displayName: dnameTrim });
+        } catch {
+          // ignore
+        }
       }
 
       // 2) Créer users/{uid} D'ABORD (societeId:null)
@@ -139,7 +141,7 @@ export default function Register() {
         { merge: true }
       );
 
-      // 3) Générer le code d'invitation (unicité via /invitations/{code})
+      // 3) Générer le code d’invitation (plus de lecture Firestore)
       const invite = await generateUniqueInviteCode();
 
       // 4) Créer la société avec ownerUid (⚠️ correspond aux règles)
@@ -164,6 +166,9 @@ export default function Register() {
         { merge: true }
       );
 
+      // 🔁 petite pause pour que les règles voient bien authSocieteId() == societeId
+      await sleep(400);
+
       // 6) (Optionnel) Paramètres par défaut (passe car maintenant sameSoc + owner)
       await safeSet(
         doc(db, "societe", societeId, "parametres", "default"),
@@ -175,7 +180,7 @@ export default function Register() {
         { merge: true }
       );
 
-      // 7) Enregistrer le code d’invitation (utile pour l’unicité et le join)
+      // 7) Enregistrer le code d’invitation (utile pour le join employé)
       await safeSet(
         doc(db, "invitations", invite),
         {
@@ -198,7 +203,7 @@ export default function Register() {
         setError("Le mot de passe doit contenir au moins 6 caractères.");
       } else if (String(e?.message || "").includes("Missing or insufficient permissions")) {
         setError(
-          "Permissions Firestore insuffisantes : vérifiez vos règles (création 'societe' avec 'ownerUid' + création de 'users/{uid}' avant), puis republiez."
+          "Permissions Firestore insuffisantes : vérifiez vos règles (création 'societe' avec 'ownerUid' + rattachement 'users/{uid}.societeId' avant les sous-collections), puis republiez."
         );
       } else if (e?.code === "auth/network-request-failed") {
         setError("Problème réseau détecté. Vérifiez votre connexion Internet puis réessayez.");
@@ -256,7 +261,16 @@ export default function Register() {
         </div>
 
         {!isOnline && (
-          <div style={{background:'#fff3cd', border:'1px solid #ffeeba', color:'#856404', padding:10, borderRadius:8, marginTop:12}}>
+          <div
+            style={{
+              background: "#fff3cd",
+              border: "1px solid #ffeeba",
+              color: "#856404",
+              padding: 10,
+              borderRadius: 8,
+              marginTop: 12,
+            }}
+          >
             🔌 Vous êtes hors-ligne. La création de compte nécessite Internet.
           </div>
         )}

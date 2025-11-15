@@ -75,7 +75,18 @@ const convertirNombreEnLettres = (nombre) => {
 
   const unites = ["", "un", "deux", "trois", "quatre", "cinq", "six", "sept", "huit", "neuf"];
   const dizaines = ["", "", "vingt", "trente", "quarante", "cinquante", "soixante", "soixante", "quatre-vingt", "quatre-vingt"];
-  const nombres11a19 = ["dix", "onze", "douze", "treize", "quatorze", "quinze", "seize", "dix-sept", "dix-huit", "dix-neuf"];
+  const nombres11a19 = [
+    "dix",
+    "onze",
+    "douze",
+    "treize",
+    "quatorze",
+    "quinze",
+    "seize",
+    "dix-sept",
+    "dix-huit",
+    "dix-neuf",
+  ];
 
   const convertirCentaines = (n) => {
     let resultat = "";
@@ -130,7 +141,11 @@ const convertirNombreEnLettres = (nombre) => {
   // Millions
   if (n >= 1_000_000) {
     const millions = Math.floor(n / 1_000_000);
-    parties.push((millions === 1 ? "un" : convertirCentaines(millions)) + " million" + (millions > 1 ? "s" : ""));
+    parties.push(
+      (millions === 1 ? "un" : convertirCentaines(millions)) +
+        " million" +
+        (millions > 1 ? "s" : "")
+    );
     n %= 1_000_000;
   }
 
@@ -362,7 +377,10 @@ export default function DevisFactures() {
           modifieParEmail: user.email,
           modifieLe: Timestamp.now(),
         });
-        showNotification(`${type === "FACT" ? "Facture" : "Devis"} modifié avec succès!`, "success");
+        showNotification(
+          `${type === "FACT" ? "Facture" : "Devis"} modifié avec succès!`,
+          "success"
+        );
       } else {
         await addDoc(collection(db, "societe", societeId, "devisFactures"), {
           ...payload,
@@ -370,7 +388,10 @@ export default function DevisFactures() {
           creeParEmail: user.email,
           creeLe: Timestamp.now(),
         });
-        showNotification(`${type === "FACT" ? "Facture" : "Devis"} créé avec succès!`, "success");
+        showNotification(
+          `${type === "FACT" ? "Facture" : "Devis"} créé avec succès!`,
+          "success"
+        );
       }
 
       resetForm();
@@ -435,7 +456,9 @@ export default function DevisFactures() {
       return `
         <div style="position: relative; text-align: center; flex: 1;">
           <div class="signature-area"></div>
-          <div class="signature-label">✍️ Signature ${isFacture ? "Pharmacien" : "Commercial"}</div>
+          <div class="signature-label">✍️ Signature ${
+            isFacture ? "Pharmacien" : "Commercial"
+          }</div>
           <img 
             src="${parametres.cachetImage}" 
             alt="Cachet de l'entreprise"
@@ -458,7 +481,9 @@ export default function DevisFactures() {
       return `
         <div style="position: relative; text-align: center; flex: 1;">
           <div class="signature-area"></div>
-          <div class="signature-label">✍️ Signature ${isFacture ? "Pharmacien" : "Commercial"}</div>
+          <div class="signature-label">✍️ Signature ${
+            isFacture ? "Pharmacien" : "Commercial"
+          }</div>
           <div class="cachet-overlay" style="
             position: absolute;
             top: 15px;
@@ -490,7 +515,9 @@ export default function DevisFactures() {
   const handlePrintDoc = (docData) => {
     const arts = Array.isArray(docData.articles) ? docData.articles : [];
     const total = arts.reduce(
-      (s, a) => s + ((a.quantite || 0) * (a.prixUnitaire || 0) - (a.remise || 0)),
+      (s, a) =>
+        s +
+        ((a.quantite || 0) * (a.prixUnitaire || 0) - (a.remise || 0)),
       0
     );
 
@@ -520,10 +547,16 @@ export default function DevisFactures() {
 
       if (isMobileDevice) {
         downloadPrintFile(htmlContent, titleDocument, docData.numero);
-        showNotification(`${titleDocument} téléchargé ! Ouvrez le fichier pour imprimer.`, "success");
+        showNotification(
+          `${titleDocument} téléchargé ! Ouvrez le fichier pour imprimer.`,
+          "success"
+        );
       } else {
         handleDesktopPrint(htmlContent, titleDocument, docData.numero);
-        showNotification(`${titleDocument} envoyé vers l'imprimante !`, "success");
+        showNotification(
+          `${titleDocument} envoyé vers l'imprimante !`,
+          "success"
+        );
       }
     } catch (error) {
       console.error("Erreur préparation impression:", error);
@@ -571,7 +604,9 @@ export default function DevisFactures() {
 
   const downloadPrintFile = (htmlContent, titleDocument, numero) => {
     try {
-      const blob = new Blob([htmlContent], { type: "text/html;charset=utf-8" });
+      const blob = new Blob([htmlContent], {
+        type: "text/html;charset=utf-8",
+      });
       const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
 
@@ -729,7 +764,9 @@ export default function DevisFactures() {
                 </div>
                 <div class="info-card">
                   <div class="info-label">🛍️ Nombre d'articles</div>
-                  <div class="info-value">${articles.length} article${articles.length > 1 ? "s" : ""}</div>
+                  <div class="info-value">${
+                    articles.length
+                  } article${articles.length > 1 ? "s" : ""}</div>
                 </div>
               </div>
 
@@ -752,10 +789,15 @@ export default function DevisFactures() {
                       <tr>
                         <td class="product-name">${a.produit || ""}</td>
                         <td><span class="quantity-cell">${a.quantite || 0}</span></td>
-                        <td class="price-cell">${Number(a.prixUnitaire || 0).toFixed(2)} DHS</td>
-                        <td class="discount-cell">${Number(a.remise || 0).toFixed(2)} DHS</td>
+                        <td class="price-cell">${Number(
+                          a.prixUnitaire || 0
+                        ).toFixed(2)} DHS</td>
+                        <td class="discount-cell">${Number(
+                          a.remise || 0
+                        ).toFixed(2)} DHS</td>
                         <td class="total-cell">${(
-                          (a.quantite || 0) * (a.prixUnitaire || 0) - (a.remise || 0)
+                          (a.quantite || 0) * (a.prixUnitaire || 0) -
+                          (a.remise || 0)
                         ).toFixed(2)} DHS</td>
                       </tr>`
                       )
@@ -781,7 +823,11 @@ export default function DevisFactures() {
               <div class="amount-in-words-section">
                 <div class="amount-words-content">
                   <div class="amount-words-label">
-                    ${isFacture ? "Arrêté la présente facture" : "Arrêté le présent devis"} à la somme de :
+                    ${
+                      isFacture
+                        ? "Arrêté la présente facture"
+                        : "Arrêté le présent devis"
+                    } à la somme de :
                   </div>
                   <div class="amount-words-text">
   ${convertirNombreEnLettres(total).toUpperCase()} TTC
@@ -800,9 +846,13 @@ export default function DevisFactures() {
             </div>
 
             <div class="footer-section">
-              <div class="footer-message">${parametres.pied || "Merci de votre confiance ! 🙏"}</div>
+              <div class="footer-message">${
+                parametres.pied || "Merci de votre confiance ! 🙏"
+              }</div>
               <div class="print-info">
-                ${titleDocument} généré${isFacture ? "e" : ""} le ${new Date().toLocaleString("fr-FR")} par ${
+                ${titleDocument} généré${
+      isFacture ? "e" : ""
+    } le ${new Date().toLocaleString("fr-FR")} par ${
       (typeof window !== "undefined" && window?.CURRENT_USER_EMAIL) || ""
     }
               </div>
@@ -832,11 +882,15 @@ export default function DevisFactures() {
       const clientName = bons[0].client || "";
       const arts = bons.flatMap((b) => b.articles || []);
       const total = arts.reduce(
-        (sum, a) => sum + ((a.prixUnitaire || 0) * (a.quantite || 0) - (a.remise || 0)),
+        (sum, a) =>
+          sum +
+          ((a.prixUnitaire || 0) * (a.quantite || 0) - (a.remise || 0)),
         0
       );
 
-      const snap = await getDocs(collection(db, "societe", societeId, "devisFactures"));
+      const snap = await getDocs(
+        collection(db, "societe", societeId, "devisFactures")
+      );
       const arr = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
       const numero = generateNumero(arr, "FACT");
 
@@ -855,11 +909,17 @@ export default function DevisFactures() {
         societeId,
       };
 
-      await addDoc(collection(db, "societe", societeId, "devisFactures"), newFacture);
+      await addDoc(
+        collection(db, "societe", societeId, "devisFactures"),
+        newFacture
+      );
       setSelectedBons([]);
       fetchAll();
       handlePrintDoc(newFacture);
-      showNotification(`Facture groupée créée avec succès! (${selectedBons.length} bons)`, "success");
+      showNotification(
+        `Facture groupée créée avec succès! (${selectedBons.length} bons)`,
+        "success"
+      );
     } catch (error) {
       console.error("Erreur génération facture:", error);
       showNotification("Erreur lors de la génération de facture", "error");
@@ -872,7 +932,10 @@ export default function DevisFactures() {
   const filteredDocuments = documents.filter((d) => {
     let pass = true;
     if (filtreType && d.type !== filtreType) pass = false;
-    if (filtreClient && !(d.client || "").toLowerCase().includes(filtreClient.toLowerCase()))
+    if (
+      filtreClient &&
+      !(d.client || "").toLowerCase().includes(filtreClient.toLowerCase())
+    )
       pass = false;
 
     const dd = toJsDate(d.date);
@@ -900,7 +963,9 @@ export default function DevisFactures() {
     mainCard: {
       background: "white",
       borderRadius: isMobile ? "15px" : "25px",
-      boxShadow: isMobile ? "0 15px 30px rgba(0,0,0,0.1)" : "0 30px 60px rgba(0,0,0,0.15)",
+      boxShadow: isMobile
+        ? "0 15px 30px rgba(0,0,0,0.1)"
+        : "0 30px 60px rgba(0,0,0,0.15)",
       overflow: "hidden",
       margin: "0 auto",
       maxWidth: isMobile ? "100%" : isTablet ? "95%" : "1500px",
@@ -1058,7 +1123,11 @@ export default function DevisFactures() {
     },
     mobileFormGrid: {
       display: "grid",
-      gridTemplateColumns: isMobile ? "1fr" : isTablet ? "1fr 1fr" : "repeat(auto-fit, minmax(200px, 1fr))",
+      gridTemplateColumns: isMobile
+        ? "1fr"
+        : isTablet
+        ? "1fr 1fr"
+        : "repeat(auto-fit, minmax(200px, 1fr))",
       gap: isMobile ? "15px" : "25px",
       marginBottom: isMobile ? "20px" : "30px",
     },
@@ -1210,11 +1279,17 @@ export default function DevisFactures() {
   return (
     <div style={styles.container}>
       <div style={styles.mainCard}>
-        {isLoading && <div style={styles.loadingOverlay}>🔄 Traitement des documents en cours...</div>}
+        {isLoading && (
+          <div style={styles.loadingOverlay}>
+            🔄 Traitement des documents en cours...
+          </div>
+        )}
 
         <div style={styles.header}>
           <h1 style={styles.title}>📋 Devis & Factures Multi-Lots</h1>
-          <p style={styles.subtitle}>Gestion professionnelle avec cachet personnalisé et traçabilité</p>
+          <p style={styles.subtitle}>
+            Gestion professionnelle avec cachet personnalisé et traçabilité
+          </p>
         </div>
 
         <div style={styles.content}>
@@ -1236,11 +1311,14 @@ export default function DevisFactures() {
                 margin: "0 0 5px 0",
               }}
             >
-              📋 <strong>Documents Multi-Lots Professionnels</strong> - Cachet personnalisé inclus + Montant en lettres
+              📋 <strong>Documents Multi-Lots Professionnels</strong> - Cachet
+              personnalisé inclus + Montant en lettres
             </p>
-            <p style={{ color: "#4a5568", fontSize: "0.9em", margin: 0 }}>
-              📊 {documents.length} documents • Impression optimisée • Signature numérique • Conversion automatique en
-              lettres
+            <p
+              style={{ color: "#4a5568", fontSize: "0.9em", margin: 0 }}
+            >
+              📊 {documents.length} documents • Impression optimisée • Signature
+              numérique • Conversion automatique en lettres
             </p>
           </div>
 
@@ -1255,11 +1333,25 @@ export default function DevisFactures() {
                 textAlign: "center",
               }}
             >
-              <p style={{ color: "#2d3748", fontSize: "0.9em", fontWeight: 600, margin: "0 0 5px 0" }}>
+              <p
+                style={{
+                  color: "#2d3748",
+                  fontSize: "0.9em",
+                  fontWeight: 600,
+                  margin: "0 0 5px 0",
+                }}
+              >
                 📱 <strong>Mode Mobile Optimisé</strong>
               </p>
-              <p style={{ color: "#4a5568", fontSize: "0.8em", margin: 0 }}>
-                Sur mobile, l'impression téléchargera le document. Ouvrez-le ensuite pour imprimer.
+              <p
+                style={{
+                  color: "#4a5568",
+                  fontSize: "0.8em",
+                  margin: 0,
+                }}
+              >
+                Sur mobile, l'impression téléchargera le document. Ouvrez-le
+                ensuite pour imprimer.
               </p>
             </div>
           )}
@@ -1293,14 +1385,19 @@ export default function DevisFactures() {
                 letterSpacing: isMobile ? "1px" : "2px",
               }}
             >
-              {isEditing ? "✏️ Modification" : "➕ Création"} de Document Multi-Lots
+              {isEditing ? "✏️ Modification" : "➕ Création"} de Document
+              Multi-Lots
             </h3>
 
             {/* Infos générales */}
             <div style={styles.mobileFormGrid}>
               <div style={styles.inputGroup}>
                 <label style={styles.label}>Type de document</label>
-                <select style={styles.input} value={type} onChange={(e) => setType(e.target.value)}>
+                <select
+                  style={styles.input}
+                  value={type}
+                  onChange={(e) => setType(e.target.value)}
+                >
                   <option value="FACT">📄 Facture</option>
                   <option value="DEV">📋 Devis</option>
                 </select>
@@ -1332,7 +1429,11 @@ export default function DevisFactures() {
               <div style={styles.inputGroup}>
                 <label style={styles.label}>Numéro auto</label>
                 <input
-                  style={{ ...styles.input, background: "#f8fafc", color: "#4a5568" }}
+                  style={{
+                    ...styles.input,
+                    background: "#f8fafc",
+                    color: "#4a5568",
+                  }}
                   type="text"
                   value={numeroAuto}
                   disabled
@@ -1343,7 +1444,8 @@ export default function DevisFactures() {
             {/* Ajout d'articles */}
             <div
               style={{
-                background: "linear-gradient(135deg, #edf2f7 0%, #e2e8f0 100%)",
+                background:
+                  "linear-gradient(135deg, #edf2f7 0%, #e2e8f0 100%)",
                 padding: isMobile ? "20px 15px" : "30px",
                 borderRadius: isMobile ? "15px" : "20px",
                 marginBottom: isMobile ? "20px" : "30px",
@@ -1420,7 +1522,11 @@ export default function DevisFactures() {
                 <div style={{ textAlign: "center" }}>
                   <button
                     type="submit"
-                    style={{ ...styles.button, ...styles.successButton, width: isMobile ? "100%" : "auto" }}
+                    style={{
+                      ...styles.button,
+                      ...styles.successButton,
+                      width: isMobile ? "100%" : "auto",
+                    }}
                     title="Ajouter cet article"
                   >
                     ➕ Ajouter Article
@@ -1431,7 +1537,11 @@ export default function DevisFactures() {
 
             {/* Tableau d'articles */}
             {articles.length > 0 && (
-              <div style={{ marginBottom: isMobile ? "20px" : "30px" }}>
+              <div
+                style={{
+                  marginBottom: isMobile ? "20px" : "30px",
+                }}
+              >
                 <h4
                   style={{
                     color: "#2d3748",
@@ -1441,52 +1551,154 @@ export default function DevisFactures() {
                     textAlign: "center",
                   }}
                 >
-                   📦 Articles du Document Multi-Lots ({articles.length})
+                  📦 Articles du Document Multi-Lots ({articles.length})
                 </h4>
-                
+
                 <div style={styles.mobileTableContainer}>
                   <table style={styles.table}>
                     <thead style={styles.tableHeader}>
                       <tr>
-                        <th style={{...styles.tableCell, color: 'white'}}>Produit</th>
-                        <th style={{...styles.tableCell, color: 'white'}}>Qté</th>
-                        {!isMobile && <th style={{...styles.tableCell, color: 'white'}}>Prix Unit.</th>}
-                        {!isMobile && <th style={{...styles.tableCell, color: 'white'}}>Remise</th>}
-                        <th style={{...styles.tableCell, color: 'white'}}>Total</th>
-                        <th style={{...styles.tableCell, color: 'white'}}>Action</th>
+                        <th
+                          style={{ ...styles.tableCell, color: "white" }}
+                        >
+                          Produit
+                        </th>
+                        <th
+                          style={{ ...styles.tableCell, color: "white" }}
+                        >
+                          Qté
+                        </th>
+                        {!isMobile && (
+                          <th
+                            style={{
+                              ...styles.tableCell,
+                              color: "white",
+                            }}
+                          >
+                            Prix Unit.
+                          </th>
+                        )}
+                        {!isMobile && (
+                          <th
+                            style={{
+                              ...styles.tableCell,
+                              color: "white",
+                            }}
+                          >
+                            Remise
+                          </th>
+                        )}
+                        <th
+                          style={{ ...styles.tableCell, color: "white" }}
+                        >
+                          Total
+                        </th>
+                        <th
+                          style={{ ...styles.tableCell, color: "white" }}
+                        >
+                          Action
+                        </th>
                       </tr>
                     </thead>
                     <tbody>
                       {articles.map((a, i) => (
-                        <tr key={i} style={{ 
-                          background: i % 2 === 0 ? "#f8fafc" : "white",
-                          transition: "all 0.3s ease"
-                        }}>
-                          <td style={{...styles.tableCell, fontWeight: 700, color: "#2d3748", textAlign: "left"}}>
+                        <tr
+                          key={i}
+                          style={{
+                            background:
+                              i % 2 === 0 ? "#f8fafc" : "white",
+                            transition: "all 0.3s ease",
+                          }}
+                        >
+                          <td
+                            style={{
+                              ...styles.tableCell,
+                              fontWeight: 700,
+                              color: "#2d3748",
+                              textAlign: "left",
+                            }}
+                          >
                             {a.produit}
                             {isMobile && (
-                              <div style={{ fontSize: "0.7em", color: "#6b7280", marginTop: "2px" }}>
-                                {Number(a.prixUnitaire || 0).toFixed(2)} DHS × {a.quantite}
-                                {Number(a.remise || 0) > 0 && ` - ${Number(a.remise || 0).toFixed(2)} DHS`}
+                              <div
+                                style={{
+                                  fontSize: "0.7em",
+                                  color: "#6b7280",
+                                  marginTop: "2px",
+                                }}
+                              >
+                                {Number(
+                                  a.prixUnitaire || 0
+                                ).toFixed(2)}{" "}
+                                DHS × {a.quantite}
+                                {Number(a.remise || 0) > 0 &&
+                                  ` - ${Number(
+                                    a.remise || 0
+                                  ).toFixed(2)} DHS`}
                               </div>
                             )}
                           </td>
-                          <td style={{...styles.tableCell, color: "#667eea", fontWeight: 700}}>{a.quantite}</td>
-                          {!isMobile && <td style={{...styles.tableCell, color: "#667eea", fontWeight: 700}}>{Number(a.prixUnitaire || 0).toFixed(2)} DHS</td>}
-                          {!isMobile && <td style={{...styles.tableCell, color: "#e53e3e", fontWeight: 700}}>{Number(a.remise || 0).toFixed(2)} DHS</td>}
-                          <td style={{...styles.tableCell, color: "#48bb78", fontWeight: 800, fontSize: isMobile ? "0.9em" : "1.1em"}}>
-                            {(Number(a.quantite || 0) * Number(a.prixUnitaire || 0) - Number(a.remise || 0)).toFixed(2)} DHS
+                          <td
+                            style={{
+                              ...styles.tableCell,
+                              color: "#667eea",
+                              fontWeight: 700,
+                            }}
+                          >
+                            {a.quantite}
+                          </td>
+                          {!isMobile && (
+                            <td
+                              style={{
+                                ...styles.tableCell,
+                                color: "#667eea",
+                                fontWeight: 700,
+                              }}
+                            >
+                              {Number(
+                                a.prixUnitaire || 0
+                              ).toFixed(2)}{" "}
+                              DHS
+                            </td>
+                          )}
+                          {!isMobile && (
+                            <td
+                              style={{
+                                ...styles.tableCell,
+                                color: "#e53e3e",
+                                fontWeight: 700,
+                              }}
+                            >
+                              {Number(a.remise || 0).toFixed(2)} DHS
+                            </td>
+                          )}
+                          <td
+                            style={{
+                              ...styles.tableCell,
+                              color: "#48bb78",
+                              fontWeight: 800,
+                              fontSize: isMobile ? "0.9em" : "1.1em",
+                            }}
+                          >
+                            {(
+                              Number(a.quantite || 0) *
+                                Number(a.prixUnitaire || 0) -
+                              Number(a.remise || 0)
+                            ).toFixed(2)}{" "}
+                            DHS
                           </td>
                           <td style={styles.tableCell}>
                             <button
                               onClick={() => handleRemoveArticle(i)}
                               style={{
-                                ...styles.button, 
-                                ...styles.dangerButton, 
-                                padding: isMobile ? "6px 12px" : "8px 16px", 
+                                ...styles.button,
+                                ...styles.dangerButton,
+                                padding: isMobile
+                                  ? "6px 12px"
+                                  : "8px 16px",
                                 fontSize: "0.8em",
                                 minWidth: isMobile ? "44px" : "auto",
-                                minHeight: isMobile ? "44px" : "auto"
+                                minHeight: isMobile ? "44px" : "auto",
                               }}
                               title="Supprimer cet article"
                             >
@@ -1495,15 +1707,42 @@ export default function DevisFactures() {
                           </td>
                         </tr>
                       ))}
-                      <tr style={{ 
-                        background: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)", 
-                        color: "white"
-                      }}>
-                        <td colSpan={isMobile ? 3 : 4} style={{...styles.tableCell, fontWeight: 800, fontSize: isMobile ? "1em" : "1.2em"}}>
+                      <tr
+                        style={{
+                          background:
+                            "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
+                          color: "white",
+                        }}
+                      >
+                        <td
+                          colSpan={isMobile ? 3 : 4}
+                          style={{
+                            ...styles.tableCell,
+                            fontWeight: 800,
+                            fontSize: isMobile ? "1em" : "1.2em",
+                          }}
+                        >
                           💰 TOTAL {type === "FACT" ? "FACTURE" : "DEVIS"}
                         </td>
-                        <td colSpan={2} style={{...styles.tableCell, fontWeight: 900, fontSize: isMobile ? "1.1em" : "1.3em"}}>
-                          {articles.reduce((sum, a) => sum + (Number(a.quantite || 0) * Number(a.prixUnitaire || 0) - Number(a.remise || 0)), 0).toFixed(2)} DHS
+                        <td
+                          colSpan={2}
+                          style={{
+                            ...styles.tableCell,
+                            fontWeight: 900,
+                            fontSize: isMobile ? "1.1em" : "1.3em",
+                          }}
+                        >
+                          {articles
+                            .reduce(
+                              (sum, a) =>
+                                sum +
+                                (Number(a.quantite || 0) *
+                                  Number(a.prixUnitaire || 0) -
+                                  Number(a.remise || 0)),
+                              0
+                            )
+                            .toFixed(2)}{" "}
+                          DHS
                         </td>
                       </tr>
                     </tbody>
@@ -1516,23 +1755,46 @@ export default function DevisFactures() {
             <div style={styles.mobileActionButtons}>
               <button
                 onClick={handleSaveDoc}
-                disabled={!client || !date || articles.length === 0 || isLoading}
+                disabled={
+                  !client || !date || articles.length === 0 || isLoading
+                }
                 style={{
                   ...styles.button,
-                  ...(isEditing ? styles.warningButton : styles.successButton),
-                  opacity: (articles.length > 0 && !isLoading) ? 1 : 0.5,
-                  cursor: (articles.length > 0 && !isLoading) ? "pointer" : "not-allowed",
-                  width: isMobile ? "100%" : "auto"
+                  ...(isEditing
+                    ? styles.warningButton
+                    : styles.successButton),
+                  opacity:
+                    articles.length > 0 && !isLoading ? 1 : 0.5,
+                  cursor:
+                    articles.length > 0 && !isLoading
+                      ? "pointer"
+                      : "not-allowed",
+                  width: isMobile ? "100%" : "auto",
                 }}
-                title={isEditing ? "Enregistrer les modifications" : `Créer le ${type === "FACT" ? "facture" : "devis"}`}
+                title={
+                  isEditing
+                    ? "Enregistrer les modifications"
+                    : `Créer le ${
+                        type === "FACT" ? "facture" : "devis"
+                      }`
+                }
               >
-                {isLoading ? "⏳ Traitement..." : isEditing ? "✏️ Modifier" : "💾 Créer"} {type === "FACT" ? "Facture" : "Devis"}
+                {isLoading
+                  ? "⏳ Traitement..."
+                  : isEditing
+                  ? "✏️ Modifier"
+                  : "💾 Créer"}{" "}
+                {type === "FACT" ? "Facture" : "Devis"}
               </button>
-              
+
               {isEditing && (
                 <button
                   onClick={resetForm}
-                  style={{...styles.button, ...styles.infoButton, width: isMobile ? "100%" : "auto"}}
+                  style={{
+                    ...styles.button,
+                    ...styles.infoButton,
+                    width: isMobile ? "100%" : "auto",
+                  }}
                   title="Annuler les modifications"
                 >
                   ❌ Annuler
@@ -1542,15 +1804,23 @@ export default function DevisFactures() {
           </div>
 
           {/* Toggle Filtres */}
-          <div style={{ display: "flex", alignItems: "center", gap: "15px", marginBottom: "25px", flexWrap: "wrap" }}>
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "15px",
+              marginBottom: "25px",
+              flexWrap: "wrap",
+            }}
+          >
             <button
               style={{
                 ...styles.toggleButton,
-                background: showFiltres 
+                background: showFiltres
                   ? "linear-gradient(135deg, #f56565 0%, #e53e3e 100%)"
-                  : "linear-gradient(135deg, #4299e1 0%, #3182ce 100%)"
+                  : "linear-gradient(135deg, #4299e1 0%, #3182ce 100%)",
               }}
-              onClick={() => setShowFiltres(v => !v)}
+              onClick={() => setShowFiltres((v) => !v)}
             >
               {showFiltres ? "➖ Masquer" : "🔍 Afficher"} les filtres
             </button>
@@ -1559,26 +1829,32 @@ export default function DevisFactures() {
           {/* Filtres */}
           {showFiltres && (
             <div style={styles.formCard}>
-              <h4 style={{
-                color: "#2d3748",
-                fontSize: isMobile ? "1.1em" : "1.3em",
-                fontWeight: 700,
-                marginBottom: isMobile ? "20px" : "25px",
-                textAlign: "center"
-              }}>
+              <h4
+                style={{
+                  color: "#2d3748",
+                  fontSize: isMobile ? "1.1em" : "1.3em",
+                  fontWeight: 700,
+                  marginBottom: isMobile ? "20px" : "25px",
+                  textAlign: "center",
+                }}
+              >
                 🔍 Filtres de Recherche Multi-Lots
               </h4>
-              
+
               <div style={styles.mobileFormGrid}>
                 <div style={styles.inputGroup}>
                   <label style={styles.label}>Type</label>
-                  <select style={styles.input} value={filtreType} onChange={e => setFiltreType(e.target.value)}>
+                  <select
+                    style={styles.input}
+                    value={filtreType}
+                    onChange={(e) => setFiltreType(e.target.value)}
+                  >
                     <option value="">📋 Tous</option>
                     <option value="FACT">📄 Factures</option>
                     <option value="DEV">📋 Devis</option>
                   </select>
                 </div>
-                
+
                 <div style={styles.inputGroup}>
                   <label style={styles.label}>Client</label>
                   <input
@@ -1586,33 +1862,41 @@ export default function DevisFactures() {
                     type="text"
                     placeholder="Rechercher un client..."
                     value={filtreClient}
-                    onChange={e => setFiltreClient(e.target.value)}
+                    onChange={(e) => setFiltreClient(e.target.value)}
                   />
                 </div>
-                
+
                 <div style={styles.inputGroup}>
                   <label style={styles.label}>Date début</label>
                   <input
                     style={styles.input}
                     type="date"
                     value={filtreDateMin}
-                    onChange={e => setFiltreDateMin(e.target.value)}
+                    onChange={(e) => setFiltreDateMin(e.target.value)}
                   />
                 </div>
-                
+
                 <div style={styles.inputGroup}>
                   <label style={styles.label}>Date fin</label>
                   <input
                     style={styles.input}
                     type="date"
                     value={filtreDateMax}
-                    onChange={e => setFiltreDateMax(e.target.value)}
+                    onChange={(e) => setFiltreDateMax(e.target.value)}
                   />
                 </div>
               </div>
-                
-              {(filtreType || filtreClient || filtreDateMin || filtreDateMax) && (
-                <div style={{ textAlign: "center", marginTop: "20px" }}>
+
+              {(filtreType ||
+                filtreClient ||
+                filtreDateMin ||
+                filtreDateMax) && (
+                <div
+                  style={{
+                    textAlign: "center",
+                    marginTop: "20px",
+                  }}
+                >
                   <button
                     onClick={() => {
                       setFiltreType("");
@@ -1620,7 +1904,11 @@ export default function DevisFactures() {
                       setFiltreDateMin("");
                       setFiltreDateMax("");
                     }}
-                    style={{...styles.button, ...styles.dangerButton, width: isMobile ? "100%" : "auto"}}
+                    style={{
+                      ...styles.button,
+                      ...styles.dangerButton,
+                      width: isMobile ? "100%" : "auto",
+                    }}
                   >
                     🔄 Réinitialiser
                   </button>
@@ -1634,134 +1922,281 @@ export default function DevisFactures() {
             <h2 style={styles.sectionTitle}>
               📋 Historique Multi-Lots ({filteredDocuments.length})
             </h2>
-            
-            <div style={{
-              display: "flex",
-              flexDirection: isMobile ? "column" : "row",
-              justifyContent: "space-between",
-              alignItems: isMobile ? "stretch" : "center",
-              gap: isMobile ? "10px" : "0",
-              marginBottom: "20px",
-              padding: isMobile ? "15px" : "20px",
-              background: "linear-gradient(135deg, #edf2f7 0%, #e2e8f0 100%)",
-              borderRadius: "15px",
-              border: "2px solid #cbd5e0"
-            }}>
-              <span style={{ fontWeight: 700, color: "#4a5568", fontSize: isMobile ? "0.9em" : "1em" }}>
-                💰 Total affiché: {filteredDocuments.reduce((sum, doc) => 
-                  sum + (doc.articles || []).reduce((s, a) => s + (Number(a.quantite || 0) * Number(a.prixUnitaire || 0) - Number(a.remise || 0)), 0), 0
-                ).toFixed(2)} DHS
+
+            <div
+              style={{
+                display: "flex",
+                flexDirection: isMobile ? "column" : "row",
+                justifyContent: "space-between",
+                alignItems: isMobile ? "stretch" : "center",
+                gap: isMobile ? "10px" : "0",
+                marginBottom: "20px",
+                padding: isMobile ? "15px" : "20px",
+                background:
+                  "linear-gradient(135deg, #edf2f7 0%, #e2e8f0 100%)",
+                borderRadius: "15px",
+                border: "2px solid #cbd5e0",
+              }}
+            >
+              <span
+                style={{
+                  fontWeight: 700,
+                  color: "#4a5568",
+                  fontSize: isMobile ? "0.9em" : "1em",
+                }}
+              >
+                💰 Total affiché:{" "}
+                {filteredDocuments
+                  .reduce(
+                    (sum, docu) =>
+                      sum +
+                      (docu.articles || []).reduce(
+                        (s, a) =>
+                          s +
+                          (Number(a.quantite || 0) *
+                            Number(a.prixUnitaire || 0) -
+                            Number(a.remise || 0)),
+                        0
+                      ),
+                    0
+                  )
+                  .toFixed(2)}{" "}
+                DHS
               </span>
-              <span style={{ fontWeight: 600, color: "#6b7280", fontSize: isMobile ? "0.8em" : "1em" }}>
-                📊 {filteredDocuments.filter(d => d.type === "FACT").length} factures • {filteredDocuments.filter(d => d.type === "DEV").length} devis
+              <span
+                style={{
+                  fontWeight: 600,
+                  color: "#6b7280",
+                  fontSize: isMobile ? "0.8em" : "1em",
+                }}
+              >
+                📊{" "}
+                {
+                  filteredDocuments.filter((d) => d.type === "FACT")
+                    .length
+                }{" "}
+                factures •{" "}
+                {
+                  filteredDocuments.filter((d) => d.type === "DEV")
+                    .length
+                }{" "}
+                devis
               </span>
             </div>
-            
+
             <div style={styles.mobileTableContainer}>
               <table style={styles.table}>
                 <thead style={styles.tableHeader}>
                   <tr>
-                    <th style={{...styles.tableCell, color: 'white'}}>Type</th>
-                    {!isMobile && <th style={{...styles.tableCell, color: 'white'}}>Numéro</th>}
-                    <th style={{...styles.tableCell, color: 'white'}}>Date</th>
-                    <th style={{...styles.tableCell, color: 'white'}}>Client</th>
-                    <th style={{...styles.tableCell, color: 'white'}}>Total</th>
-                    <th style={{...styles.tableCell, color: 'white'}}>Actions</th>
+                    <th
+                      style={{ ...styles.tableCell, color: "white" }}
+                    >
+                      Type
+                    </th>
+                    {!isMobile && (
+                      <th
+                        style={{
+                          ...styles.tableCell,
+                          color: "white",
+                        }}
+                      >
+                        Numéro
+                      </th>
+                    )}
+                    <th
+                      style={{ ...styles.tableCell, color: "white" }}
+                    >
+                      Date
+                    </th>
+                    <th
+                      style={{ ...styles.tableCell, color: "white" }}
+                    >
+                      Client
+                    </th>
+                    <th
+                      style={{ ...styles.tableCell, color: "white" }}
+                    >
+                      Total
+                    </th>
+                    <th
+                      style={{ ...styles.tableCell, color: "white" }}
+                    >
+                      Actions
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
                   {filteredDocuments.length === 0 ? (
                     <tr>
-                      <td colSpan={isMobile ? 5 : 6} style={{ 
-                        padding: isMobile ? "30px 15px" : "50px", 
-                        textAlign: "center",
-                        color: "#6b7280",
-                        fontSize: isMobile ? "1em" : "1.2em",
-                        fontStyle: "italic"
-                      }}>
-                        {documents.length === 0 
+                      <td
+                        colSpan={isMobile ? 5 : 6}
+                        style={{
+                          padding: isMobile ? "30px 15px" : "50px",
+                          textAlign: "center",
+                          color: "#6b7280",
+                          fontSize: isMobile ? "1em" : "1.2em",
+                          fontStyle: "italic",
+                        }}
+                      >
+                        {documents.length === 0
                           ? "Aucun document créé pour le moment 📝"
                           : "Aucun document ne correspond aux critères 🔍"}
                       </td>
                     </tr>
                   ) : (
                     filteredDocuments.map((docData, index) => {
-                      const total = (docData.articles || []).reduce((s, a) =>
-                        s + (Number(a.quantite || 0) * Number(a.prixUnitaire || 0) - Number(a.remise || 0)), 0);
+                      const total = (docData.articles || []).reduce(
+                        (s, a) =>
+                          s +
+                          (Number(a.quantite || 0) *
+                            Number(a.prixUnitaire || 0) -
+                            Number(a.remise || 0)),
+                        0
+                      );
 
-                      const clientName = docData.client || "Client inconnu";
-                      const clientShort = clientName.substring(0, 15) + (clientName.length > 15 ? "..." : "");
+                      const clientName =
+                        docData.client || "Client inconnu";
+                      const clientShort =
+                        clientName.substring(0, 15) +
+                        (clientName.length > 15 ? "..." : "");
 
                       return (
-                        <tr key={docData.id} style={{ 
-                          background: index % 2 === 0 ? "#f8fafc" : "white",
-                          transition: "all 0.3s ease"
-                        }}>
+                        <tr
+                          key={docData.id}
+                          style={{
+                            background:
+                              index % 2 === 0 ? "#f8fafc" : "white",
+                            transition: "all 0.3s ease",
+                          }}
+                        >
                           <td style={styles.tableCell}>
-                            <span style={{
-                              padding: isMobile ? "4px 8px" : "8px 16px",
-                              borderRadius: isMobile ? "15px" : "20px",
-                              fontSize: isMobile ? "0.7em" : "0.85em",
-                              fontWeight: 700,
-                              textTransform: "uppercase",
-                              letterSpacing: "1px",
-                              background: docData.type === "FACT" 
-                                ? "linear-gradient(135deg, #667eea 0%, #764ba2 100%)" 
-                                : "linear-gradient(135deg, #48bb78 0%, #38a169 100%)",
-                              color: "white"
-                            }}>
-                              {isMobile ? (docData.type === "FACT" ? "📄" : "📋") : (docData.type === "FACT" ? "📄 Facture" : "📋 Devis")}
+                            <span
+                              style={{
+                                padding: isMobile
+                                  ? "4px 8px"
+                                  : "8px 16px",
+                                borderRadius: isMobile
+                                  ? "15px"
+                                  : "20px",
+                                fontSize: isMobile
+                                  ? "0.7em"
+                                  : "0.85em",
+                                fontWeight: 700,
+                                textTransform: "uppercase",
+                                letterSpacing: "1px",
+                                background:
+                                  docData.type === "FACT"
+                                    ? "linear-gradient(135deg, #667eea 0%, #764ba2 100%)"
+                                    : "linear-gradient(135deg, #48bb78 0%, #38a169 100%)",
+                                color: "white",
+                              }}
+                            >
+                              {isMobile
+                                ? docData.type === "FACT"
+                                  ? "📄"
+                                  : "📋"
+                                : docData.type === "FACT"
+                                ? "📄 Facture"
+                                : "📋 Devis"}
                             </span>
                             {isMobile && (
-                              <div style={{ fontSize: "0.7em", color: "#6b7280", marginTop: "2px" }}>
+                              <div
+                                style={{
+                                  fontSize: "0.7em",
+                                  color: "#6b7280",
+                                  marginTop: "2px",
+                                }}
+                              >
                                 N° {docData.numero}
                               </div>
                             )}
                           </td>
                           {!isMobile && (
-                            <td style={{...styles.tableCell, fontWeight: 800, color: "#2d3748"}}>
+                            <td
+                              style={{
+                                ...styles.tableCell,
+                                fontWeight: 800,
+                                color: "#2d3748",
+                              }}
+                            >
                               {docData.numero}
                             </td>
                           )}
-                          <td style={{...styles.tableCell, color: "#4a5568", fontSize: isMobile ? "0.8em" : "1em"}}>
+                          <td
+                            style={{
+                              ...styles.tableCell,
+                              color: "#4a5568",
+                              fontSize: isMobile ? "0.8em" : "1em",
+                            }}
+                          >
                             {formatDateFR(docData.date, "—")}
                           </td>
-                          <td style={{...styles.tableCell, fontWeight: 600, color: "#2d3748", textAlign: "left"}}>
+                          <td
+                            style={{
+                              ...styles.tableCell,
+                              fontWeight: 600,
+                              color: "#2d3748",
+                              textAlign: "left",
+                            }}
+                          >
                             {isMobile ? clientShort : clientName}
                           </td>
-                          <td style={{ 
-                            ...styles.tableCell, 
-                            fontWeight: 800, 
-                            textAlign: "right",
-                            color: "#48bb78",
-                            fontSize: isMobile ? "0.9em" : "1.1em"
-                          }}>
+                          <td
+                            style={{
+                              ...styles.tableCell,
+                              fontWeight: 800,
+                              textAlign: "right",
+                              color: "#48bb78",
+                              fontSize: isMobile ? "0.9em" : "1.1em",
+                            }}
+                          >
                             {total.toFixed(2)} DHS
                           </td>
                           <td style={styles.tableCell}>
                             <div style={styles.mobileActionButtons}>
                               <button
                                 style={{
-                                  ...styles.button, 
-                                  background: "linear-gradient(135deg, #805ad5 0%, #6b46c1 100%)", 
-                                  padding: isMobile ? "8px 12px" : "8px 12px", 
-                                  fontSize: isMobile ? "0.8em" : "0.8em",
+                                  ...styles.button,
+                                  background:
+                                    "linear-gradient(135deg, #805ad5 0%, #6b46c1 100%)",
+                                  padding: isMobile
+                                    ? "8px 12px"
+                                    : "8px 12px",
+                                  fontSize: isMobile
+                                    ? "0.8em"
+                                    : "0.8em",
                                 }}
-                                title={`Imprimer ${docData.type === "FACT" ? "Facture" : "Devis"} avec cachet ${parametres.typeCachet === "image" ? "image" : "texte"}`}
-                                onClick={() => handlePrintDoc(docData)}
+                                title={`Imprimer ${
+                                  docData.type === "FACT"
+                                    ? "Facture"
+                                    : "Devis"
+                                } avec cachet ${
+                                  parametres.typeCachet === "image"
+                                    ? "image"
+                                    : "texte"
+                                }`}
+                                onClick={() =>
+                                  handlePrintDoc(docData)
+                                }
                               >
                                 🖨️
                               </button>
                               {!docData.annulee && (
                                 <button
                                   style={{
-                                    ...styles.button, 
-                                    ...styles.warningButton, 
-                                    padding: isMobile ? "8px 12px" : "8px 12px", 
-                                    fontSize: isMobile ? "0.8em" : "0.8em",
+                                    ...styles.button,
+                                    ...styles.warningButton,
+                                    padding: isMobile
+                                      ? "8px 12px"
+                                      : "8px 12px",
+                                    fontSize: isMobile
+                                      ? "0.8em"
+                                      : "0.8em",
                                   }}
                                   title="Modifier"
-                                  onClick={() => handleEditDoc(docData)}
+                                  onClick={() =>
+                                    handleEditDoc(docData)
+                                  }
                                 >
                                   ✏️
                                 </button>
@@ -1769,13 +2204,19 @@ export default function DevisFactures() {
                               {!docData.annulee && (
                                 <button
                                   style={{
-                                    ...styles.button, 
-                                    ...styles.dangerButton, 
-                                    padding: isMobile ? "8px 12px" : "8px 12px", 
-                                    fontSize: isMobile ? "0.8em" : "0.8em",
+                                    ...styles.button,
+                                    ...styles.dangerButton,
+                                    padding: isMobile
+                                      ? "8px 12px"
+                                      : "8px 12px",
+                                    fontSize: isMobile
+                                      ? "0.8em"
+                                      : "0.8em",
                                   }}
                                   title="Supprimer"
-                                  onClick={() => handleDeleteDoc(docData.id)}
+                                  onClick={() =>
+                                    handleDeleteDoc(docData.id)
+                                  }
                                 >
                                   🗑️
                                 </button>
@@ -1796,182 +2237,312 @@ export default function DevisFactures() {
             <h2 style={styles.sectionTitle}>
               🧾 Facturation Groupée Multi-Lots
             </h2>
-            
-            <div style={{
-              background: "rgba(255,255,255,0.6)",
-              padding: isMobile ? "15px" : "20px",
-              borderRadius: "15px",
-              marginBottom: "20px",
-              textAlign: "center"
-            }}>
-              <p style={{ 
-                color: "#2d3748", 
-                fontSize: isMobile ? "0.9em" : "1em", 
-                fontWeight: 600,
-                margin: "0 0 5px 0"
-              }}>
-                📋 <strong>Génération de factures groupées</strong> à partir des bons de vente existants
+
+            <div
+              style={{
+                background: "rgba(255,255,255,0.6)",
+                padding: isMobile ? "15px" : "20px",
+                borderRadius: "15px",
+                marginBottom: "20px",
+                textAlign: "center",
+              }}
+            >
+              <p
+                style={{
+                  color: "#2d3748",
+                  fontSize: isMobile ? "0.9em" : "1em",
+                  fontWeight: 600,
+                  margin: "0 0 5px 0",
+                }}
+              >
+                📋 <strong>Génération de factures groupées</strong> à
+                partir des bons de vente existants
               </p>
-              <p style={{ 
-                color: "#4a5568", 
-                fontSize: isMobile ? "0.8em" : "0.9em", 
-                margin: 0
-              }}>
-                Sélectionnez les bons de vente non facturés pour créer une facture groupée
+              <p
+                style={{
+                  color: "#4a5568",
+                  fontSize: isMobile ? "0.8em" : "0.9em",
+                  margin: 0,
+                }}
+              >
+                Sélectionnez les bons de vente non facturés pour créer
+                une facture groupée
               </p>
             </div>
-            
+
             <div style={styles.mobileTableContainer}>
               <table style={styles.table}>
                 <thead style={styles.tableHeader}>
                   <tr>
-                    <th style={{...styles.tableCell, width: isMobile ? "40px" : "60px", color: 'white'}}>Sélection</th>
-                    <th style={{...styles.tableCell, color: 'white'}}>Client</th>
-                    {!isMobile && <th style={{...styles.tableCell, color: 'white'}}>Date</th>}
-                    <th style={{...styles.tableCell, color: 'white'}}>Articles</th>
-                    <th style={{...styles.tableCell, color: 'white'}}>Total</th>
+                    <th
+                      style={{
+                        ...styles.tableCell,
+                        width: isMobile ? "40px" : "60px",
+                        color: "white",
+                      }}
+                    >
+                      Sélection
+                    </th>
+                    <th
+                      style={{ ...styles.tableCell, color: "white" }}
+                    >
+                      Client
+                    </th>
+                    {!isMobile && (
+                      <th
+                        style={{
+                          ...styles.tableCell,
+                          color: "white",
+                        }}
+                      >
+                        Date
+                      </th>
+                    )}
+                    <th
+                      style={{ ...styles.tableCell, color: "white" }}
+                    >
+                      Articles
+                    </th>
+                    <th
+                      style={{ ...styles.tableCell, color: "white" }}
+                    >
+                      Total
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
-                  {ventes
-                    .filter((v) => !bonsFactures.includes(v.id))
+                  {ventes.filter((v) => !bonsFactures.includes(v.id))
                     .length === 0 ? (
-                      <tr>
-                        <td colSpan={isMobile ? 4 : 5} style={{ 
-                          padding: isMobile ? "30px 15px" : "50px", 
+                    <tr>
+                      <td
+                        colSpan={isMobile ? 4 : 5}
+                        style={{
+                          padding: isMobile ? "30px 15px" : "50px",
                           textAlign: "center",
                           color: "#6b7280",
                           fontSize: isMobile ? "1em" : "1.2em",
-                          fontStyle: "italic"
-                        }}>
-                          Aucun bon de vente disponible pour facturation 📋
-                        </td>
-                      </tr>
-                    ) : (
-                      ventes
-                        .filter((v) => !bonsFactures.includes(v.id))
-                        .map((v, index) => {
-                          const vClient = v.client || "Client";
-                          const vClientShort = vClient.substring(0, 12) + (vClient.length > 12 ? "..." : "");
-                          const vDateFR = formatDateFR(v.date, "—");
-                          const nbArticles = (v.articles || []).length;
+                          fontStyle: "italic",
+                        }}
+                      >
+                        Aucun bon de vente disponible pour
+                        facturation 📋
+                      </td>
+                    </tr>
+                  ) : (
+                    ventes
+                      .filter((v) => !bonsFactures.includes(v.id))
+                      .map((v, index) => {
+                        const vClient = v.client || "Client";
+                        const vClientShort =
+                          vClient.substring(0, 12) +
+                          (vClient.length > 12 ? "..." : "");
+                        const vDateFR = formatDateFR(v.date, "—");
+                        const nbArticles = (v.articles || []).length;
 
-                          const totalV = (v.articles || []).reduce(
-                            (sum, a) => sum + ((Number(a.prixUnitaire || 0)) * (Number(a.quantite || 0)) - (Number(a.remise || 0))),
-                            0
-                          );
+                        const totalV = (v.articles || []).reduce(
+                          (sum, a) =>
+                            sum +
+                            (Number(a.prixUnitaire || 0) *
+                              Number(a.quantite || 0) -
+                              Number(a.remise || 0)),
+                          0
+                        );
 
-                          return (
-                            <tr key={v.id} style={{
-                              background: selectedBons.includes(v.id) 
+                        return (
+                          <tr
+                            key={v.id}
+                            style={{
+                              background: selectedBons.includes(v.id)
                                 ? "linear-gradient(135deg, #e6fffa 0%, #b2f5ea 100%)"
-                                : index % 2 === 0 ? "#f8fafc" : "white",
+                                : index % 2 === 0
+                                ? "#f8fafc"
+                                : "white",
                               transition: "all 0.3s ease",
-                              transform: selectedBons.includes(v.id) ? "scale(1.02)" : "scale(1)"
-                            }}>
-                              <td style={{...styles.tableCell, textAlign: "center"}}>
-                                <input
-                                  type="checkbox"
-                                  checked={selectedBons.includes(v.id)}
-                                  onChange={() => toggleBonSelection(v.id)}
-                                  style={{ 
-                                    transform: isMobile ? "scale(1.3)" : "scale(1.5)", 
-                                    cursor: "pointer",
-                                    accentColor: "#667eea"
-                                  }}
-                                />
-                              </td>
-                              <td style={{...styles.tableCell, fontWeight: 600, color: "black", textAlign: "left"}}>
-                                {isMobile ? vClientShort : vClient}
-                                {isMobile && (
-                                  <div style={{ fontSize: "0.7em", color: "#6b7280", marginTop: "2px" }}>
-                                    {vDateFR}
-                                  </div>
-                                )}
-                              </td>
-                              {!isMobile && (
-                                <td style={styles.tableCell}>
-                                  {vDateFR}
-                                </td>
-                              )}
-                              <td style={styles.tableCell}>
-                                <span
+                              transform: selectedBons.includes(v.id)
+                                ? "scale(1.02)"
+                                : "scale(1)",
+                            }}
+                          >
+                            <td
+                              style={{
+                                ...styles.tableCell,
+                                textAlign: "center",
+                              }}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={selectedBons.includes(v.id)}
+                                onChange={() =>
+                                  toggleBonSelection(v.id)
+                                }
+                                style={{
+                                  transform: isMobile
+                                    ? "scale(1.3)"
+                                    : "scale(1.5)",
+                                  cursor: "pointer",
+                                  accentColor: "#667eea",
+                                }}
+                              />
+                            </td>
+                            <td
+                              style={{
+                                ...styles.tableCell,
+                                fontWeight: 600,
+                                color: "black",
+                                textAlign: "left",
+                              }}
+                            >
+                              {isMobile ? vClientShort : vClient}
+                              {isMobile && (
+                                <div
                                   style={{
-                                    background: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
-                                    color: "white",
-                                    padding: isMobile ? "4px 8px" : "6px 12px",
-                                    borderRadius: "15px",
-                                    fontSize: isMobile ? "0.7em" : "0.85em",
-                                    fontWeight: 600,
+                                    fontSize: "0.7em",
+                                    color: "#6b7280",
+                                    marginTop: "2px",
                                   }}
-                                  title={`${nbArticles} article(s)`}
                                 >
-                                  {nbArticles} article{nbArticles > 1 ? "s" : ""}
-                                </span>
-                              </td>
-                              <td style={{...styles.tableCell, textAlign: "right", fontWeight: 700, color: "#48bb78", fontSize: isMobile ? "0.9em" : "1.1em"}}>
-                                {totalV.toFixed(2)} DHS
-                              </td>
-                            </tr>
-                          );
-                        })
-                    )}
+                                  {vDateFR}
+                                </div>
+                              )}
+                            </td>
+                            {!isMobile && (
+                              <td style={styles.tableCell}>{vDateFR}</td>
+                            )}
+                            <td style={styles.tableCell}>
+                              <span
+                                style={{
+                                  background:
+                                    "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
+                                  color: "white",
+                                  padding: isMobile
+                                    ? "4px 8px"
+                                    : "6px 12px",
+                                  borderRadius: "15px",
+                                  fontSize: isMobile
+                                    ? "0.7em"
+                                    : "0.85em",
+                                  fontWeight: 600,
+                                }}
+                                title={`${nbArticles} article(s)`}
+                              >
+                                {nbArticles} article
+                                {nbArticles > 1 ? "s" : ""}
+                              </span>
+                            </td>
+                            <td
+                              style={{
+                                ...styles.tableCell,
+                                textAlign: "right",
+                                fontWeight: 700,
+                                color: "#48bb78",
+                                fontSize: isMobile ? "0.9em" : "1.1em",
+                              }}
+                            >
+                              {totalV.toFixed(2)} DHS
+                            </td>
+                          </tr>
+                        );
+                      })
+                  )}
                 </tbody>
               </table>
             </div>
-            
+
             {selectedBons.length > 0 && (
-              <div style={{ 
-                background: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)", 
-                padding: isMobile ? "20px 15px" : "25px", 
-                borderRadius: isMobile ? "15px" : "20px", 
-                marginBottom: isMobile ? "20px" : "25px",
-                color: "white",
-                textAlign: "center",
-                boxShadow: "0 15px 40px rgba(102, 126, 234, 0.3)"
-              }}>
-                <p style={{ fontWeight: 700, fontSize: isMobile ? "1em" : "1.2em", marginBottom: "10px" }}>
-                  📋 {selectedBons.length} bon{selectedBons.length > 1 ? 's' : ''} sélectionné{selectedBons.length > 1 ? 's' : ''} pour facturation groupée
+              <div
+                style={{
+                  background:
+                    "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
+                  padding: isMobile ? "20px 15px" : "25px",
+                  borderRadius: isMobile ? "15px" : "20px",
+                  marginBottom: isMobile ? "20px" : "25px",
+                  color: "white",
+                  textAlign: "center",
+                  boxShadow: "0 15px 40px rgba(102, 126, 234, 0.3)",
+                }}
+              >
+                <p
+                  style={{
+                    fontWeight: 700,
+                    fontSize: isMobile ? "1em" : "1.2em",
+                    marginBottom: "10px",
+                  }}
+                >
+                  📋 {selectedBons.length} bon
+                  {selectedBons.length > 1 ? "s" : ""} sélectionné
+                  {selectedBons.length > 1 ? "s" : ""} pour facturation
+                  groupée
                 </p>
-                <p style={{ fontSize: isMobile ? "1.2em" : "1.4em", fontWeight: 800 }}>
-                  💰 Total à facturer: {ventes
-                    .filter(v => selectedBons.includes(v.id))
-                    .reduce((sum, v) => sum + (v.articles || []).reduce(
-                      (s, a) => s + ((Number(a.prixUnitaire || 0)) * (Number(a.quantite || 0)) - (Number(a.remise || 0))), 0
-                    ), 0).toFixed(2)} DHS
+                <p
+                  style={{
+                    fontSize: isMobile ? "1.2em" : "1.4em",
+                    fontWeight: 800,
+                  }}
+                >
+                  💰 Total à facturer:{" "}
+                  {ventes
+                    .filter((v) => selectedBons.includes(v.id))
+                    .reduce(
+                      (sum, v) =>
+                        sum +
+                        (v.articles || []).reduce(
+                          (s, a) =>
+                            s +
+                            (Number(a.prixUnitaire || 0) *
+                              Number(a.quantite || 0) -
+                              Number(a.remise || 0)),
+                          0
+                        ),
+                      0
+                    )
+                    .toFixed(2)}{" "}
+                  DHS
                 </p>
-                <div style={{ 
-                  marginTop: "15px",
-                  padding: "10px",
-                  background: "rgba(255,255,255,0.2)",
-                  borderRadius: "10px",
-                  fontSize: isMobile ? "0.8em" : "0.9em"
-                }}>
-                  🏷️ Traçabilité multi-lots • 📄 Cachet personnalisé • 🖨️ Impression optimisée
+                <div
+                  style={{
+                    marginTop: "15px",
+                    padding: "10px",
+                    background: "rgba(255,255,255,0.2)",
+                    borderRadius: "10px",
+                    fontSize: isMobile ? "0.8em" : "0.9em",
+                  }}
+                >
+                  🏷️ Traçabilité multi-lots • 📄 Cachet personnalisé • 🖨️
+                  Impression optimisée
                 </div>
               </div>
             )}
-            
+
             <div style={{ textAlign: "center" }}>
               <button
                 onClick={handleGenerateFacture}
                 disabled={selectedBons.length === 0 || isLoading}
                 style={{
                   ...styles.groupedInvoiceButton,
-                  background: (selectedBons.length > 0 && !isLoading)
-                    ? "linear-gradient(135deg, #48bb78 0%, #38a169 100%)" 
-                    : "linear-gradient(135deg, #a0aec0 0%, #718096 100%)",
-                  cursor: (selectedBons.length > 0 && !isLoading) ? "pointer" : "not-allowed",
-                  boxShadow: (selectedBons.length > 0 && !isLoading)
-                    ? "0 10px 30px rgba(72, 187, 120, 0.4)" 
-                    : "none",
-                  opacity: (selectedBons.length > 0 && !isLoading) ? 1 : 0.6
+                  background:
+                    selectedBons.length > 0 && !isLoading
+                      ? "linear-gradient(135deg, #48bb78 0%, #38a169 100%)"
+                      : "linear-gradient(135deg, #a0aec0 0%, #718096 100%)",
+                  cursor:
+                    selectedBons.length > 0 && !isLoading
+                      ? "pointer"
+                      : "not-allowed",
+                  boxShadow:
+                    selectedBons.length > 0 && !isLoading
+                      ? "0 10px 30px rgba(72, 187, 120, 0.4)"
+                      : "none",
+                  opacity:
+                    selectedBons.length > 0 && !isLoading ? 1 : 0.6,
                 }}
                 title="Générer une facture groupée multi-lots"
               >
-                {isLoading ? "⏳ Génération..." : "🧾 Générer Facture Groupée"} ({selectedBons.length} bon{selectedBons.length > 1 ? 's' : ''})
+                {isLoading
+                  ? "⏳ Génération..."
+                  : "🧾 Générer Facture Groupée"}{" "}
+                ({selectedBons.length} bon
+                {selectedBons.length > 1 ? "s" : ""})
               </button>
-              
+
               {selectedBons.length > 0 && !isLoading && (
                 <button
                   onClick={() => setSelectedBons([])}
@@ -1980,7 +2551,7 @@ export default function DevisFactures() {
                     ...styles.dangerButton,
                     marginTop: isMobile ? "15px" : "20px",
                     padding: isMobile ? "10px 20px" : "12px 25px",
-                    fontSize: isMobile ? "0.9em" : "1em"
+                    fontSize: isMobile ? "0.9em" : "1em",
                   }}
                   title="Désélectionner tous les bons"
                 >

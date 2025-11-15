@@ -19,9 +19,9 @@ export default function Homepage({ onLogin, onRegister }) {
     },
     [COUNTRY_MA]: {
       label: 'Maroc',
-      // fourni: 00212661112540 → format E.164
-      numberIntl: '+212661112540',
-      display: '+212 6 61 11 25 40',
+      // fourni: 00212708435584 → format E.164
+      numberIntl: '+212708435584',
+      display: '+212 7 08 43 55 84',
       flag: '🇲🇦',
     },
   };

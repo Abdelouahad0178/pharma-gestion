@@ -17,8 +17,10 @@ import {
   writeBatch,
 } from "firebase/firestore";
 import { useUserRole } from "../../contexts/UserRoleContext";
+
 const BARCODE_FIELDS = ["codeBarre", "barcode", "ean", "ean13", "upc", "gtin"];
 const ITEMS_PER_PAGE = 50;
+
 /* ===================== NORMALISATION TEXTE ===================== */
 const normalizeText = (text) => {
   return String(text || "")
@@ -27,131 +29,135 @@ const normalizeText = (text) => {
     .toLowerCase()
     .trim();
 };
+
 /* ===================== COMPOSANTS MÉMOÏSÉS ===================== */
-const BonRow = memo(({ bon, index, onPrint, onReception, onEdit, onDelete, formatDateDisplay, getTotalBon }) => {
-  return (
-    <tr className={bon.isTransferred ? "bon-transfere" : ""}>
-      <td className="left" style={{ fontWeight: "800" }}>
-        {bon.fournisseur}
-        {bon.isTransferred && (
-          <button className="inline-delete" onClick={() => onDelete(bon)} aria-label="Supprimer">
-            (supprimer)
-          </button>
-        )}
-      </td>
-      <td>{formatDateDisplay(bon.date || bon.timestamp)}</td>
-      <td>
-        <span
-          style={{
-            padding: "6px 12px",
-            borderRadius: "20px",
-            fontWeight: "800",
-            background:
-              bon.statutPaiement === "payé"
-                ? "#ECFDF5"
-                : bon.statutPaiement === "partiel"
-                ? "#FEF3C7"
-                : "#FEE2E2",
-            color:
-              bon.statutPaiement === "payé"
-                ? "#065F46"
-                : bon.statutPaiement === "partiel"
-                ? "#92400E"
-                : "#7F1D1D",
-            border: `2px solid ${
-              bon.statutPaiement === "payé"
-                ? "#BBF7D0"
-                : bon.statutPaiement === "partiel"
-                ? "#FDE68A"
-                : "#FECACA"
-            }`,
-          }}
-        >
-          {bon.statutPaiement}
-        </span>
-      </td>
-      <td>
-        <span
-          style={{
-            padding: "6px 12px",
-            borderRadius: "20px",
-            fontWeight: "800",
-            background:
-              bon.statutReception === "reçu"
-                ? "#ECFDF5"
-                : bon.statutReception === "partiel"
-                ? "#FEF3C7"
-                : "#EFF6FF",
-            color:
-              bon.statutReception === "reçu"
-                ? "#065F46"
-                : bon.statutReception === "partiel"
-                ? "#92400E"
-                : "#1E40AF",
-            border: `2px solid ${
-              bon.statutReception === "reçu"
-                ? "#BBF7D0"
-                : bon.statutReception === "partiel"
-                ? "#FDE68A"
-                : "#BFDBFE"
-            }`,
-          }}
-        >
-          {bon.statutReception || "en_attente"}
-        </span>
-      </td>
-      <td style={{ textTransform: "uppercase", fontWeight: "800", color: "var(--primary)" }}>
-        {bon.stock || "stock1"}
-      </td>
-      <td style={{ fontWeight: "900", fontSize: "1.05em", color: "var(--primary)" }}>
-        {Number(getTotalBon(bon) || 0).toFixed(2)} DHS
-      </td>
-      <td>
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "center" }}>
-          <button
-            className="action-btn print small"
-            onClick={() => onPrint(bon)}
-            title="Imprimer"
-            aria-label="Imprimer"
-          >
-            🖨️ Imprimer
-          </button>
-          {bon.statutReception === "en_attente" && !bon.isTransferred && (
-            <>
-              <button
-                className="action-btn reception small"
-                onClick={() => onReception(bon)}
-                title="Réceptionner"
-                aria-label="Réceptionner"
-              >
-                📥 Réception
-              </button>
-              <button
-                className="action-btn edit small"
-                onClick={() => onEdit(bon)}
-                title="Modifier"
-                aria-label="Modifier"
-              >
-                ✏️ Modifier
-              </button>
-            </>
-          )}
-          {!bon.isTransferred && (
-            <button
-              className="action-btn delete small"
-              onClick={() => onDelete(bon)}
-              title="Supprimer"
-              aria-label="Supprimer"
-            >
-              🗑️ Supprimer
+const BonRow = memo(
+  ({ bon,  onPrint, onReception, onEdit, onDelete, formatDateDisplay, getTotalBon }) => {
+    return (
+      <tr className={bon.isTransferred ? "bon-transfere" : ""}>
+        <td className="left" style={{ fontWeight: "800" }}>
+          {bon.fournisseur}
+          {bon.isTransferred && (
+            <button className="inline-delete" onClick={() => onDelete(bon)} aria-label="Supprimer">
+              (supprimer)
             </button>
           )}
-        </div>
-      </td>
-    </tr>
-  );
-});
+        </td>
+        <td>{formatDateDisplay(bon.date || bon.timestamp)}</td>
+        <td>
+          <span
+            style={{
+              padding: "6px 12px",
+              borderRadius: "20px",
+              fontWeight: "800",
+              background:
+                bon.statutPaiement === "payé"
+                  ? "#ECFDF5"
+                  : bon.statutPaiement === "partiel"
+                  ? "#FEF3C7"
+                  : "#FEE2E2",
+              color:
+                bon.statutPaiement === "payé"
+                  ? "#065F46"
+                  : bon.statutPaiement === "partiel"
+                  ? "#92400E"
+                  : "#7F1D1D",
+              border: `2px solid ${
+                bon.statutPaiement === "payé"
+                  ? "#BBF7D0"
+                  : bon.statutPaiement === "partiel"
+                  ? "#FDE68A"
+                  : "#FECACA"
+              }`,
+            }}
+          >
+            {bon.statutPaiement}
+          </span>
+        </td>
+        <td>
+          <span
+            style={{
+              padding: "6px 12px",
+              borderRadius: "20px",
+              fontWeight: "800",
+              background:
+                bon.statutReception === "reçu"
+                  ? "#ECFDF5"
+                  : bon.statutReception === "partiel"
+                  ? "#FEF3C7"
+                  : "#EFF6FF",
+              color:
+                bon.statutReception === "reçu"
+                  ? "#065F46"
+                  : bon.statutReception === "partiel"
+                  ? "#92400E"
+                  : "#1E40AF",
+              border: `2px solid ${
+                bon.statutReception === "reçu"
+                  ? "#BBF7D0"
+                  : bon.statutReception === "partiel"
+                  ? "#FDE68A"
+                  : "#BFDBFE"
+              }`,
+            }}
+          >
+            {bon.statutReception || "en_attente"}
+          </span>
+        </td>
+        <td style={{ textTransform: "uppercase", fontWeight: "800", color: "var(--primary)" }}>
+          {bon.stock || "stock1"}
+        </td>
+        <td style={{ fontWeight: "900", fontSize: "1.05em", color: "var(--primary)" }}>
+          {Number(getTotalBon(bon) || 0).toFixed(2)} DHS
+        </td>
+        <td>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "center" }}>
+            <button
+              className="action-btn print small"
+              onClick={() => onPrint(bon)}
+              title="Imprimer"
+              aria-label="Imprimer"
+            >
+              🖨️ Imprimer
+            </button>
+            {bon.statutReception === "en_attente" && !bon.isTransferred && (
+              <>
+                <button
+                  className="action-btn reception small"
+                  onClick={() => onReception(bon)}
+                  title="Réceptionner"
+                  aria-label="Réceptionner"
+                >
+                  📥 Réception
+                </button>
+                <button
+                  className="action-btn edit small"
+                  onClick={() => onEdit(bon)}
+                  title="Modifier"
+                  aria-label="Modifier"
+                >
+                  ✏️ Modifier
+                </button>
+              </>
+            )}
+            {!bon.isTransferred && (
+              <button
+                className="action-btn delete small"
+                onClick={() => onDelete(bon)}
+                title="Supprimer"
+                aria-label="Supprimer"
+              >
+                🗑️ Supprimer
+              </button>
+            )}
+          </div>
+        </td>
+      </tr>
+    );
+  }
+);
 BonRow.displayName = "BonRow";
+
 const CatalogueRow = memo(({ item, onPick, pickAnyBarcode }) => {
   const bc = pickAnyBarcode(item);
   return (
@@ -182,16 +188,20 @@ const CatalogueRow = memo(({ item, onPick, pickAnyBarcode }) => {
   );
 });
 CatalogueRow.displayName = "CatalogueRow";
+
 const Pagination = memo(({ currentPage, totalPages, onPageChange, loading }) => {
   const pages = [];
   const maxVisible = 5;
   let startPage = Math.max(1, currentPage - Math.floor(maxVisible / 2));
   let endPage = Math.min(totalPages, startPage + maxVisible - 1);
+
   if (endPage - startPage < maxVisible - 1) {
     startPage = Math.max(1, endPage - maxVisible + 1);
   }
+
   for (let i = startPage; i <= endPage; i++) pages.push(i);
   if (totalPages <= 1) return null;
+
   return (
     <div
       style={{
@@ -335,6 +345,7 @@ const Pagination = memo(({ currentPage, totalPages, onPageChange, loading }) => 
   );
 });
 Pagination.displayName = "Pagination";
+
 export default function Achats() {
   /* ===================== HELPERS DATES ===================== */
   const getTodayDate = useCallback(() => new Date().toISOString().split("T")[0], []);
@@ -343,8 +354,10 @@ export default function Achats() {
     date.setFullYear(date.getFullYear() + 2);
     return date.toISOString().split("T")[0];
   }, []);
+
   /* ===================== TAUX DE MARGE (CONFIGURABLE) ===================== */
   const [tauxMarge, setTauxMarge] = useState(33);
+
   /* ===================== CALCULS AUTOMATIQUES P.P.H ↔ P.P.V ===================== */
   const calculerPPV = useCallback(
     (pph) => {
@@ -355,6 +368,7 @@ export default function Achats() {
     },
     [tauxMarge]
   );
+
   const calculerPPH = useCallback(
     (ppv) => {
       const prix = Number(ppv);
@@ -364,6 +378,7 @@ export default function Achats() {
     },
     [tauxMarge]
   );
+
   /* ===================== BIP SONORE ===================== */
   const __audioCtxRef = useRef(null);
   const __getAudioCtx = () => {
@@ -377,6 +392,7 @@ export default function Achats() {
     }
     return __audioCtxRef.current;
   };
+
   const __playBeep = useCallback((freq = 880, dur = 120, type = "sine", volume = 0.15) => {
     try {
       const ctx = __getAudioCtx();
@@ -398,11 +414,14 @@ export default function Achats() {
       }, dur);
     } catch {}
   }, []);
+
   const beepSuccess = useCallback(() => {
     __playBeep(1175, 90, "sine", 0.15);
     setTimeout(() => __playBeep(1568, 110, "sine", 0.15), 100);
   }, [__playBeep]);
+
   const beepError = useCallback(() => __playBeep(220, 220, "square", 0.2), [__playBeep]);
+
   useEffect(() => {
     const unlock = () => {
       try {
@@ -412,6 +431,7 @@ export default function Achats() {
     window.addEventListener("click", unlock, { once: true });
     window.addEventListener("keydown", unlock, { once: true });
   }, []);
+
   /* ===================== STYLES ===================== */
   const injectStyles = useCallback(() => {
     if (document.getElementById("achats-styles")) return;
@@ -492,9 +512,9 @@ export default function Achats() {
       .action-btn.delete{ background:var(--danger-grad); color:#fff; }
       .action-btn.small{ padding:8px 16px; font-size:0.6em; }
       hr{ border:none; height:2px; background:linear-gradient(90deg, transparent, var(--border), transparent); margin:20px 0; }
-      .scanner-modal-overlay{ position:fixed; inset:0; background:rgba(0,0,0,.85); display:grid; place-items:center; z-index:9999; backdropFilter:blur(6px); animation:fadeIn .3s ease; }
+      .scanner-modal-overlay{ position:fixed; inset:0; background:rgba(0,0,0,.85); display:grid; place-items:center; z-index:9999; backdrop-filter:blur(6px); animation:fadeIn .3s ease; }
       @keyframes fadeIn{ from{opacity:0} to{opacity:1} }
-      .scanner-modal-content{ background:#fff; borderRadius:24px; padding:32px; maxWidth:600px; width:90%; boxShadow:0 25px 80px rgba(0,0,0,.4); position:relative; animation:slideUp .3s ease; }
+      .scanner-modal-content{ background:#fff; border-radius:24px; padding:32px; max-width:600px; width:90%; box-shadow:0 25px 80px rgba(0,0,0,.4); position:relative; animation:slideUp .3s ease; }
       @keyframes slideUp{ from{opacity:0;transform:translateY(40px)} to{opacity:1;transform:translateY(0)} }
       .scanner-container{ width:100%; height:400px; border-radius:16px; overflow:hidden; background:#000; margin:20px 0; position:relative; }
       .scanner-info{ background:linear-gradient(135deg, #EEF2FF 0%, #E0E7FF 100%); padding:16px; border-radius:12px; margin-bottom:16px; color:#3730A3; font-weight:600; border:2px solid #C7D2FE; }
@@ -506,24 +526,30 @@ export default function Achats() {
     `;
     document.head.appendChild(style);
   }, []);
+
   useEffect(() => {
     injectStyles();
   }, [injectStyles]);
+
   /* ===================== CONTEXTE & ÉTATS ===================== */
   const { loading, societeId, user } = useUserRole();
   const [waiting, setWaiting] = useState(true);
+
   useEffect(() => {
     setWaiting(loading || !societeId || !user);
   }, [loading, societeId, user]);
+
   const [showBons, setShowBons] = useState(true);
   const [currentPageBons, setCurrentPageBons] = useState(1);
   const [currentPageCatalogue, setCurrentPageCatalogue] = useState(1);
+
   /* ===================== ÉTAT FORMULAIRE BON ===================== */
   const [fournisseur, setFournisseur] = useState("");
   const [dateAchat, setDateAchat] = useState(getTodayDate());
   const [statutPaiement, setStatutPaiement] = useState("impayé");
   const [remiseGlobale, setRemiseGlobale] = useState(0);
   const [stockChoice, setStockChoice] = useState("stock1");
+
   /* ===================== LIGNE ARTICLE ===================== */
   const [numeroArticle, setNumeroArticle] = useState("");
   const [produit, setProduit] = useState("");
@@ -536,35 +562,40 @@ export default function Achats() {
   const [numeroLot, setNumeroLot] = useState("");
   const [fournisseurArticle, setFournisseurArticle] = useState("");
   const [lastEditedPrice, setLastEditedPrice] = useState(null);
+
   /* ===================== HANDLERS CALCUL P.P.H/P.P.V ===================== */
   const handlePPHChange = useCallback(
     (value) => {
       setPrixUnitaire(value);
-      setLastEditedPrice('pph');
+      setLastEditedPrice("pph");
       if (value && Number(value) > 0) setPrixVente(calculerPPV(value));
     },
     [calculerPPV]
   );
+
   const handlePPVChange = useCallback(
     (value) => {
       setPrixVente(value);
-      setLastEditedPrice('ppv');
+      setLastEditedPrice("ppv");
       if (value && Number(value) > 0) setPrixUnitaire(calculerPPH(value));
     },
     [calculerPPH]
   );
+
   /* ===================== MISE À JOUR AUTO SUR CHANGEMENT MARGE ===================== */
   useEffect(() => {
     const pph = Number(prixUnitaire);
     const ppv = Number(prixVente);
-    if (lastEditedPrice === 'ppv' && ppv > 0) {
+    if (lastEditedPrice === "ppv" && ppv > 0) {
       setPrixUnitaire(calculerPPH(ppv));
-    } else if (lastEditedPrice === 'pph' && pph > 0) {
+    } else if (lastEditedPrice === "pph" && pph > 0) {
       setPrixVente(calculerPPV(pph));
     }
-  }, [tauxMarge, calculerPPV, calculerPPH]);
+  }, [tauxMarge, calculerPPV, calculerPPH, prixUnitaire, prixVente, lastEditedPrice]);
+
   /* ===================== FOURNISSEURS ===================== */
   const [fournisseurs, setFournisseurs] = useState([]);
+
   const normalizeFournisseurName = (obj, fallbackId = "") => {
     const n =
       obj?.nom ??
@@ -577,6 +608,7 @@ export default function Achats() {
     const s = String(n || "").trim();
     return s || (fallbackId ? `Fournisseur-${fallbackId.slice(0, 6)}` : "");
   };
+
   const fetchFournisseurs = useCallback(async () => {
     if (!societeId) return setFournisseurs([]);
     try {
@@ -587,6 +619,7 @@ export default function Achats() {
         const name = normalizeFournisseurName(data, d.id);
         if (name) list.push({ id: d.id, name, data });
       });
+
       if (list.length === 0) {
         const snap2 = await getDocs(collection(db, "societe", societeId, "suppliers"));
         snap2.forEach((d) => {
@@ -595,6 +628,7 @@ export default function Achats() {
           if (name) list.push({ id: d.id, name, data });
         });
       }
+
       const uniq = Array.from(new Map(list.map((x) => [x.name.toLowerCase(), x])).values()).sort(
         (a, b) => a.name.localeCompare(b.name)
       );
@@ -604,27 +638,25 @@ export default function Achats() {
       setFournisseurs([]);
     }
   }, [societeId]);
-  
-  // 🔥 MODIFICATION ICI : SYNCHRONISATION AUTOMATIQUE FOURNISSEUR → FOURNISSEUR ARTICLE
-  const onFournisseurChange = useCallback(
-    (value) => {
-      setFournisseur(value);
-      // ✅ TOUJOURS synchroniser les deux champs
-      setFournisseurArticle(value);
-    },
-    [] // Pas de dépendance à fournisseurArticle, on écrase toujours
-  );
-  
+
+  // 🔥 SYNCHRO FOURNISSEUR → FOURNISSEUR ARTICLE
+  const onFournisseurChange = useCallback((value) => {
+    setFournisseur(value);
+    setFournisseurArticle(value);
+  }, []);
+
   /* ===================== RECALCUL AUTO DATE PÉREMPTION ===================== */
   useEffect(() => {
     if (dateAchat) setDatePeremption(getDatePlusTwoYears(dateAchat));
   }, [dateAchat, getDatePlusTwoYears]);
+
   /* ===================== COLLECTIONS LOCALES ===================== */
   const [articles, setArticles] = useState([]);
   const [achats, setAchats] = useState([]);
   const [medicaments, setMedicaments] = useState([]);
   const [stockEntries, setStockEntries] = useState([]);
   const [showScanner, setShowScanner] = useState(false);
+
   /* ===================== CATALOGUE ===================== */
   const [catalogue, setCatalogue] = useState([]);
   const [allCatalogue, setAllCatalogue] = useState([]);
@@ -633,6 +665,7 @@ export default function Achats() {
   const [catalogueLoaded, setCatalogueLoaded] = useState(false);
   const [loadingCatalogue, setLoadingCatalogue] = useState(false);
   const [isSearchingCatalogue, setIsSearchingCatalogue] = useState(false);
+
   const handleLoadCatalogue = useCallback(async () => {
     if (!societeId || catalogueLoaded) return;
     try {
@@ -658,6 +691,7 @@ export default function Achats() {
       setLoadingCatalogue(false);
     }
   }, [societeId, catalogueLoaded]);
+
   const loadAllCatalogueForSearch = useCallback(async () => {
     if (!societeId) return;
     try {
@@ -683,6 +717,7 @@ export default function Achats() {
       setLoadingCatalogue(false);
     }
   }, [societeId]);
+
   useEffect(() => {
     const timer = setTimeout(async () => {
       if (!catalogueLoaded) return;
@@ -697,6 +732,7 @@ export default function Achats() {
     }, 300);
     return () => clearTimeout(timer);
   }, [catalogueSearch, catalogueLoaded, isSearchingCatalogue, loadAllCatalogueForSearch]);
+
   const pickAnyBarcode = useCallback((obj) => {
     for (const k of BARCODE_FIELDS) {
       const v = obj?.[k];
@@ -704,6 +740,7 @@ export default function Achats() {
     }
     return "";
   }, []);
+
   /* ===================== PARAMÈTRES IMPRESSION ===================== */
   const [parametres, setParametres] = useState({
     entete: "",
@@ -714,18 +751,22 @@ export default function Achats() {
     typeCachet: "texte",
     tailleCachet: 120,
   });
+
   /* ===================== EDITION / RÉCEPTION ===================== */
   const [editId, setEditId] = useState(null);
   const [isEditing, setIsEditing] = useState(false);
   const [receptionId, setReceptionId] = useState(null);
   const [receptionArticles, setReceptionArticles] = useState([]);
+
   /* ===================== UI / NOTIFICATIONS ===================== */
   const [isLoading, setIsLoading] = useState(false);
   const [notification, setNotification] = useState(null);
+
   const showNotification = useCallback((message, type = "success") => {
     setNotification({ message, type });
     setTimeout(() => setNotification(null), 3000);
   }, []);
+
   /* ===================== FILTRES LISTE BONS ===================== */
   const [filterFournisseur, setFilterFournisseur] = useState("");
   const [filterDateStart, setFilterDateStart] = useState("");
@@ -734,18 +775,22 @@ export default function Achats() {
   const [filterStatutReception, setFilterStatutReception] = useState("");
   const [showFilters, setShowFilters] = useState(false);
   const [showCreateForm, setShowCreateForm] = useState(false);
+
   useEffect(() => {
     if (isEditing) setShowCreateForm(true);
   }, [isEditing]);
+
   useEffect(() => {
     if (articles.length > 0) setShowCreateForm(true);
   }, [articles.length]);
+
   const activeFiltersCount =
     (filterFournisseur ? 1 : 0) +
     (filterDateStart ? 1 : 0) +
     (filterDateEnd ? 1 : 0) +
     (filterStatutPaiement ? 1 : 0) +
     (filterStatutReception ? 1 : 0);
+
   const resetFilters = useCallback(() => {
     setFilterFournisseur("");
     setFilterDateStart("");
@@ -753,6 +798,7 @@ export default function Achats() {
     setFilterStatutPaiement("");
     setFilterStatutReception("");
   }, []);
+
   /* ===================== DATES SÛRES ===================== */
   const toDateSafe = useCallback((v) => {
     try {
@@ -765,6 +811,7 @@ export default function Achats() {
       return null;
     }
   }, []);
+
   /* ===================== NORMALISATION "STOCK" ===================== */
   const STOCK_KEYS = [
     "stock",
@@ -778,17 +825,16 @@ export default function Achats() {
     "magasin",
     "source",
   ];
+
   const normalizeStockValue = (val) => {
     if (val === undefined || val === null) return "unknown";
     if (typeof val === "number")
       return val === 1 ? "stock1" : val === 2 ? "stock2" : "unknown";
     const raw = String(val)
       .toLowerCase()
-      .replace(/[\s_\-]/g, "");
+      .replace(/[\s_]/g, "");
     if (
-      ["stock1", "s1", "magasin1", "depot1", "principal", "primary", "p", "m1", "1"].includes(
-        raw
-      )
+      ["stock1", "s1", "magasin1", "depot1", "principal", "primary", "p", "m1", "1"].includes(raw)
     )
       return "stock1";
     if (
@@ -799,6 +845,7 @@ export default function Achats() {
       return "stock2";
     return "unknown";
   };
+
   const pickDocStock = (docData) => {
     for (const k of STOCK_KEYS) {
       if (docData?.[k] !== undefined) {
@@ -808,6 +855,7 @@ export default function Achats() {
     }
     return "stock1";
   };
+
   /* ===================== PARAMÈTRES IMPRESSION (FETCH) ===================== */
   const fetchParametres = useCallback(async () => {
     if (!societeId) return;
@@ -851,6 +899,7 @@ export default function Achats() {
       pied: p.pied || "Merci pour votre confiance",
     }));
   }, [societeId]);
+
   /* ===================== ACHATS (FETCH) ===================== */
   const fetchAchats = useCallback(async () => {
     if (!societeId) return setAchats([]);
@@ -870,10 +919,8 @@ export default function Achats() {
           list.push({ id: d.id, ...data });
       });
       list.sort((a, b) => {
-        const da =
-          toDateSafe(a.timestamp) || toDateSafe(a.date) || new Date("2000-01-01");
-        const dbb =
-          toDateSafe(b.timestamp) || toDateSafe(b.date) || new Date("2000-01-01");
+        const da = toDateSafe(a.timestamp) || toDateSafe(a.date) || new Date("2000-01-01");
+        const dbb = toDateSafe(b.timestamp) || toDateSafe(b.date) || new Date("2000-01-01");
         return dbb - da;
       });
       setAchats(list);
@@ -882,6 +929,7 @@ export default function Achats() {
       setAchats([]);
     }
   }, [societeId, toDateSafe]);
+
   /* ===================== STOCK_ENTRIES (MULTI-LOTS) ===================== */
   const fetchStockEntries = useCallback(async () => {
     if (!societeId) return setStockEntries([]);
@@ -909,6 +957,7 @@ export default function Achats() {
       setStockEntries([]);
     }
   }, [societeId, toDateSafe]);
+
   /* ===================== NOMS MÉDICAMENTS ===================== */
   const fetchMedicaments = useCallback(async () => {
     if (!societeId) return setMedicaments([]);
@@ -929,6 +978,7 @@ export default function Achats() {
       setMedicaments([]);
     }
   }, [societeId]);
+
   useEffect(() => {
     if (!societeId) return;
     fetchParametres();
@@ -936,14 +986,8 @@ export default function Achats() {
     fetchStockEntries();
     fetchMedicaments();
     fetchFournisseurs();
-  }, [
-    societeId,
-    fetchParametres,
-    fetchAchats,
-    fetchStockEntries,
-    fetchMedicaments,
-    fetchFournisseurs,
-  ]);
+  }, [societeId, fetchParametres, fetchAchats, fetchStockEntries, fetchMedicaments, fetchFournisseurs]);
+
   /* ===================== SAISIE PRODUIT → AUTO-SUGGEST ===================== */
   const handleProduitChange = useCallback(
     (value) => {
@@ -956,6 +1000,7 @@ export default function Achats() {
           if (ppv) setPrixUnitaire(calculerPPH(ppv));
           setNumeroArticle(pickAnyBarcode(cat));
         }
+
         const existing = stockEntries.filter((e) => e.nom === value);
         if (existing.length > 0) {
           const last = existing[existing.length - 1];
@@ -981,6 +1026,7 @@ export default function Achats() {
     },
     [stockEntries, medicaments, catalogue, pickAnyBarcode, calculerPPH, calculerPPV]
   );
+
   /* ===================== AJOUTER UN ARTICLE (COMMANDE) ===================== */
   const handleAddArticle = useCallback(
     (e) => {
@@ -999,6 +1045,7 @@ export default function Achats() {
       }
       const lot = (numeroLot || "").trim() || `LOT${Date.now().toString().slice(-6)}`;
       const four = (fournisseurArticle || "").trim() || fournisseur;
+
       const item = {
         produit: nomFinal,
         commandee: {
@@ -1017,7 +1064,9 @@ export default function Achats() {
         },
         recu: null,
       };
+
       setArticles((prev) => [...prev, item]);
+
       setProduit("");
       setProduitNouveau("");
       setQuantite(1);
@@ -1045,6 +1094,7 @@ export default function Achats() {
       showNotification,
     ]
   );
+
   const handleRemoveArticle = useCallback(
     (idx) => {
       setArticles((prev) => prev.filter((_, i) => i !== idx));
@@ -1052,19 +1102,46 @@ export default function Achats() {
     },
     [showNotification]
   );
+
+  // ===================== EDIT ARTICLE (REMPLIR LA LIGNE) =====================
+  const handleEditArticle = useCallback(
+    (index) => {
+      const articleToEdit = articles[index];
+      if (!articleToEdit) return;
+
+      const cmd = articleToEdit.commandee || {};
+
+      setProduit(articleToEdit.produit || "");
+      setQuantite(cmd.quantite || 1);
+      setPrixUnitaire(cmd.prixUnitaire || "");
+      setPrixVente(cmd.prixVente || "");
+      setRemiseArticle(cmd.remise || 0);
+      setDatePeremption(cmd.datePeremption || getDatePlusTwoYears());
+      setNumeroLot(cmd.numeroLot || "");
+      setNumeroArticle(cmd.numeroArticle || cmd.codeBarre || "");
+      setFournisseurArticle(cmd.fournisseurArticle || "");
+
+      // Retirer l’article de la liste, il sera ré-ajouté après modification
+      setArticles((prev) => prev.filter((_, i) => i !== index));
+
+      showNotification("Article chargé pour modification. Modifiez et 'Ajoutez' à nouveau.", "info");
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    },
+    [articles, showNotification, getDatePlusTwoYears]
+  );
+
   /* ===================== MISE À JOUR STOCK ===================== */
   const updateStockOnAdd = useCallback(
     async (payload) => {
       if (!societeId || !user || !payload?.articles?.length) return;
       const isStock1 = (payload.stock || "stock1") === "stock1";
+
       const ops = payload.articles.map(async (a) => {
         const nom = a.produit || "";
         const qte = Number(a.quantite || 0);
         const pA = Number(a.prixUnitaire || a.prixAchat || 0);
         const pV = Number(a.prixVente || 0);
-        const dateP = a.datePeremption
-          ? Timestamp.fromDate(new Date(a.datePeremption))
-          : null;
+        const dateP = a.datePeremption ? Timestamp.fromDate(new Date(a.datePeremption)) : null;
         try {
           await addDoc(collection(db, "societe", societeId, "stock_entries"), {
             nom,
@@ -1100,10 +1177,12 @@ export default function Achats() {
           console.error("updateStockOnAdd ->", nom, e);
         }
       });
+
       await Promise.allSettled(ops);
     },
     [societeId, user]
   );
+
   const updateStockOnDelete = useCallback(
     async (payload) => {
       try {
@@ -1123,12 +1202,14 @@ export default function Achats() {
     },
     [societeId]
   );
+
   /* ===================== SCANNER CLAVIER/CAMÉRA ===================== */
   const onBarcodeDetected = useCallback(
     (barcode) => {
       try {
         const fields = [...BARCODE_FIELDS, "numeroArticle", "ean13"];
         const isMatch = (obj) => fields.some((f) => String(obj?.[f] || "") === String(barcode));
+
         const fromCat = catalogue.find((p) => isMatch(p)) || null;
         if (fromCat) {
           setProduit(fromCat.nom || "");
@@ -1137,6 +1218,7 @@ export default function Achats() {
           if (ppv) setPrixUnitaire(calculerPPH(ppv));
           setNumeroArticle(pickAnyBarcode(fromCat));
         }
+
         const fromEntry = fromCat ? null : stockEntries.find((p) => isMatch(p)) || null;
         const found = fromCat || fromEntry;
         if (!found) {
@@ -1144,6 +1226,7 @@ export default function Achats() {
           showNotification?.(`Aucun produit trouvé pour le code : ${barcode}`, "error");
           return;
         }
+
         if (fromEntry) {
           const pA = Number(fromEntry.prixAchat ?? fromEntry.prixUnitaire ?? 0);
           if (pA > 0) {
@@ -1162,6 +1245,7 @@ export default function Achats() {
             setDatePeremption(iso);
           }
         }
+
         setQuantite(1);
         const canAutoAdd = Boolean(
           (fromCat?.nom || fromEntry?.nom) &&
@@ -1203,11 +1287,13 @@ export default function Achats() {
       calculerPPV,
     ]
   );
+
   useKeyboardWedge((code) => onBarcodeDetected(code), {
     minChars: 6,
     endKey: "Enter",
     timeoutMs: 100,
   });
+
   /* ===================== HELPERS ===================== */
   function resetForm() {
     setFournisseur("");
@@ -1230,6 +1316,7 @@ export default function Achats() {
     setFournisseurArticle("");
     setLastEditedPrice(null);
   }
+
   const getTotalBon = useCallback((bon) => {
     const arr = bon?.articles || [];
     return (
@@ -1242,6 +1329,7 @@ export default function Achats() {
       }, 0) - (Number(bon?.remiseGlobale) || 0)
     );
   }, []);
+
   /* ===================== FILTRAGE & PAGINATION ACHATS ===================== */
   const filteredAchats = useMemo(() => {
     return achats.filter((b) => {
@@ -1272,6 +1360,7 @@ export default function Achats() {
     filterStatutReception,
     toDateSafe,
   ]);
+
   useEffect(() => {
     setCurrentPageBons(1);
   }, [
@@ -1281,12 +1370,15 @@ export default function Achats() {
     filterStatutPaiement,
     filterStatutReception,
   ]);
+
   const totalPagesBons = Math.ceil(filteredAchats.length / ITEMS_PER_PAGE);
+
   const paginatedBons = useMemo(() => {
     const startIndex = (currentPageBons - 1) * ITEMS_PER_PAGE;
     const endIndex = startIndex + ITEMS_PER_PAGE;
     return filteredAchats.slice(startIndex, endIndex);
   }, [filteredAchats, currentPageBons]);
+
   /* ===================== FILTRAGE CATALOGUE ===================== */
   const filteredCatalogue = useMemo(() => {
     const sourceList = isSearchingCatalogue ? allCatalogue : catalogue;
@@ -1294,39 +1386,54 @@ export default function Achats() {
     const searchNormalized = normalizeText(catalogueSearch);
     return sourceList.filter((it) => normalizeText(it.nom).includes(searchNormalized));
   }, [catalogue, allCatalogue, catalogueSearch, isSearchingCatalogue]);
+
   useEffect(() => {
     setCurrentPageCatalogue(1);
   }, [catalogueSearch]);
+
   const totalPagesCatalogue = Math.ceil(filteredCatalogue.length / ITEMS_PER_PAGE);
+
   const paginatedCatalogue = useMemo(() => {
     const startIndex = (currentPageCatalogue - 1) * ITEMS_PER_PAGE;
     const endIndex = startIndex + ITEMS_PER_PAGE;
     return filteredCatalogue.slice(startIndex, endIndex);
   }, [filteredCatalogue, currentPageCatalogue]);
+
   /* ===================== ENREGISTRER BON (CRÉATION/ÉDITION) ===================== */
   const handleAddBon = useCallback(
     async (e) => {
       e?.preventDefault?.();
+
       if (!societeId) return showNotification("Aucune société sélectionnée !", "error");
       if (!user) return showNotification("Utilisateur non connecté !", "error");
+
       if (!fournisseur.trim() || !dateAchat || articles.length === 0) {
         showNotification("Veuillez remplir tous les champs obligatoires", "error");
         return;
       }
+
       const valid = articles.filter(
         (a) =>
           a?.produit &&
           (a?.commandee?.quantite || 0) > 0 &&
-          ((a?.commandee?.prixUnitaire || 0) > 0 || (a?.commandee?.prixAchat || 0) > 0)
+          ((a?.commandee?.prixUnitaire || 0) > 0 ||
+            (a?.commandee?.prixAchat || 0) > 0)
       );
+
       if (!valid.length) {
         showNotification("Aucun article valide trouvé", "error");
         return;
       }
+
       setIsLoading(true);
+
       const articlesToSave = valid.map((a) => ({
         produit: a.produit,
-        commandee: { ...a.commandee, stock: stockChoice, stockSource: stockChoice },
+        commandee: {
+          ...a.commandee,
+          stock: stockChoice,
+          stockSource: stockChoice,
+        },
         recu: isEditing
           ? achats
               .find((b) => b.id === editId)
@@ -1341,6 +1448,7 @@ export default function Achats() {
             : null
           : null,
       }));
+
       const montantTotal =
         articlesToSave.reduce(
           (sum, a) =>
@@ -1350,15 +1458,20 @@ export default function Achats() {
               (a.commandee.remise || 0)),
           0
         ) - (Number(remiseGlobale) || 0);
+
       try {
         if (isEditing && editId) {
+          // ===== ÉDITION =====
           const achatRef = doc(db, "societe", societeId, "achats", editId);
           const achatSnap = await getDoc(achatRef);
           if (!achatSnap.exists()) {
             showNotification("Le bon d'achat n'existe pas ou a été supprimé.", "error");
+            setIsLoading(false);
             return;
           }
-          await updateDoc(achatRef, {
+
+          const updatedBon = {
+            ...achatSnap.data(),
             fournisseur: fournisseur.trim(),
             date: Timestamp.fromDate(new Date(dateAchat)),
             timestamp: Timestamp.now(),
@@ -1372,7 +1485,15 @@ export default function Achats() {
             modifiePar: user.uid,
             modifieParEmail: user.email,
             modifieLe: Timestamp.now(),
-          });
+          };
+
+          await updateDoc(achatRef, updatedBon);
+
+          // 🔥 mise à jour immédiate de la liste locale
+          setAchats((prev) =>
+            prev.map((b) => (b.id === editId ? { id: editId, ...updatedBon } : b))
+          );
+
           await addDoc(collection(db, "societe", societeId, "activities"), {
             type: "achat",
             userId: user.uid,
@@ -1388,11 +1509,13 @@ export default function Achats() {
               stock: stockChoice,
             },
           });
+
           setIsEditing(false);
           setEditId(null);
           showNotification("Bon d'achat modifié avec succès !", "success");
         } else {
-          const ref = await addDoc(collection(db, "societe", societeId, "achats"), {
+          // ===== CRÉATION =====
+          const docData = {
             fournisseur: fournisseur.trim(),
             date: Timestamp.fromDate(new Date(dateAchat)),
             timestamp: Timestamp.now(),
@@ -1408,7 +1531,13 @@ export default function Achats() {
             stockSource: stockChoice,
             magasin: stockChoice,
             depot: stockChoice,
-          });
+          };
+
+          const ref = await addDoc(collection(db, "societe", societeId, "achats"), docData);
+
+          // 🔥 ajout immédiat dans la liste locale
+          setAchats((prev) => [{ id: ref.id, ...docData }, ...prev]);
+
           await addDoc(collection(db, "societe", societeId, "activities"), {
             type: "achat",
             userId: user.uid,
@@ -1424,6 +1553,7 @@ export default function Achats() {
               stock: stockChoice,
             },
           });
+
           if (statutPaiement === "payé") {
             await addDoc(collection(db, "societe", societeId, "paiements"), {
               docId: ref.id,
@@ -1452,8 +1582,10 @@ export default function Achats() {
               },
             });
           }
+
           showNotification("Bon d'achat créé !", "success");
         }
+
         resetForm();
         await Promise.all([fetchAchats(), fetchMedicaments(), fetchStockEntries()]);
       } catch (e) {
@@ -1481,6 +1613,7 @@ export default function Achats() {
       showNotification,
     ]
   );
+
   /* ===================== RÉCEPTION ===================== */
   const handleStartReception = useCallback(
     (bon) => {
@@ -1504,6 +1637,7 @@ export default function Achats() {
     },
     [showNotification]
   );
+
   const handleUpdateReceptionArticle = useCallback(
     (index, field, value) => {
       setReceptionArticles((prev) => {
@@ -1527,6 +1661,7 @@ export default function Achats() {
     },
     [stockChoice]
   );
+
   const handleSubmitReception = useCallback(async () => {
     if (!societeId || !user || !receptionId) return;
     setIsLoading(true);
@@ -1537,13 +1672,16 @@ export default function Achats() {
         showNotification("Le bon d'achat n'existe pas ou a été supprimé.", "error");
         return;
       }
+
       let isFull = true;
       let hasSome = false;
       receptionArticles.forEach((a) => {
         if ((a?.recu?.quantite || 0) < (a?.commandee?.quantite || 0)) isFull = false;
         if ((a?.recu?.quantite || 0) > 0) hasSome = true;
       });
+
       const statut = !hasSome ? "annulé" : isFull ? "reçu" : "partiel";
+
       await updateDoc(achatRef, {
         articles: receptionArticles,
         statutReception: statut,
@@ -1555,6 +1693,7 @@ export default function Achats() {
         magasin: stockChoice,
         depot: stockChoice,
       });
+
       await addDoc(collection(db, "societe", societeId, "activities"), {
         type: "reception_achat",
         userId: user.uid,
@@ -1562,6 +1701,7 @@ export default function Achats() {
         timestamp: Timestamp.now(),
         details: { achatId: receptionId, statut, action: "confirmation", stock: stockChoice },
       });
+
       if (hasSome) {
         const bon = achats.find((b) => b.id === receptionId) || {};
         await updateStockOnAdd({
@@ -1574,6 +1714,7 @@ export default function Achats() {
           date: Timestamp.now(),
         });
       }
+
       showNotification(`Réception confirmée (${statut}) !`, "success");
       setReceptionId(null);
       setReceptionArticles([]);
@@ -1597,10 +1738,12 @@ export default function Achats() {
     fetchMedicaments,
     stockChoice,
   ]);
+
   const handleCancelReception = useCallback(() => {
     setReceptionId(null);
     setReceptionArticles([]);
   }, []);
+
   /* ===================== EDITION BON ===================== */
   const handleEditBon = useCallback(
     (bon) => {
@@ -1630,11 +1773,13 @@ export default function Achats() {
     },
     [toDateSafe]
   );
+
   /* ===================== SUPPRESSION BON ===================== */
   const handleDeleteBon = useCallback(
     async (bon) => {
       if (!societeId) return showNotification("Aucune société sélectionnée !", "error");
       if (!user) return showNotification("Utilisateur non connecté !", "error");
+
       const confirmMsg =
         `⚠️ ATTENTION : Supprimer ce bon d'achat ?\n\n` +
         `Cette action va également supprimer :\n` +
@@ -1643,6 +1788,7 @@ export default function Achats() {
         `Cette action est IRRÉVERSIBLE.\n\n` +
         `Voulez-vous vraiment continuer ?`;
       if (!window.confirm(confirmMsg)) return;
+
       setIsLoading(true);
       try {
         const paiementsQuery = query(
@@ -1653,9 +1799,11 @@ export default function Achats() {
         const paiementsSnapshot = await getDocs(paiementsQuery);
         const batch = writeBatch(db);
         paiementsSnapshot.forEach((d) => batch.delete(d.ref));
+
         const receivedArticles = (bon.articles || [])
           .filter((a) => (a?.recu?.quantite || 0) > 0)
           .map((a) => ({ produit: a.produit, ...(a.recu || {}) }));
+
         const montantTotal =
           (receivedArticles.length
             ? receivedArticles.reduce(
@@ -1666,6 +1814,7 @@ export default function Achats() {
                 0
               )
             : 0) - (Number(bon.remiseGlobale) || 0);
+
         if (bon.statutReception && bon.statutReception !== "en_attente") {
           await updateStockOnDelete({
             id: bon.id,
@@ -1673,9 +1822,11 @@ export default function Achats() {
             articles: receivedArticles,
           });
         }
+
         const achatRef = doc(db, "societe", societeId, "achats", bon.id);
         batch.delete(achatRef);
         await batch.commit();
+
         await addDoc(collection(db, "societe", societeId, "activities"), {
           type: "achat",
           userId: user.uid,
@@ -1694,7 +1845,9 @@ export default function Achats() {
             ),
           },
         });
+
         await Promise.all([fetchAchats(), fetchMedicaments(), fetchStockEntries()]);
+
         showNotification(
           `Bon d'achat supprimé avec succès ! (${paiementsSnapshot.size} paiement(s) supprimé(s))`,
           "success"
@@ -1716,12 +1869,14 @@ export default function Achats() {
       showNotification,
     ]
   );
+
   /* ===================== TRANSFERT MENSUEL S1→S2 ===================== */
   const [showTransfer, setShowTransfer] = useState(false);
   const [transferBonId, setTransferBonId] = useState("");
   const [transferArticleIndex, setTransferArticleIndex] = useState("");
   const [transferQty, setTransferQty] = useState("");
   const [transferNote, setTransferNote] = useState("");
+
   const transferEligibleBons = useMemo(
     () =>
       achats.filter(
@@ -1731,20 +1886,24 @@ export default function Achats() {
       ),
     [achats]
   );
+
   const selectedTransferBon = useMemo(
     () => achats.find((b) => b.id === transferBonId) || null,
     [achats, transferBonId]
   );
+
   const transferArticles = useMemo(
     () => selectedTransferBon?.articles?.filter((a) => (a?.recu?.quantite || 0) > 0) || [],
     [selectedTransferBon]
   );
+
   const resetTransferForm = () => {
     setTransferBonId("");
     setTransferArticleIndex("");
     setTransferQty("");
     setTransferNote("");
   };
+
   const handleTransfer = useCallback(async () => {
     try {
       if (!societeId || !user) {
@@ -1775,7 +1934,9 @@ export default function Achats() {
         );
         return;
       }
+
       setIsLoading(true);
+
       const articleTransfere = {
         produit: articleOriginal.produit,
         commandee: {
@@ -1791,14 +1952,17 @@ export default function Achats() {
           stockSource: "stock2",
         },
       };
+
       const prixAchatUnit = Number(
         articleOriginal.recu.prixUnitaire || articleOriginal.recu.prixAchat || 0
       );
       const remiseItem = Number(articleOriginal.recu.remise || 0);
       const remiseParUnite = currentQty > 0 ? remiseItem / currentQty : 0;
       const montantTransfere = qtyToTransfer * prixAchatUnit - qtyToTransfer * remiseParUnite;
+
       let totalOriginal = getTotalBon(bonOriginal);
       if (totalOriginal < 0) totalOriginal = 0;
+
       const paysSnap = await getDocs(
         query(
           collection(db, "societe", societeId, "paiements"),
@@ -1816,8 +1980,10 @@ export default function Achats() {
         paiementsOriginal[0]?.mode ||
         paiementsOriginal[paiementsOriginal.length - 1]?.mode ||
         "Espèces";
+
       let montantPaiementNouveau = 0;
       let statutPaiementNouveau = "impayé";
+
       if (bonOriginal.statutPaiement === "payé") {
         montantPaiementNouveau = Math.max(0, Number(montantTransfere.toFixed(2)));
         statutPaiementNouveau = "payé";
@@ -1836,7 +2002,9 @@ export default function Achats() {
         montantPaiementNouveau = 0;
         statutPaiementNouveau = "impayé";
       }
+
       const fournisseurTransfert = bonOriginal.fournisseur + " [TRANSFERT STOCK]";
+
       const nouveauBonRef = await addDoc(collection(db, "societe", societeId, "achats"), {
         fournisseur: fournisseurTransfert,
         date: Timestamp.now(),
@@ -1861,6 +2029,7 @@ export default function Achats() {
         transferNote: transferNote || "Transfert mensuel Stock1 → Stock2",
         transferDate: Timestamp.now(),
       });
+
       if (montantPaiementNouveau > 0.001) {
         await addDoc(collection(db, "societe", societeId, "paiements"), {
           docId: nouveauBonRef.id,
@@ -1873,6 +2042,7 @@ export default function Achats() {
           creeLe: Timestamp.now(),
           societeId,
         });
+
         await addDoc(collection(db, "societe", societeId, "activities"), {
           type: "paiement",
           userId: user.uid,
@@ -1890,17 +2060,20 @@ export default function Achats() {
           },
         });
       }
+
       const articlesOriginalUpdated = [...bonOriginal.articles];
       articlesOriginalUpdated[articleIndex] = {
         ...articleOriginal,
         recu: { ...articleOriginal.recu, quantite: currentQty - qtyToTransfer },
       };
+
       const bonOriginalRef = doc(db, "societe", societeId, "achats", transferBonId);
       await updateDoc(bonOriginalRef, {
         articles: articlesOriginalUpdated,
         lastTransferDate: Timestamp.now(),
         lastTransferNote: transferNote || "Transfert mensuel Stock1 → Stock2",
       });
+
       await updateStockOnAdd({
         id: nouveauBonRef.id,
         fournisseur: fournisseurTransfert,
@@ -1908,6 +2081,7 @@ export default function Achats() {
         articles: [{ produit: articleOriginal.produit, ...articleTransfere.recu }],
         date: Timestamp.now(),
       });
+
       await addDoc(collection(db, "societe", societeId, "activities"), {
         type: "transfert_mensuel",
         userId: user.uid,
@@ -1925,6 +2099,7 @@ export default function Achats() {
           statutPaiementNouveau,
         },
       });
+
       showNotification(
         `Transfert réussi : ${qtyToTransfer} unités → Stock2. Nouveau bon créé (${statutPaiementNouveau}).`,
         "success"
@@ -1951,6 +2126,7 @@ export default function Achats() {
     showNotification,
     getTotalBon,
   ]);
+
   /* ===================== AFFICHAGE UTILITAIRES ===================== */
   const formatDateDisplay = useCallback(
     (dateField) => {
@@ -1964,6 +2140,7 @@ export default function Achats() {
     },
     [toDateSafe]
   );
+
   /* ===================== IMPRESSION (AMÉLIORÉE) ===================== */
   const buildBonHTML = (bon, entete, pied) => {
     const rows = (bon.articles || [])
@@ -2063,6 +2240,7 @@ td.left,th.left{text-align:left}
 </body>
 </html>`;
   };
+
   const handlePrintBon = useCallback(
     (bon) => {
       try {
@@ -2096,6 +2274,7 @@ td.left,th.left{text-align:left}
     },
     [parametres, showNotification]
   );
+
   const handlePrintFilteredList = useCallback(() => {
     try {
       const rows = filteredAchats
@@ -2154,11 +2333,13 @@ th{background:#0F172A;color:#F8FAFC;text-transform:uppercase;font-size:12px;lett
       showNotification("Erreur lors de l'impression", "error");
     }
   }, [filteredAchats, getTotalBon, formatDateDisplay, showNotification]);
+
   /* ===================== TOTAUX ===================== */
   const totalGeneral = useMemo(
     () => filteredAchats.reduce((sum, bon) => sum + getTotalBon(bon), 0),
     [filteredAchats, getTotalBon]
   );
+
   /* ===================== CATALOGUE → PICK LINES ===================== */
   const pickFromCatalogue = useCallback(
     (it) => {
@@ -2178,7 +2359,8 @@ th{background:#0F172A;color:#F8FAFC;text-transform:uppercase;font-size:12px;lett
     },
     [showNotification, pickAnyBarcode, calculerPPH]
   );
-  /* ===================== RENDU (DÉBUT) ===================== */
+
+  /* ===================== RENDU (LOADING) ===================== */
   if (waiting) {
     return (
       <div className="achats-page">
@@ -2198,23 +2380,27 @@ th{background:#0F172A;color:#F8FAFC;text-transform:uppercase;font-size:12px;lett
       </div>
     );
   }
+
+  /* ===================== DATALIST PRODUITS ===================== */
   const datalistNames = Array.from(
     new Set([
       ...catalogue.map((c) => c.nom).filter(Boolean),
       ...stockEntries.map((e) => e.nom).filter(Boolean),
     ])
   ).sort((a, b) => a.localeCompare(b));
+
+  /* ===================== RENDU PRINCIPAL ===================== */
   return (
     <div className="achats-page">
       <div className="page-header">
         <h1>🛒 Gestion des Achats</h1>
-        <div className="page-sub">
-          ✨  Marge {tauxMarge}%
-        </div>
+        <div className="page-sub">✨ Marge {tauxMarge}%</div>
       </div>
+
       {notification && (
         <div className={`notice ${notification.type || "success"}`}>{notification.message}</div>
       )}
+
       {/* ===================== FORMULAIRE NOUVEAU / MODIFIER BON ===================== */}
       <div className="card">
         <div className="section-title" style={{ justifyContent: "space-between" }}>
@@ -2234,6 +2420,7 @@ th{background:#0F172A;color:#F8FAFC;text-transform:uppercase;font-size:12px;lett
             )}
           </div>
         </div>
+
         <div className={`form-panel ${showCreateForm ? "form-shown" : "form-hidden"}`}>
           <div className="form-panel-inner">
             <div className="form-grid">
@@ -2285,7 +2472,9 @@ th{background:#0F172A;color:#F8FAFC;text-transform:uppercase;font-size:12px;lett
                 onChange={(e) => setRemiseGlobale(e.target.value)}
               />
             </div>
+
             <hr />
+
             <div className="article-grid">
               <input
                 className="field"
@@ -2300,6 +2489,7 @@ th{background:#0F172A;color:#F8FAFC;text-transform:uppercase;font-size:12px;lett
                 ))}
                 <option value="_new_">-- Nouveau produit --</option>
               </datalist>
+
               <input
                 className="field"
                 type="number"
@@ -2312,6 +2502,7 @@ th{background:#0F172A;color:#F8FAFC;text-transform:uppercase;font-size:12px;lett
                 title="Taux de marge pour calculer P.P.V depuis P.P.H"
                 aria-label="Taux de marge"
               />
+
               <input
                 className="field"
                 type="number"
@@ -2320,6 +2511,7 @@ th{background:#0F172A;color:#F8FAFC;text-transform:uppercase;font-size:12px;lett
                 value={quantite}
                 onChange={(e) => setQuantite(e.target.value)}
               />
+
               <input
                 className="field"
                 type="number"
@@ -2329,6 +2521,7 @@ th{background:#0F172A;color:#F8FAFC;text-transform:uppercase;font-size:12px;lett
                 onChange={(e) => handlePPHChange(e.target.value)}
                 title={`Prix Public Hôpital • Marge ${tauxMarge}%`}
               />
+
               <input
                 className="field"
                 type="number"
@@ -2338,6 +2531,7 @@ th{background:#0F172A;color:#F8FAFC;text-transform:uppercase;font-size:12px;lett
                 onChange={(e) => handlePPVChange(e.target.value)}
                 title={`Prix Public Vente • Marge ${tauxMarge}%`}
               />
+
               <input
                 className="field"
                 type="date"
@@ -2380,6 +2574,7 @@ th{background:#0F172A;color:#F8FAFC;text-transform:uppercase;font-size:12px;lett
                 ➕ Ajouter
               </button>
             </div>
+
             {articles.length > 0 && (
               <div className="table-scroll" style={{ marginTop: 20 }}>
                 <table className="table">
@@ -2419,15 +2614,33 @@ th{background:#0F172A;color:#F8FAFC;text-transform:uppercase;font-size:12px;lett
                         <td style={{ textTransform: "uppercase", fontWeight: "800" }}>
                           {a.commandee?.stock || stockChoice}
                         </td>
-                        <td>
-                          <button
-                            className="btn btn-outline btn-sm"
-                            style={{ padding: "8px 16px" }}
-                            onClick={() => handleRemoveArticle(i)}
-                            aria-label={`Supprimer ${a.produit}`}
-                          >
-                            🗑️ Supprimer
-                          </button>
+                        <td style={{ minWidth: 220 }}>
+                          <div style={{ display: "flex", gap: 8, justifyContent: "center" }}>
+                            <button
+                              className="btn"
+                              style={{
+                                padding: "8px 16px",
+                                background: "var(--edit-grad)",
+                                color: "#fff",
+                                fontSize: "0.6em",
+                              }}
+                              onClick={() => handleEditArticle(i)}
+                              aria-label={`Modifier ${a.produit}`}
+                            >
+                              ✏️ Modifier
+                            </button>
+                            <button
+                              className="btn btn-danger"
+                              style={{
+                                padding: "8px 16px",
+                                fontSize: "0.6em",
+                              }}
+                              onClick={() => handleRemoveArticle(i)}
+                              aria-label={`Supprimer ${a.produit}`}
+                            >
+                              🗑️ Supprimer
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     ))}
@@ -2435,6 +2648,7 @@ th{background:#0F172A;color:#F8FAFC;text-transform:uppercase;font-size:12px;lett
                 </table>
               </div>
             )}
+
             <div style={{ marginTop: 20, display: "flex", gap: 12, flexWrap: "wrap" }}>
               <button
                 className="btn btn-primary"
@@ -2463,10 +2677,11 @@ th{background:#0F172A;color:#F8FAFC;text-transform:uppercase;font-size:12px;lett
           </div>
         </div>
       </div>
-       {/* ===================== TRANSFERT STOCK1 → STOCK2 ===================== */}
+
+      {/* ===================== TRANSFERT STOCK1 → STOCK2 ===================== */}
       <div className="card" style={{ borderColor: "#D1FAE5", borderWidth: "2px" }}>
         <div className="section-title" style={{ justifyContent: "space-between" }}>
-          <span>🔄  Stock1 → Stock2</span>
+          <span>🔄 Stock1 → Stock2</span>
           <button
             className="btn btn-outline"
             onClick={() => setShowTransfer((s) => !s)}
@@ -2556,6 +2771,7 @@ th{background:#0F172A;color:#F8FAFC;text-transform:uppercase;font-size:12px;lett
           </div>
         )}
       </div>
+
       {/* ===================== CATALOGUE RAPIDE ===================== */}
       <div className="card">
         <div className="section-title" style={{ justifyContent: "space-between" }}>
@@ -2587,6 +2803,7 @@ th{background:#0F172A;color:#F8FAFC;text-transform:uppercase;font-size:12px;lett
             )}
           </div>
         </div>
+
         {catalogueLoaded && (
           <div
             style={{
@@ -2612,6 +2829,7 @@ th{background:#0F172A;color:#F8FAFC;text-transform:uppercase;font-size:12px;lett
             </div>
           </div>
         )}
+
         {showCatalogue && catalogueLoaded && (
           <>
             <div className="controls-bar" style={{ marginTop: 12, marginBottom: 12 }}>
@@ -2701,6 +2919,7 @@ th{background:#0F172A;color:#F8FAFC;text-transform:uppercase;font-size:12px;lett
           </>
         )}
       </div>
+
       {/* ===================== RÉCEPTION ===================== */}
       {receptionId && (
         <div className="card" style={{ borderColor: "#BFDBFE", borderWidth: "2px" }}>
@@ -2806,6 +3025,7 @@ th{background:#0F172A;color:#F8FAFC;text-transform:uppercase;font-size:12px;lett
           </div>
         </div>
       )}
+
       {/* ===================== LISTE DES BONS ===================== */}
       <div className="card">
         <div className="section-title" style={{ justifyContent: "space-between" }}>
@@ -2837,6 +3057,7 @@ th{background:#0F172A;color:#F8FAFC;text-transform:uppercase;font-size:12px;lett
             </span>
           </div>
         </div>
+
         {/* Filtres */}
         <div className={`filters-panel ${showFilters ? "filters-shown" : "filters-hidden"}`}>
           <div className="filters-panel-inner">
@@ -2903,6 +3124,7 @@ th{background:#0F172A;color:#F8FAFC;text-transform:uppercase;font-size:12px;lett
             </div>
           </div>
         </div>
+
         {/* Tableau des bons */}
         {showBons && (
           <>
@@ -2952,9 +3174,9 @@ th{background:#0F172A;color:#F8FAFC;text-transform:uppercase;font-size:12px;lett
                         TOTAL (page courante)
                       </td>
                       <td colSpan={2} style={{ textAlign: "center" }}>
-                        {Number(paginatedBons.reduce((s, b) => s + getTotalBon(b), 0)).toFixed(
-                          2
-                        )}{" "}
+                        {Number(
+                          paginatedBons.reduce((s, b) => s + getTotalBon(b), 0)
+                        ).toFixed(2)}{" "}
                         DHS
                       </td>
                     </tr>
@@ -2971,6 +3193,7 @@ th{background:#0F172A;color:#F8FAFC;text-transform:uppercase;font-size:12px;lett
           </>
         )}
       </div>
+
       {/* ===================== MODALE SCAN ===================== */}
       {showScanner && (
         <div className="scanner-modal-overlay" role="dialog" aria-modal="true">
@@ -2997,6 +3220,7 @@ th{background:#0F172A;color:#F8FAFC;text-transform:uppercase;font-size:12px;lett
           </div>
         </div>
       )}
+
       {/* ===================== RÉCAPITULATIF GLOBAL ===================== */}
       <div className="card" style={{ borderColor: "#a5b4fc", borderWidth: "2px" }}>
         <div className="section-title">📊 Récapitulatif</div>
